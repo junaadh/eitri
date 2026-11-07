@@ -155,9 +155,10 @@ pub fn bytecode(
 struct Echo;
 
 impl eitri::Host for Echo {
-    fn call(&mut self, _: u32, args: &[u64], results: &mut [u64]) -> Result<(), String> {
-        if let Some(result) = results.first_mut() {
-            *result = args.first().map_or(0, |&arg| arg & 1);
+    fn call(&mut self, cx: &mut eitri::Call<'_, '_>, _: u32) -> Result<(), eitri::HostError> {
+        let value = cx.args().first().map_or(0, |&arg| arg & 1);
+        if let Some(result) = cx.results().first_mut() {
+            *result = value;
         }
         Ok(())
     }

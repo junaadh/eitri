@@ -1,0 +1,7 @@
+effect: test.reenter(0)
+fault: call depth exceeded
+  at inner 263..271
+  at callback 314..321
+  at test.reenter
+  at outer 355..370
+  at <module> 383..390

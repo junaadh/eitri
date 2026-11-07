@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+// `test.reenter` passes one `i64`; this `callback` takes a `bool`.
+fn callback(b: bool) -> i64 {
+    return 1
+}
+test.emit(test.reenter(7))

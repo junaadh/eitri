@@ -1,0 +1,12 @@
+//! host: test
+//! budget: 5
+import test from "test"
+// The nested run spends the outer budget: calls to `test.reenter` (1),
+// `callback` (1), and `test.emit` (1) per round, so the second round's
+// `test.emit`, inside the nested run, finds it exhausted.
+fn callback(n: i64) -> i64 {
+    test.emit(n)
+    return n
+}
+let a = test.reenter(1)
+let b = test.reenter(2)

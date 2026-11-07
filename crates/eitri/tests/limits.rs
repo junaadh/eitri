@@ -140,3 +140,29 @@ fn locals_limit() {
         "expected E0002, got:\n{outcome}"
     );
 }
+
+/// At most 64 nested runs: `test.reenter(n)` from top-level code starts
+/// `n + 1` of them, each `callback` reentering with one less.
+#[test]
+fn nesting_limit() {
+    let source = |n: i64| {
+        format!(
+            "{IMPORT}fn callback(n: i64) -> i64 {{\n    if n == 0 {{\n        return 0\n    }}\n    return test.reenter(n - 1) + n\n}}\nlet r = test.reenter({n})\ntest.emit(r)\n"
+        )
+    };
+    let reentries = |n: i64| {
+        (0..=n)
+            .rev()
+            .map(|k| format!("effect: test.reenter({k})\n"))
+            .collect::<String>()
+    };
+    assert_eq!(
+        run(&source(63)),
+        reentries(63) + &effects([(0..=63).sum()]) + "ok\n"
+    );
+    let over = run(&source(64));
+    // Each `test.reenter` records its effect before reentering; the 65th
+    // nested run is refused.
+    let expected = reentries(64) + "fault: call depth exceeded\n";
+    assert!(over.starts_with(&expected), "{over}");
+}

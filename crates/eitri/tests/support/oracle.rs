@@ -39,6 +39,44 @@ pub struct Fault {
     pub trace: Vec<(String, Option<Span>)>,
 }
 
+/// The oracle's host interface: arguments and results as words, as the
+/// interpreters pass them, and reentry by function name.
+pub trait Host {
+    fn call(
+        &mut self,
+        cx: &mut dyn Reenter,
+        index: u32,
+        args: &[u64],
+        results: &mut [u64],
+    ) -> Result<(), HostError>;
+}
+
+/// Reentry from a host function into the running program.
+pub trait Reenter {
+    /// Whether the program has a script function `name`.
+    fn has_function(&self, name: &str) -> bool;
+
+    /// Run script function `name`, which must exist. A fault stops only
+    /// the nested run; its trace ends at the nested entry.
+    fn call(
+        &mut self,
+        host: &mut dyn Host,
+        name: &str,
+        args: &[u64],
+        results: &mut [u64],
+    ) -> Result<(), Fault>;
+}
+
+/// Why a host function failed: its own message, or a nested fault it
+/// propagates.
+pub enum HostError {
+    Message(String),
+    Fault(Fault),
+}
+
+/// Nested runs active at once (the first-slice chapter, "Limits").
+const MAX_NESTING: u32 = 64;
+
 /// The limits of one run, as the context applies them.
 #[derive(Clone, Copy)]
 pub struct Limits {
@@ -84,7 +122,7 @@ impl Oracle {
         &mut self,
         source: &str,
         limits: Limits,
-        host: &mut dyn eitri::Host,
+        host: &mut dyn Host,
     ) -> Option<Result<(), Fault>> {
         self.interner.reset();
         let mut diagnostics = Diagnostics::new(1);
@@ -130,17 +168,18 @@ impl Oracle {
             checked,
             interner: &self.interner,
             hosts: &self.hosts,
-            host,
             budget: limits.budget,
             depth: limits.depth,
             current: None,
             calls: Vec::new(),
+            below: 0,
+            nesting: 0,
             locals: vec![None; checked.bindings.len()],
         };
         let mut result = Ok(());
         for &item in &ast.items {
             let Item::Stmt(stmt) = item else { continue };
-            if let Err(unwind) = eval.stmt(stmt) {
+            if let Err(unwind) = eval.stmt(host, stmt) {
                 result = Err(match unwind {
                     Unwind::Fault(fault) => fault,
                     Unwind::Return(_) => unreachable!("the checker rejects a top-level return"),
@@ -198,13 +237,17 @@ struct Eval<'a> {
     checked: &'a Checked,
     interner: &'a Interner,
     hosts: &'a Hosts,
-    host: &'a mut dyn eitri::Host,
     budget: u64,
     depth: u32,
     /// The function being evaluated; `None` for top-level code.
     current: Option<FnId>,
-    /// Active script calls, outermost first: the caller and the call's span.
+    /// Active script calls of this (possibly nested) run, outermost first:
+    /// the caller and the call's span.
     calls: Vec<(Option<FnId>, Span)>,
+    /// Script frames active in outer runs, below a nested run.
+    below: usize,
+    /// Nested runs active.
+    nesting: u32,
     /// The current frame's bindings. A call saves and replaces it.
     locals: Vec<Option<Value>>,
 }
@@ -249,20 +292,20 @@ impl Eval<'_> {
         }
     }
 
-    fn block(&mut self, block: Block) -> Flow<Value> {
+    fn block(&mut self, host: &mut dyn Host, block: Block) -> Flow<Value> {
         let mut value = Value::Void;
         for &stmt in self.ast.block(block) {
-            value = self.stmt(stmt)?;
+            value = self.stmt(host, stmt)?;
         }
         Ok(value)
     }
 
     /// Execute a statement; an expression statement yields its value, so a
     /// block's value is that of its final statement.
-    fn stmt(&mut self, id: eitri_syntax::ast::StmtId) -> Flow<Value> {
+    fn stmt(&mut self, host: &mut dyn Host, id: eitri_syntax::ast::StmtId) -> Flow<Value> {
         match self.ast.stmts[id] {
             Stmt::Let { init, .. } => {
-                let value = self.expr(init)?;
+                let value = self.expr(host, init)?;
                 let binding = self.checked.stmt_bindings[id].expect("checked `let`");
                 self.locals[binding.index()] = Some(value);
             }
@@ -270,7 +313,7 @@ impl Eval<'_> {
                 op, value, span, ..
             } => {
                 let binding = self.checked.stmt_bindings[id].expect("checked assignment");
-                let rhs = self.expr(value)?;
+                let rhs = self.expr(host, value)?;
                 let new = match op {
                     AssignOp::Set => rhs,
                     AssignOp::Compound(op) => {
@@ -280,21 +323,21 @@ impl Eval<'_> {
                 };
                 self.locals[binding.index()] = Some(new);
             }
-            Stmt::Expr(expr) => return self.expr(expr),
+            Stmt::Expr(expr) => return self.expr(host, expr),
             Stmt::While {
                 keyword,
                 condition,
                 body,
             } => {
-                while self.expr(condition)?.bool() {
-                    self.block(body)?;
+                while self.expr(host, condition)?.bool() {
+                    self.block(host, body)?;
                     // After the body, before the condition again.
                     self.debit(self.tokens.span(keyword))?;
                 }
             }
             Stmt::Return { value, .. } => {
                 let value = match value {
-                    Some(value) => self.expr(value)?,
+                    Some(value) => self.expr(host, value)?,
                     None => Value::Void,
                 };
                 return Err(Unwind::Return(value));
@@ -307,7 +350,7 @@ impl Eval<'_> {
         self.locals[binding.index()].expect("the checker rejects use before initialization")
     }
 
-    fn expr(&mut self, e: ExprId) -> Flow<Value> {
+    fn expr(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
         let span = self.ast.span(e);
         match self.ast.exprs[e] {
             Expr::Int { .. } => Ok(Value::Int(
@@ -319,7 +362,7 @@ impl Eval<'_> {
                 other => unreachable!("a name used as a value resolves to a binding: {other:?}"),
             },
             Expr::Unary { op, operand } => {
-                let value = self.expr(operand)?;
+                let value = self.expr(host, operand)?;
                 match op {
                     UnaryOp::Not => Ok(Value::Bool(!value.bool())),
                     UnaryOp::Neg => match oracle::neg(IntType::I64, value.int().into()) {
@@ -330,41 +373,41 @@ impl Eval<'_> {
             }
             Expr::Binary { op, lhs, rhs } => match op {
                 BinaryOp::And => Ok(Value::Bool(
-                    self.expr(lhs)?.bool() && self.expr(rhs)?.bool(),
+                    self.expr(host, lhs)?.bool() && self.expr(host, rhs)?.bool(),
                 )),
                 BinaryOp::Or => Ok(Value::Bool(
-                    self.expr(lhs)?.bool() || self.expr(rhs)?.bool(),
+                    self.expr(host, lhs)?.bool() || self.expr(host, rhs)?.bool(),
                 )),
                 _ => {
-                    let a = self.expr(lhs)?;
-                    let b = self.expr(rhs)?;
+                    let a = self.expr(host, lhs)?;
+                    let b = self.expr(host, rhs)?;
                     self.binary_values(op, a, b, span)
                 }
             },
             Expr::Call { args, .. } => {
                 let mut values = Vec::with_capacity(self.ast.args(args).len());
                 for &arg in self.ast.args(args) {
-                    values.push(self.expr(arg)?);
+                    values.push(self.expr(host, arg)?);
                 }
                 // The callee starts only after the debit.
                 self.debit(span)?;
                 match self.checked.resolutions[e] {
-                    Res::Function(f) => self.call_script(f, &values, span),
-                    Res::Host(h) => self.call_host(h, &values, span),
+                    Res::Function(f) => self.call_script(host, f, &values, span),
+                    Res::Host(h) => self.call_host(host, h, &values, span),
                     other => unreachable!("a checked call resolves to a function: {other:?}"),
                 }
             }
             Expr::If(mut id) => loop {
                 let node = self.ast.ifs[id];
-                if self.expr(node.condition)?.bool() {
-                    break self.block(node.then);
+                if self.expr(host, node.condition)?.bool() {
+                    break self.block(host, node.then);
                 }
                 match node.otherwise {
                     Else::None => break Ok(Value::Void),
-                    Else::Block(block) => break self.block(block),
+                    Else::Block(block) => break self.block(host, block),
                     Else::If(nested) => match self.ast.exprs[nested] {
                         Expr::If(next) => id = next,
-                        _ => break self.expr(nested),
+                        _ => break self.expr(host, nested),
                     },
                 }
             },
@@ -397,9 +440,15 @@ impl Eval<'_> {
         self.arith(arith, a.int(), b.int(), span)
     }
 
-    fn call_script(&mut self, f: FnId, args: &[Value], span: Span) -> Flow<Value> {
+    fn call_script(
+        &mut self,
+        host: &mut dyn Host,
+        f: FnId,
+        args: &[Value],
+        span: Span,
+    ) -> Flow<Value> {
         // Top-level code is not a counted frame.
-        if self.calls.len() as u32 >= self.depth {
+        if (self.below + self.calls.len()) as u32 >= self.depth {
             return Err(self.fault("call depth exceeded", span));
         }
         let mut locals = vec![None; self.checked.bindings.len()];
@@ -410,7 +459,7 @@ impl Eval<'_> {
         self.calls.push((self.current, span));
         let caller = self.current.replace(f);
         let body = self.ast.fns[f].body.expect("script functions have bodies");
-        let result = match self.block(body) {
+        let result = match self.block(host, body) {
             // Falling off the end is only accepted for `void`.
             Ok(_) => Ok(Value::Void),
             Err(Unwind::Return(value)) => Ok(value),
@@ -422,24 +471,132 @@ impl Eval<'_> {
         result
     }
 
-    fn call_host(&mut self, h: HostFnId, args: &[Value], span: Span) -> Flow<Value> {
+    fn call_host(
+        &mut self,
+        host: &mut dyn Host,
+        h: HostFnId,
+        args: &[Value],
+        span: Span,
+    ) -> Flow<Value> {
         let words: Vec<u64> = args.iter().map(|value| value.word()).collect();
         let function = self.hosts.function(h);
         let mut results = vec![0u64; usize::from(function.ret != Ty::Void)];
-        if let Err(message) = self.host.call(h.as_u32(), &words, &mut results) {
-            let Unwind::Fault(mut fault) = self.fault(message, span) else {
-                unreachable!()
+        if let Err(error) = host.call(self, h.as_u32(), &words, &mut results) {
+            let (message, mut trace) = match error {
+                HostError::Message(message) => (message, Vec::new()),
+                HostError::Fault(fault) => (fault.message, fault.trace),
             };
             let module = &self.hosts.module(function.module).path;
-            let name = format!("{module}.{}", self.interner.resolve(function.name));
-            fault.trace.insert(0, (name, None));
-            return Err(Unwind::Fault(fault));
+            trace.push((
+                format!("{module}.{}", self.interner.resolve(function.name)),
+                None,
+            ));
+            let Unwind::Fault(outer) = self.fault(message, span) else {
+                unreachable!("`fault` makes a fault")
+            };
+            trace.extend(outer.trace);
+            return Err(Unwind::Fault(Fault {
+                message: outer.message,
+                trace,
+            }));
         }
         Ok(match function.ret {
             Ty::I64 => Value::Int(results[0] as i64),
             Ty::Bool => Value::Bool(results[0] != 0),
             _ => Value::Void,
         })
+    }
+
+    fn find(&self, name: &str) -> Option<FnId> {
+        self.ast
+            .fns
+            .iter_enumerated()
+            .find(|(_, f)| self.interner.resolve(self.tokens.symbol(f.name)) == name)
+            .map(|(id, _)| id)
+    }
+}
+
+impl Reenter for Eval<'_> {
+    fn has_function(&self, name: &str) -> bool {
+        self.find(name).is_some()
+    }
+
+    /// The chapter's reentry rules: the arguments must match the
+    /// signature; the call debits one step and counts as a frame; nested
+    /// runs are limited to [`MAX_NESTING`].
+    fn call(
+        &mut self,
+        host: &mut dyn Host,
+        name: &str,
+        args: &[u64],
+        results: &mut [u64],
+    ) -> Result<(), Fault> {
+        let f = self.find(name).expect("checked with `has_function`");
+        let signature = self.checked.signatures[f];
+        let params = &self.checked.param_types[signature.params];
+        let returns = usize::from(signature.ret != Ty::Void);
+        let fits = |ty: Ty, word: u64| ty != Ty::Bool || word <= 1;
+        if args.len() != params.len()
+            || results.len() != returns
+            || !params.iter().zip(args).all(|(&ty, &word)| fits(ty, word))
+        {
+            return Err(Fault {
+                message: format!(
+                    "host error: reentrant call to `{name}` does not match its signature"
+                ),
+                trace: Vec::new(),
+            });
+        }
+        let stop = |message: &str| {
+            Err(Fault {
+                message: message.to_owned(),
+                trace: Vec::new(),
+            })
+        };
+        if self.budget == 0 {
+            return stop("execution budget exhausted");
+        }
+        self.budget -= 1;
+        let active = self.below + self.calls.len();
+        if active as u32 >= self.depth || self.nesting >= MAX_NESTING {
+            return stop("call depth exceeded");
+        }
+        let values: Vec<Value> = params
+            .iter()
+            .zip(args)
+            .map(|(&ty, &word)| match ty {
+                Ty::Bool => Value::Bool(word == 1),
+                _ => Value::Int(word as i64),
+            })
+            .collect();
+        // The nested run's trace starts empty; its entry is one more frame.
+        let calls = std::mem::take(&mut self.calls);
+        let below = std::mem::replace(&mut self.below, active + 1);
+        let current = self.current;
+        self.nesting += 1;
+        let mut locals = vec![None; self.checked.bindings.len()];
+        for (binding, &value) in self.checked.params[f].iter().zip(&values) {
+            locals[binding.index()] = Some(value);
+        }
+        let saved = std::mem::replace(&mut self.locals, locals);
+        self.current = Some(f);
+        let body = self.ast.fns[f].body.expect("script functions have bodies");
+        let outcome = match self.block(host, body) {
+            Ok(_) => Ok(Value::Void),
+            Err(Unwind::Return(value)) => Ok(value),
+            Err(Unwind::Fault(fault)) => Err(fault),
+        };
+        self.locals = saved;
+        self.current = current;
+        self.nesting -= 1;
+        self.below = below;
+        self.calls = calls;
+        if let Some(slot) = results.first_mut() {
+            *slot = outcome?.word();
+        } else {
+            outcome?;
+        }
+        Ok(())
     }
 }
 

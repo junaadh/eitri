@@ -333,8 +333,23 @@ concurrent implementation.
   lowering and VM scratch live in the context. Faults become diagnostics
   with the trace as labels (identical recursive frames collapse into one).
   The CLI exits `3` on a fault. All 31 execution-pending fixtures are live
-  (110 fixtures pass, none pending). Open: nested host reentry, which needs
-  the embedding API to let a host call back into the active context.
+  (110 fixtures pass, none pending).
+- Nested host reentry 2026-11-07: `Host::call` receives a `Call` context;
+  arguments and results are read and written through it (still in place
+  in the caller's frame), and `cx.call(self, f, args, results)` runs a
+  script function of the same program on the same slot and frame stacks,
+  debiting the shared budget and counting toward the depth limit; at most
+  64 nested runs (first-slice chapter, "Host reentry"). A nested fault is
+  returned to the host, which may propagate it (`HostError::Fault`) with
+  the trace continued through the host function (`Location::Host`). A
+  `compile_fail` doctest shows an argument view cannot be held across
+  reentry. Both interpreters, the oracle, the harness `test.reenter`, 8
+  fixtures, the nesting limit (`limits.rs`), and the differential generator
+  cover it; 100,000 differential cases agree. Cost: about 0.5 ns per host
+  call on the threaded interpreter
+  ([ledger](implementation/vm-research.md#host-reentry-the-call-context--2026-11-07)).
+  Every "done when" check now passes; T010 stays open only on its
+  dependency T009 (the retained simple lowering mode).
 
 ### T011 — Establish the first performance harness
 
@@ -421,8 +436,9 @@ concurrent implementation.
   mutated programs verified and ran). Not yet run under Miri or a
   coverage-guided fuzzer.
 - Every "done when" check above now has recorded evidence (the baseline
-  is the T011 record). T012 stays open until its dependency T010 closes
-  (nested host reentry), when the gate is rerun with reentry cases.
+  is the T011 record), and reentry cases are now in the fixtures,
+  differential, and fuzz runs. T012 stays open until its dependency T010
+  closes, which waits only on T009.
 
 ### T045 — Build the test and fixture infrastructure
 

@@ -1,0 +1,4 @@
+effect: test.reenter(7)
+fault: host error: reentrant call to `callback` does not match its signature
+  at test.reenter
+  at <module> 162..177

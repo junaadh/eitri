@@ -11,6 +11,7 @@ pub fn emit(value: i64) -> void
 pub fn check(value: bool) -> bool
 pub fn id(value: i64) -> i64
 pub fn fail() -> void
+pub fn reenter(value: i64) -> i64
 ";
 
 /// Compile `text` with the `test` host module, lower it, and verify every

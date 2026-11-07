@@ -1,0 +1,13 @@
+//! host: test
+import test from "test"
+// A fault in the nested run propagates through the host function: the
+// trace continues from `callback` through `test.reenter` to the outer call.
+fn callback(n: i64) -> i64 {
+    return 100 / n
+}
+fn run(n: i64) -> i64 {
+    return test.reenter(n)
+}
+test.emit(run(5))
+test.emit(run(0))
+test.emit(1)

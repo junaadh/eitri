@@ -1,0 +1,16 @@
+//! host: test
+import test from "test"
+// The host calls back into `callback`, which calls another script function
+// and the host again; effects interleave in call order.
+fn square(n: i64) -> i64 {
+    return n * n
+}
+fn callback(n: i64) -> i64 {
+    test.emit(n)
+    return square(n) + 1
+}
+fn outer(n: i64) -> i64 {
+    return test.reenter(n) * 10
+}
+test.emit(test.reenter(3))
+test.emit(outer(4))

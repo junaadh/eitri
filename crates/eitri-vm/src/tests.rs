@@ -26,14 +26,22 @@ struct Recorder {
 }
 
 impl Host for Recorder {
-    fn call(&mut self, index: u32, args: &[u64], results: &mut [u64]) -> Result<(), String> {
+    fn call(&mut self, cx: &mut Call<'_, '_>, index: u32) -> Result<(), HostError> {
         match index {
-            0 => self.effects.push(format!("emit({})", args[0] as i64)),
+            0 => self.effects.push(format!("emit({})", cx.arg(0) as i64)),
             1 => return Err("requested by test".into()),
-            2 => results[0] = (args[0] as i64 * 2) as u64,
+            2 => cx.set_result(0, (cx.arg(0) as i64 * 2) as u64),
             _ => unreachable!(),
         }
         Ok(())
+    }
+}
+
+/// The PC of a script trace entry.
+fn pc(location: &Location) -> u32 {
+    match *location {
+        Location::Script { pc, .. } => pc,
+        Location::Host(index) => panic!("host {index} where a script frame was expected"),
     }
 }
 
@@ -157,7 +165,7 @@ fn arithmetic_agrees_with_the_oracle() {
                         assert_eq!(f.kind, kind(w), "{op:?} {a} {b}");
                         assert_eq!(
                             f.trace,
-                            [Location {
+                            [Location::Script {
                                 function: FunctionId::from_u32(0),
                                 pc: 0
                             }]
@@ -430,8 +438,8 @@ fn recursion_uses_vm_frames_not_the_rust_stack() {
         4,
         "the faulting call plus three suspended frames"
     );
-    let call_pc = fault.trace[0].pc;
-    assert!(fault.trace.iter().all(|l| l.pc == call_pc));
+    let call_pc = pc(&fault.trace[0]);
+    assert!(fault.trace.iter().all(|l| pc(l) == call_pc));
 }
 
 /// `while i < n { i += 1; emit(i) }`: n backward branches and n calls.
@@ -480,7 +488,7 @@ fn calls_and_backward_branches_share_the_budget() {
     let fault = execute(vec![emit_loop()], &[3], short, &mut host).unwrap_err();
     assert_eq!(fault.kind, FaultKind::Budget);
     assert_eq!(host.effects, ["emit(1)", "emit(2)", "emit(3)"]);
-    let jump_pc = fault.trace[0].pc;
+    let jump_pc = pc(&fault.trace[0]);
     assert_eq!(emit_loop().code[jump_pc as usize] as u8, Op::J as u8);
 
     // Two steps short: the third call faults before it happens.
@@ -533,12 +541,12 @@ fn faults_report_the_right_location() {
         fault.trace,
         [
             // The WIDE prefix of the add, after the 2-word WIDE MOV.
-            Location {
+            Location::Script {
                 function: FunctionId::from_u32(1),
                 pc: 2
             },
             // main's CALL, after its 1-word LDK.
-            Location {
+            Location::Script {
                 function: FunctionId::from_u32(0),
                 pc: 1
             },
@@ -583,8 +591,16 @@ fn host_calls_borrow_their_windows_and_can_fault() {
     let fault = execute(vec![f], &[], Limits::default(), &mut host).unwrap_err();
     assert_eq!(host.effects, ["emit(42)"]);
     assert_eq!(fault.kind, FaultKind::Host("requested by test".into()));
-    assert_eq!(fault.host, Some(1));
-    assert_eq!(fault.trace[0].pc, 3);
+    assert_eq!(
+        fault.trace,
+        [
+            Location::Host(1),
+            Location::Script {
+                function: FunctionId::from_u32(0),
+                pc: 3
+            }
+        ]
+    );
 }
 
 #[test]

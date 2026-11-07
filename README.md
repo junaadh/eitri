@@ -81,19 +81,20 @@ runtime fault.
 
 ### Embedding
 
-The host declares what scripts may call, then answers those calls by index:
+The host declares what scripts may call, then answers those calls by index.
+Arguments and results are read and written through the call context:
 
 ```rust
-use eitri::{Context, Host, RunError};
+use eitri::{Call, Context, Host, HostError, RunError};
 
 struct Game {
     emit: u32,
 }
 
 impl Host for Game {
-    fn call(&mut self, index: u32, args: &[u64], _results: &mut [u64]) -> Result<(), String> {
+    fn call(&mut self, cx: &mut Call<'_, '_>, index: u32) -> Result<(), HostError> {
         if index == self.emit {
-            println!("{}", args[0] as i64);
+            println!("{}", cx.arg(0) as i64);
         }
         Ok(())
     }
@@ -118,6 +119,14 @@ Run it with the script above, and it prints `0 1 1 2 3 5 8 13 21 34`.
 `Context::compile` and `Context::execute` split the two phases when you want
 to run compiled code more than once. Budgets and depth are set with
 `set_budget` and `set_depth`.
+
+A host function can call back into the running script:
+`cx.function("on_key")` finds a script function (look it up once and keep
+it), and `cx.call(self, f, &args, &mut results)` runs it on top of the
+current call, spending the same budget and depth. A fault in it comes back
+as an `Err`; return it with `?` to stop the outer run with the whole trace.
+Because `cx.call` borrows the context mutably, the borrow checker rejects
+holding an argument or result view across it.
 
 ## Benchmarks
 
@@ -301,6 +310,8 @@ pub fn emit(value: i64) -> void     // records the effect
 pub fn check(value: bool) -> bool   // records the effect, returns value
 pub fn id(value: i64) -> i64        // records the effect, returns value
 pub fn fail() -> void               // faults with "requested by fixture"
+pub fn reenter(value: i64) -> i64   // records the effect, runs the script's
+                                    // `callback(value)`, returns its result
 ```
 
 `.expect` holds zero or more `effect: test.f(args)` lines in call order, then

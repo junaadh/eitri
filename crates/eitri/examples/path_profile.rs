@@ -3,7 +3,7 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use eitri::{Context, Host};
+use eitri::{Call, Context, Host, HostError};
 use eitri_base::{Interner, SourceId};
 use eitri_check::{CheckScratch, Hosts, Input};
 use eitri_diag::Diagnostics;
@@ -15,12 +15,12 @@ const DECLARATIONS: &str = "pub fn emit(value: i64) -> void\npub fn id(value: i6
 
 struct Output(Option<i64>);
 impl Host for Output {
-    fn call(&mut self, index: u32, args: &[u64], results: &mut [u64]) -> Result<(), String> {
+    fn call(&mut self, cx: &mut Call<'_, '_>, index: u32) -> Result<(), HostError> {
         match index {
             0 => {
-                assert!(self.0.replace(args[0] as i64).is_none());
+                assert!(self.0.replace(cx.arg(0) as i64).is_none());
             }
-            1 => results[0] = args[0],
+            1 => cx.set_result(0, cx.arg(0)),
             _ => panic!("unknown host index"),
         }
         Ok(())

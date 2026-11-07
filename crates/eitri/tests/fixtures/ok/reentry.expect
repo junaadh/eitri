@@ -1,0 +1,7 @@
+effect: test.reenter(3)
+effect: test.emit(3)
+effect: test.emit(10)
+effect: test.reenter(4)
+effect: test.emit(4)
+effect: test.emit(170)
+ok

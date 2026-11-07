@@ -1,0 +1,4 @@
+effect: test.reenter(1)
+effect: test.emit(1)
+fault: execution budget exhausted
+  at <module> 210..222

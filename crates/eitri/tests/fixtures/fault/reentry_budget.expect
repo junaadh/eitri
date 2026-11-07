@@ -1,0 +1,7 @@
+effect: test.reenter(1)
+effect: test.emit(1)
+effect: test.reenter(2)
+fault: execution budget exhausted
+  at callback 289..301
+  at test.reenter
+  at <module> 349..364

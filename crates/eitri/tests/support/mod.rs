@@ -11,50 +11,122 @@ pub mod oracle;
 use std::thread;
 
 /// The harness host module `test`, as documented in the root README.
-const TEST_MODULE: &str = "\
+pub const TEST_MODULE: &str = "\
 pub fn emit(value: i64) -> void
 pub fn check(value: bool) -> bool
 pub fn id(value: i64) -> i64
 pub fn fail() -> void
+pub fn reenter(value: i64) -> i64
 ";
 
 /// The `test` module's behavior. Effects are recorded in call order.
-struct TestHost {
+pub struct TestHost {
     emit: u32,
     check: u32,
     id: u32,
     fail: u32,
-    effects: String,
+    reenter: u32,
+    pub effects: String,
 }
+
+/// What a `test` function does after recording its effect.
+enum Action {
+    Return(Option<u64>),
+    Fail,
+    /// Call the script's `callback` with this argument and return its
+    /// result, propagating a fault.
+    Reenter(u64),
+}
+
+const FAILED: &str = "requested by fixture";
+const NO_CALLBACK: &str = "no `callback` function to reenter";
 
 impl TestHost {
     /// `index` maps a `test` function name to its host index, if registered.
-    fn new(index: impl Fn(&str) -> Option<u32>) -> Self {
+    pub fn new(index: impl Fn(&str) -> Option<u32>) -> Self {
         let index = |name| index(name).unwrap_or(u32::MAX);
         Self {
             emit: index("emit"),
             check: index("check"),
             id: index("id"),
             fail: index("fail"),
+            reenter: index("reenter"),
             effects: String::new(),
+        }
+    }
+
+    /// Record the call's effect and say what it does next. Shared by the
+    /// interpreters' and the oracle's host interfaces.
+    fn begin(&mut self, index: u32, args: &[u64]) -> Action {
+        let name = if index == self.emit {
+            "emit"
+        } else if index == self.check {
+            "check"
+        } else if index == self.id {
+            "id"
+        } else if index == self.fail {
+            return Action::Fail;
+        } else if index == self.reenter {
+            "reenter"
+        } else {
+            unreachable!("unknown host function {index}")
+        };
+        let shown = if name == "check" {
+            (args[0] != 0).to_string()
+        } else {
+            (args[0] as i64).to_string()
+        };
+        self.effects += &format!("effect: test.{name}({shown})\n");
+        match name {
+            "emit" => Action::Return(None),
+            "reenter" => Action::Reenter(args[0]),
+            _ => Action::Return(Some(args[0])),
         }
     }
 }
 
 impl eitri::Host for TestHost {
-    fn call(&mut self, index: u32, args: &[u64], results: &mut [u64]) -> Result<(), String> {
-        if index == self.emit {
-            self.effects += &format!("effect: test.emit({})\n", args[0] as i64);
-        } else if index == self.check {
-            self.effects += &format!("effect: test.check({})\n", args[0] != 0);
-            results[0] = args[0];
-        } else if index == self.id {
-            self.effects += &format!("effect: test.id({})\n", args[0] as i64);
-            results[0] = args[0];
-        } else if index == self.fail {
-            return Err("requested by fixture".into());
-        } else {
-            unreachable!("unknown host function {index}");
+    fn call(&mut self, cx: &mut eitri::Call<'_, '_>, index: u32) -> Result<(), eitri::HostError> {
+        let value = match self.begin(index, cx.args()) {
+            Action::Return(value) => value,
+            Action::Fail => return Err(FAILED.into()),
+            Action::Reenter(arg) => {
+                let callback = cx.function("callback").ok_or(NO_CALLBACK)?;
+                let mut result = [0];
+                cx.call(self, callback, &[arg], &mut result)?;
+                Some(result[0])
+            }
+        };
+        if let Some(value) = value {
+            cx.set_result(0, value);
+        }
+        Ok(())
+    }
+}
+
+impl oracle::Host for TestHost {
+    fn call(
+        &mut self,
+        cx: &mut dyn oracle::Reenter,
+        index: u32,
+        args: &[u64],
+        results: &mut [u64],
+    ) -> Result<(), oracle::HostError> {
+        let value = match self.begin(index, args) {
+            Action::Return(value) => value,
+            Action::Fail => return Err(oracle::HostError::Message(FAILED.into())),
+            Action::Reenter(arg) => {
+                if !cx.has_function("callback") {
+                    return Err(oracle::HostError::Message(NO_CALLBACK.into()));
+                }
+                let mut result = [0];
+                cx.call(self, "callback", &[arg], &mut result)
+                    .map_err(oracle::HostError::Fault)?;
+                Some(result[0])
+            }
+        };
+        if let Some(value) = value {
+            results[0] = value;
         }
         Ok(())
     }

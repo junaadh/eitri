@@ -31,7 +31,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering::Relaxed};
 use std::time::Instant;
 
-use eitri::{Context, Host};
+use eitri::{Call, Context, Host, HostError};
 
 /// Counts allocations and live bytes. A measurement tool for this binary,
 /// not part of Eitri.
@@ -87,12 +87,12 @@ struct BenchHost {
 }
 
 impl Host for BenchHost {
-    fn call(&mut self, index: u32, args: &[u64], results: &mut [u64]) -> Result<(), String> {
+    fn call(&mut self, cx: &mut Call<'_, '_>, index: u32) -> Result<(), HostError> {
         if index == self.emit {
-            self.emitted = Some(args[0] as i64);
+            self.emitted = Some(cx.arg(0) as i64);
         } else {
             // `bench.id`: the minimal scalar round trip.
-            results[0] = args[0];
+            cx.set_result(0, cx.arg(0));
         }
         Ok(())
     }

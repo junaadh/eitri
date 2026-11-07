@@ -1,0 +1,4 @@
+effect: test.reenter(1)
+fault: no `callback` function to reenter
+  at test.reenter
+  at <module> 49..64

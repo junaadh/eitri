@@ -1,0 +1,10 @@
+//! host: test
+import test from "test"
+// Reentry inside reentry: each level runs on top of the previous one.
+fn callback(n: i64) -> i64 {
+    if n == 0 {
+        return 0
+    }
+    return test.reenter(n - 1) + n
+}
+test.emit(test.reenter(4))

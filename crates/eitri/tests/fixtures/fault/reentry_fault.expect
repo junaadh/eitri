@@ -1,0 +1,8 @@
+effect: test.reenter(5)
+effect: test.emit(20)
+effect: test.reenter(0)
+fault: division by zero
+  at callback 227..234
+  at test.reenter
+  at run 272..287
+  at <module> 318..324

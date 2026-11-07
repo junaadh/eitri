@@ -1175,6 +1175,46 @@ now the largest stage, then lowering (1.6 µs), parsing (1.2 µs), and
 checking (0.9 µs). A fresh context still compiles about 2.5 µs slower than
 a warm one while its scratch grows.
 
+### Host reentry: the call context — 2026-11-07
+
+**Question.** What does giving every host call a reentrant call context
+(T010) cost on the host-call path, and how much native stack does a nested
+run take?
+
+**Change.** `Host::call(&mut self, cx: &mut Call, index)` replaces
+`call(index, args, results)`. The context lends the shared run state
+(slot and frame stacks, budget, limits), so arguments and results stay in
+place in the caller's frame, reached by index; after the host returns, the
+handler re-derives its frame pointer, since a nested run may have grown the
+slot stack. The threaded interpreter embeds that shared state in its
+handler state, so a host call builds only the context (caller frame,
+windows, top of stack).
+
+**Method.** Apple M5, macOS 27.0.1, pinned `nightly-2026-11-05` (rustc
+1.101.0), release profile. `source_to_result` binaries for commit `7ec14a0`
+and for the change, run alternately three times each (threaded, then
+`EITRI_THREADED=0`), 20,001 samples per cell; reused-runtime execution p50.
+Stack per nested run: the address of a local in a host function that
+reenters 20 levels deep, averaged over 10 levels.
+
+**Results.** Execution p50, threaded (`7ec14a0` → change): `host_calls`
+5.0 → 5.5 µs (1,000 host calls: about 0.5 ns each), `calls` 12.3–12.5 →
+11.7–12.2 µs, `arithmetic` 8.4 → 8.4 µs, `branching` and `module` within
+run-to-run noise. `match` loop: `host_calls` 6.1–6.3 → 6.6 µs, `calls`
+15.8–16.0 → 16.5–17.2 µs, others within noise. Two intermediate steps were
+measured and not kept: without `#[inline]` on the context's accessors,
+each `cx.arg`/`cx.set_result` was a cross-crate call (threaded
+`host_calls` 7.1 µs); with `#[inline]` but a shared-state copy built per
+host call, 5.9 µs. Stack per nested run, excluding the host's own frame:
+688 B (`match`) and 896 B (threaded) in release, 14.9 KB and 3.5 KB in
+debug. 256 nested runs overflowed a 2 MiB test thread in a debug build, so
+the nesting limit is 64.
+
+**Reading.** The remaining cost is building the context and reading the
+host's result through memory; reentry itself is off the common path.
+Kept: reentry is required (T010), and 0.5 ns per host call is small against
+the sub-microsecond callback target. Revisit with the T024 embedding API.
+
 ### R31: Where compilers use arenas
 
 V8 allocates parser AST nodes in a `Zone` and frees the tree in one step

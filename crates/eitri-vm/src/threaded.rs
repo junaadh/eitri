@@ -19,33 +19,37 @@
 use eitri_base::IndexVec;
 use eitri_bytecode::{CallTarget, Function, FunctionId, Op};
 
-use crate::{Fault, FaultKind, Frame, Host, Limits, VmScratch, fault, slot_field};
+use crate::{
+    Call, Fault, FaultKind, Frame, Host, Limits, Location, Machine, VmScratch, absolute,
+    host_fault, machine, raised, slot_field,
+};
 
 /// Everything a handler needs that is not hot enough for a register.
-struct State<'f, 'h> {
-    functions: &'f IndexVec<FunctionId, Function>,
+struct State<'h> {
+    /// Shared with the runs host functions start: embedded, so a host
+    /// call lends it to its [`Call`] without copying fields.
+    m: Machine<'h>,
     host: &'h mut dyn Host,
-    depth: u32,
-    budget: u64,
-    slots: &'h mut Vec<u64>,
-    frames: &'h mut Vec<Frame>,
     id: FunctionId,
-    function: &'f Function,
+    function: &'h Function,
     base: usize,
-    outcome: Option<Result<Vec<u64>, Fault>>,
-    /// A fault on its way to `raise`.
-    pending: Option<(FaultKind, Option<u32>)>,
+    /// Frames below it belong to outer runs (see [`crate::Call::call`]).
+    floor: usize,
+    outcome: Option<Result<(), Fault>>,
+    /// A fault on its way to `raise`, with its innermost trace entries
+    /// when a host function raised it.
+    pending: Option<(FaultKind, Vec<Location>)>,
 }
 
 /// A handler: the code, the PC of this instruction (or its `WIDE` prefix),
 /// its first word, the frame, and the state.
-type Handler = for<'c, 'f, 'h, 's> extern "rust-preserve-none" fn(
+type Handler = for<'c, 'h, 's> extern "rust-preserve-none" fn(
     &'c [u32],
     usize,
     u32,
     *mut u64,
     usize,
-    &'s mut State<'f, 'h>,
+    &'s mut State<'h>,
 );
 
 /// Run `entry` with `args`, as [`crate::run`] does.
@@ -57,32 +61,49 @@ pub fn run_threaded(
     limits: Limits,
     scratch: &mut VmScratch,
 ) -> Result<Vec<u64>, Fault> {
-    scratch.slots.clear();
-    scratch.frames.clear();
-    let function = &functions[entry];
+    let mut m = machine(functions, entry, args, limits, scratch, true);
+    nested(&mut m, host, entry, 0, 0)?;
+    Ok(m.slots[..functions[entry].signature.results.len()].to_vec())
+}
+
+/// Run `entry`, whose frame is in place at `base`, as [`crate::execute`]
+/// does: the outermost run, or one a host started.
+pub(crate) fn nested(
+    m: &mut Machine<'_>,
+    host: &mut dyn Host,
+    entry: FunctionId,
+    base: usize,
+    floor: usize,
+) -> Result<(), Fault> {
+    let function = &m.functions[entry];
     let size = function.frame_size as usize;
-    scratch.slots.resize(size, 0);
-    let first = function.signature.param_base() as usize;
-    scratch.slots[first..first + args.len()].copy_from_slice(args);
-    let s = scratch.slots.as_mut_ptr();
+    // SAFETY: the caller put `entry`'s frame at `base..base + size`, inside
+    // the slot stack.
+    let s = unsafe { m.slots.as_mut_ptr().add(base) };
     let mut state = State {
-        functions,
+        m: Machine {
+            functions: m.functions,
+            slots: &mut *m.slots,
+            frames: &mut *m.frames,
+            budget: m.budget,
+            depth: m.depth,
+            entry: m.entry,
+            nesting: m.nesting,
+            threaded: true,
+        },
         host,
-        depth: limits.depth,
-        budget: limits.budget,
-        slots: &mut scratch.slots,
-        frames: &mut scratch.frames,
         id: entry,
         function,
-        base: 0,
+        base,
+        floor,
         outcome: None,
         pending: None,
     };
     let code: &[u32] = &function.code;
     TABLE[(code[0] & 0xff) as usize](code, 0, code[0], s, size, &mut state);
-    state
-        .outcome
-        .expect("execution ends by returning or faulting")
+    let outcome = state.outcome;
+    m.budget = state.m.budget;
+    outcome.expect("execution ends by returning or faulting")
 }
 
 /// A slot outside the frame: reachable only from unverified code. Traps
@@ -124,8 +145,8 @@ macro_rules! next {
 /// Stop with a fault at `pc`: record it and tail-call the cold `raise`
 /// handler, so the fault path makes no call either.
 macro_rules! fail {
-    ($code:expr, $pc:expr, $word:expr, $s:expr, $len:expr, $st:expr, $kind:expr, $host:expr) => {{
-        $st.pending = Some(($kind, $host));
+    ($code:expr, $pc:expr, $word:expr, $s:expr, $len:expr, $st:expr, $kind:expr) => {{
+        $st.pending = Some(($kind, Vec::new()));
         become raise($code, $pc, $word, $s, $len, $st)
     }};
 }
@@ -137,10 +158,11 @@ extern "rust-preserve-none" fn raise(
     _: u32,
     _: *mut u64,
     _: usize,
-    st: &mut State<'_, '_>,
+    st: &mut State<'_>,
 ) {
-    let (kind, host) = st.pending.take().expect("set by `fail!`");
-    st.outcome = Some(Err(fault(st.frames, kind, st.id, pc, host)));
+    let (kind, inner) = st.pending.take().expect("set before `raise`");
+    let frames = &st.m.frames[st.floor..];
+    st.outcome = Some(Err(raised(inner, frames, kind, st.id, pc)));
 }
 
 /// The effect of a non-control instruction with decoded operands; shared
@@ -242,12 +264,12 @@ fn branch_op(op: u8, a: usize, b: usize, word: u32, s: *mut u64, len: usize) -> 
 /// Debit the budget for a branch from `start` to `target` if it goes
 /// backward. False when the budget is exhausted.
 #[inline(always)]
-fn take(st: &mut State<'_, '_>, start: usize, target: usize) -> bool {
+fn take(st: &mut State<'_>, start: usize, target: usize) -> bool {
     if target <= start {
-        if st.budget == 0 {
+        if st.m.budget == 0 {
             return false;
         }
-        st.budget -= 1;
+        st.m.budget -= 1;
     }
     true
 }
@@ -260,7 +282,7 @@ macro_rules! slot_handler {
             word: u32,
             s: *mut u64,
             len: usize,
-            st: &mut State<'_, '_>,
+            st: &mut State<'_>,
         ) {
             let (a, b, c) = (
                 slot_field(word, 0, 8),
@@ -268,7 +290,7 @@ macro_rules! slot_handler {
                 slot_field(word, 0, 24),
             );
             if let Err(kind) = slot_op($op as u8, (a, b, c), word, s, len, &st.function.consts) {
-                fail!(code, pc, word, s, len, st, kind, None)
+                fail!(code, pc, word, s, len, st, kind)
             }
             next!(code, pc + 1, s, len, st)
         }
@@ -283,7 +305,7 @@ macro_rules! branch_handler {
             word: u32,
             s: *mut u64,
             len: usize,
-            st: &mut State<'_, '_>,
+            st: &mut State<'_>,
         ) {
             let (a, b) = (slot_field(word, 0, 8), slot_field(word, 0, 16));
             let (taken, disp) = branch_op($op as u8, a, b, word, s, len);
@@ -291,7 +313,7 @@ macro_rules! branch_handler {
             if taken {
                 to = (to as isize + disp) as usize;
                 if !take(st, pc, to) {
-                    fail!(code, pc, word, s, len, st, FaultKind::Budget, None)
+                    fail!(code, pc, word, s, len, st, FaultKind::Budget)
                 }
             }
             next!(code, to, s, len, st)
@@ -338,7 +360,7 @@ extern "rust-preserve-none" fn ldk_x(
     word: u32,
     s: *mut u64,
     len: usize,
-    st: &mut State<'_, '_>,
+    st: &mut State<'_>,
 ) {
     set(
         s,
@@ -355,11 +377,11 @@ extern "rust-preserve-none" fn j(
     word: u32,
     s: *mut u64,
     len: usize,
-    st: &mut State<'_, '_>,
+    st: &mut State<'_>,
 ) {
     let to = (pc as isize + 1 + ((word as i32) >> 8) as isize) as usize;
     if !take(st, pc, to) {
-        fail!(code, pc, word, s, len, st, FaultKind::Budget, None)
+        fail!(code, pc, word, s, len, st, FaultKind::Budget)
     }
     next!(code, to, s, len, st)
 }
@@ -370,11 +392,11 @@ extern "rust-preserve-none" fn j_x(
     word: u32,
     s: *mut u64,
     len: usize,
-    st: &mut State<'_, '_>,
+    st: &mut State<'_>,
 ) {
     let to = (pc as isize + 2 + code[pc + 1] as i32 as isize) as usize;
     if !take(st, pc, to) {
-        fail!(code, pc, word, s, len, st, FaultKind::Budget, None)
+        fail!(code, pc, word, s, len, st, FaultKind::Budget)
     }
     next!(code, to, s, len, st)
 }
@@ -388,7 +410,7 @@ extern "rust-preserve-none" fn wide(
     hi: u32,
     s: *mut u64,
     len: usize,
-    st: &mut State<'_, '_>,
+    st: &mut State<'_>,
 ) {
     let word = code[pc + 1];
     let op = word as u8;
@@ -420,13 +442,13 @@ extern "rust-preserve-none" fn wide(
         if taken {
             to = (to as isize + disp) as usize;
             if !take(st, pc, to) {
-                fail!(code, pc, word, s, len, st, FaultKind::Budget, None)
+                fail!(code, pc, word, s, len, st, FaultKind::Budget)
             }
         }
         next!(code, to, s, len, st)
     }
     if let Err(kind) = slot_op(op, (a, b, c), word, s, len, &st.function.consts) {
-        fail!(code, pc, word, s, len, st, kind, None)
+        fail!(code, pc, word, s, len, st, kind)
     }
     next!(code, after, s, len, st)
 }
@@ -437,41 +459,42 @@ extern "rust-preserve-none" fn call_host(
     word: u32,
     s: *mut u64,
     len: usize,
-    st: &mut State<'_, '_>,
+    st: &mut State<'_>,
 ) {
     let site = st.function.sites[(word >> 16) as usize];
-    if st.budget == 0 {
-        fail!(code, pc, word, s, len, st, FaultKind::Budget, None)
+    if st.m.budget == 0 {
+        fail!(code, pc, word, s, len, st, FaultKind::Budget)
     }
-    st.budget -= 1;
+    st.m.budget -= 1;
     let CallTarget::Host(index) = site.target else {
         unreachable!("the verifier matches the opcode to the target");
     };
-    let (args, results) = (site.args, site.result);
-    if args.end() as usize > len || results.end() as usize > len || args.overlaps(results) {
-        out_of_frame();
-    }
-    // SAFETY: both windows lie inside the live frame of `len` slots
-    // (checked above) and do not overlap, so the shared and the mutable
-    // slice never alias; nothing else touches the slot stack while the
-    // host runs, and `s` is not used until the slices are gone.
-    let (inputs, outputs) = unsafe {
-        (
-            std::slice::from_raw_parts(s.add(args.first as usize), args.count as usize),
-            std::slice::from_raw_parts_mut(s.add(results.first as usize), results.count as usize),
-        )
+    // The host reaches its windows through the shared state, by index, so
+    // a nested run may grow the slot stack under it.
+    let mut cx = Call {
+        machine: &mut st.m,
+        caller: Frame {
+            function: st.id,
+            base: st.base,
+            call_pc: pc as u32,
+            resume: pc + 1,
+            result: 0,
+        },
+        top: st.base + len,
+        args: absolute(site.args, st.base),
+        results: absolute(site.result, st.base),
     };
-    if let Err(message) = st.host.call(index, inputs, outputs) {
-        fail!(
-            code,
-            pc,
-            word,
-            s,
-            len,
-            st,
-            FaultKind::Host(message),
-            Some(index)
-        )
+    let outcome = st.host.call(&mut cx, index);
+    // SAFETY: the current frame, `base..base + len`, is still inside the
+    // slot stack (nested runs only grow it); the stack may have moved.
+    let s = unsafe { st.m.slots.as_mut_ptr().add(st.base) };
+    if let Err(error) = outcome {
+        let fault = host_fault(error, index, &[], st.id, pc);
+        // `raise` adds this frame and the frames below it.
+        let mut inner = fault.trace;
+        inner.pop();
+        st.pending = Some((fault.kind, inner));
+        become raise(code, pc, word, s, len, st)
     }
     next!(code, pc + 1, s, len, st)
 }
@@ -485,25 +508,25 @@ extern "rust-preserve-none" fn call_script(
     word: u32,
     s: *mut u64,
     len: usize,
-    st: &mut State<'_, '_>,
+    st: &mut State<'_>,
 ) {
     let site = st.function.sites[(word >> 16) as usize];
     let CallTarget::Script(callee) = site.target else {
         unreachable!("the verifier matches the opcode to the target");
     };
-    let callee_fn = &st.functions[callee];
+    let callee_fn = &st.m.functions[callee];
     let size = callee_fn.frame_size as usize;
     // The callee's frame starts right after this one (`len` slots).
     let base = st.base + len;
-    if st.slots.len() < base + size || st.frames.len() == st.frames.capacity() {
+    if st.m.slots.len() < base + size || st.m.frames.len() == st.m.frames.capacity() {
         become grow(code, pc, word, s, len, st)
     }
-    if st.budget == 0 {
-        fail!(code, pc, word, s, len, st, FaultKind::Budget, None)
+    if st.m.budget == 0 {
+        fail!(code, pc, word, s, len, st, FaultKind::Budget)
     }
-    st.budget -= 1;
-    if st.frames.len() as u32 >= st.depth {
-        fail!(code, pc, word, s, len, st, FaultKind::Depth, None)
+    st.m.budget -= 1;
+    if st.m.frames.len() as u32 >= st.m.depth {
+        fail!(code, pc, word, s, len, st, FaultKind::Depth)
     }
     // Parameters follow the callee's results, whose count the site carries
     // (checked against the callee's signature by the verifier).
@@ -524,7 +547,7 @@ extern "rust-preserve-none" fn call_script(
             set(callee_s, size, params + i, value);
         }
     }
-    let pushed = st.frames.push_within_capacity(Frame {
+    let pushed = st.m.frames.push_within_capacity(Frame {
         function: st.id,
         base: st.base,
         call_pc: pc as u32,
@@ -547,23 +570,23 @@ extern "rust-preserve-none" fn grow(
     word: u32,
     _: *mut u64,
     len: usize,
-    st: &mut State<'_, '_>,
+    st: &mut State<'_>,
 ) {
     let site = st.function.sites[(word >> 16) as usize];
     let CallTarget::Script(callee) = site.target else {
         unreachable!("the verifier matches the opcode to the target");
     };
-    let end = st.base + len + st.functions[callee].frame_size as usize;
-    if st.slots.len() < end {
+    let end = st.base + len + st.m.functions[callee].frame_size as usize;
+    if st.m.slots.len() < end {
         // Doubling keeps growth amortized for deep recursion.
-        st.slots.resize(end.max(st.slots.len() * 2), 0);
+        st.m.slots.resize(end.max(st.m.slots.len() * 2), 0);
     }
-    if st.frames.len() == st.frames.capacity() {
-        st.frames.reserve(st.frames.len().max(16));
+    if st.m.frames.len() == st.m.frames.capacity() {
+        st.m.frames.reserve(st.m.frames.len().max(16));
     }
     // The slot stack may have moved.
     // SAFETY: `base + len <= slots.len()`: the current frame is in bounds.
-    let s = unsafe { st.slots.as_mut_ptr().add(st.base) };
+    let s = unsafe { st.m.slots.as_mut_ptr().add(st.base) };
     next!(code, pc, s, len, st)
 }
 
@@ -573,12 +596,15 @@ extern "rust-preserve-none" fn ret(
     word: u32,
     s: *mut u64,
     len: usize,
-    st: &mut State<'_, '_>,
+    st: &mut State<'_>,
 ) {
-    let Some(caller) = st.frames.pop() else {
+    if st.m.frames.len() == st.floor {
         become finish(code, pc, word, s, len, st)
+    }
+    let Some(caller) = st.m.frames.pop() else {
+        out_of_frame()
     };
-    let caller_fn = &st.functions[caller.function];
+    let caller_fn = &st.m.functions[caller.function];
     let caller_len = caller_fn.frame_size as usize;
     // SAFETY: frames are laid out back to back in one allocation; the
     // caller's starts `st.base - caller.base` slots before this one.
@@ -599,18 +625,18 @@ extern "rust-preserve-none" fn ret(
     next!(code, caller.resume, caller_s, caller_len, st)
 }
 
-/// Cold: the entry function returned.
+/// Cold: the entry function returned; its results are at the start of
+/// its frame.
 #[cold]
 extern "rust-preserve-none" fn finish(
     _: &[u32],
     _: usize,
     _: u32,
-    s: *mut u64,
-    len: usize,
-    st: &mut State<'_, '_>,
+    _: *mut u64,
+    _: usize,
+    st: &mut State<'_>,
 ) {
-    let count = st.function.signature.results.len();
-    st.outcome = Some(Ok((0..count).map(|slot| get(s, len, slot)).collect()));
+    st.outcome = Some(Ok(()));
 }
 
 extern "rust-preserve-none" fn invalid(
@@ -619,7 +645,7 @@ extern "rust-preserve-none" fn invalid(
     word: u32,
     _: *mut u64,
     _: usize,
-    _: &mut State<'_, '_>,
+    _: &mut State<'_>,
 ) {
     unreachable!("opcode {:#04x} is rejected by the verifier", word as u8)
 }

@@ -161,7 +161,9 @@ A trace lists the active frames, innermost first. Each entry names the
 function, or `<module>` for top-level code, and the source range of the
 operation that faulted (innermost) or of the call expression that is still
 active (outer entries). A fault raised by a host function adds an innermost
-entry with the host function's qualified name and no source range.
+entry with the host function's qualified name and no source range. A fault
+in a nested run (see Host reentry) that the host propagates keeps the nested
+run's entries, then the host function's entry, then the outer run's.
 
 ## Arithmetic
 
@@ -194,7 +196,7 @@ All limits belong to the caller's context and apply per run.
   keyword. A budget of `N` permits exactly `N` debits. The polls are
   defined by the source, not by the lowering: a rotated loop must still
   poll before re-evaluating its condition. The default is 1,000,000 steps.
-  Nested host reentry, when it arrives, shares the outer budget.
+  Nested runs (Host reentry, below) spend the same budget.
 - **Call depth.** Script recursion uses VM frames, never Rust recursion. At
   most a configured number of script function frames may be active
   (top-level code is not counted). A call that would exceed it faults with
@@ -202,6 +204,18 @@ All limits belong to the caller's context and apply per run.
   counted in frames rather than bytes so the outcome is the same in every
   tier and frame layout; the default is 4,096. Byte accounting for frames
   joins the memory limit in T015.
+- **Host reentry.** A host function may run a script function of the same
+  program (not top-level code) through its call context. That call debits
+  one step and counts as a frame, exactly like a script call: it faults
+  with `execution budget exhausted` or `call depth exceeded` before the
+  function starts. At most 64 nested runs may be active at once; one more
+  faults with `call depth exceeded`. (Each nested run costs native stack:
+  64 fit a default 2 MiB thread in every build.) Arguments that do not
+  match the function's signature, including a `bool` other than 0 or 1,
+  fault with ``host error: reentrant call to `f` does not match its
+  signature``. A fault in the nested run stops only the nested run and is
+  returned to the host, which may handle it or propagate it to stop the
+  outer run; its trace starts at the nested run's own frames.
 - **Compilation limits.** Nesting deeper than 256 levels of blocks or
   expressions, more than 65,535 locals in one function, or source larger
   than 4 GiB is rejected with `E0002`, rather than exhausting the compiler's

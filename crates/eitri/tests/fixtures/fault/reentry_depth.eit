@@ -1,0 +1,18 @@
+//! host: test
+//! depth: 3
+import test from "test"
+// Nested frames count toward the depth limit: `outer`, then `callback`,
+// then `inner` makes three; the call to `deeper` would be the fourth.
+fn deeper() -> i64 {
+    return 1
+}
+fn inner() -> i64 {
+    return deeper()
+}
+fn callback(n: i64) -> i64 {
+    return inner()
+}
+fn outer() -> i64 {
+    return test.reenter(0)
+}
+test.emit(outer())

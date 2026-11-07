@@ -1,0 +1,10 @@
+//! host: test
+//! budget: 3
+import test from "test"
+// Exactly enough for one round: the next call in the outer run faults.
+fn callback(n: i64) -> i64 {
+    test.emit(n)
+    return n
+}
+let a = test.reenter(1)
+test.emit(a)

@@ -4,7 +4,7 @@ use eitri_check::{CheckScratch, HostFnId, Hosts, Input};
 use eitri_diag::{Diagnostic, Diagnostics, Label};
 use eitri_lower::{LowerScratch, Program};
 use eitri_syntax::{LexScratch, ModuleKind, ParseScratch};
-use eitri_vm::{Fault, Host, Limits, VmScratch};
+use eitri_vm::{Fault, Host, Limits, Location, VmScratch};
 
 /// Diagnostics kept per run before the rest are only counted (T047).
 const DIAGNOSTIC_LIMIT: usize = 100;
@@ -320,22 +320,27 @@ fn verify(program: &Program, hosts: &Hosts) -> Result<(), Vec<Diagnostic>> {
 
 /// Resolve a fault's trace to names and source spans: the cold path.
 fn report(program: &Program, fault: Fault, hosts: &Hosts, interner: &Interner) -> FaultReport {
-    let mut trace = Vec::with_capacity(fault.trace.len() + 1);
-    if let Some(index) = fault.host {
-        let host = hosts.function(HostFnId::from_u32(index));
-        let module = &hosts.module(host.module).path;
-        trace.push(TraceFrame {
-            function: format!("{module}.{}", interner.resolve(host.name)),
-            span: None,
-        });
-    }
-    for location in &fault.trace {
-        let function = &program.functions[location.function];
-        trace.push(TraceFrame {
-            function: function.name.to_string(),
-            span: function.span_at(location.pc),
-        });
-    }
+    let trace = fault
+        .trace
+        .iter()
+        .map(|location| match *location {
+            Location::Script { function, pc } => {
+                let function = &program.functions[function];
+                TraceFrame {
+                    function: function.name.to_string(),
+                    span: function.span_at(pc),
+                }
+            }
+            Location::Host(index) => {
+                let host = hosts.function(HostFnId::from_u32(index));
+                let module = &hosts.module(host.module).path;
+                TraceFrame {
+                    function: format!("{module}.{}", interner.resolve(host.name)),
+                    span: None,
+                }
+            }
+        })
+        .collect();
     let message = match fault.kind {
         eitri_vm::FaultKind::Host(message) => message,
         kind => kind.message().to_owned(),

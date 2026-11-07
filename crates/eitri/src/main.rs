@@ -58,7 +58,7 @@ fn main() -> ExitCode {
 struct NoHost;
 
 impl eitri::Host for NoHost {
-    fn call(&mut self, index: u32, _: &[u64], _: &mut [u64]) -> Result<(), String> {
+    fn call(&mut self, _: &mut eitri::Call<'_, '_>, index: u32) -> Result<(), eitri::HostError> {
         unreachable!("no host function {index} is registered")
     }
 }

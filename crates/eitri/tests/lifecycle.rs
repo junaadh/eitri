@@ -7,12 +7,15 @@
 //! counting allocator installed in this test binary only, which holds one
 //! test so no other test allocates concurrently.
 
+mod support;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering::Relaxed};
 
-use eitri::{Context, Host};
+use eitri::Context;
+use support::{TEST_MODULE, TestHost};
 
 /// Counts live bytes. A measurement tool for this binary, not part of Eitri.
 struct Counting;
@@ -44,27 +47,6 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
-/// The harness `test` module's declarations, as the fixtures import it.
-const TEST_MODULE: &str = "\
-pub fn emit(value: i64) -> void
-pub fn check(value: bool) -> bool
-pub fn id(value: i64) -> i64
-pub fn fail() -> void
-";
-
-/// Accepts every call and returns its first argument, if any, so results
-/// stay in range for `bool`. Allocates nothing.
-struct Echo;
-
-impl Host for Echo {
-    fn call(&mut self, _: u32, args: &[u64], results: &mut [u64]) -> Result<(), String> {
-        if let (Some(result), Some(&arg)) = (results.first_mut(), args.first()) {
-            *result = arg;
-        }
-        Ok(())
-    }
-}
-
 fn collect(directory: &Path, sources: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).unwrap() {
         let path = entry.unwrap().path();
@@ -89,13 +71,17 @@ fn context(threaded: bool) -> Context {
 
 /// One pass over the corpus: compile, execute where it compiled, drop.
 /// Returns how many sources compiled, so the pass cannot silently be empty.
+/// The harness host, which records effects (and so allocates) and
+/// reenters, lives only for the pass.
 fn pass(context: &mut Context, corpus: &[String]) -> usize {
+    let mut host = TestHost::new(|name| context.host_index("test", name));
     let mut compiled = 0;
     for source in corpus {
         if let Ok(code) = context.compile(source) {
             compiled += 1;
             // Faults are expected for some fixtures; only memory matters here.
-            let _ = context.execute(&code, &mut Echo);
+            let _ = context.execute(&code, &mut host);
+            host.effects.clear();
         }
     }
     compiled

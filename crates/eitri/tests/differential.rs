@@ -175,6 +175,8 @@ struct Gen {
     /// The function being generated: it may call only later functions, so
     /// calls are acyclic and every program terminates or exhausts a budget.
     current: Option<usize>,
+    /// The function named `callback`, which `test.reenter` runs, if any.
+    callback: Option<usize>,
     indent: usize,
 }
 
@@ -186,15 +188,26 @@ fn generate(seed: u64) -> (String, Setup) {
         scope: Vec::new(),
         next_var: 0,
         current: None,
+        callback: None,
         indent: 0,
     };
-    let count = g.rng.below(5);
+    let mut count = g.rng.below(5);
     for _ in 0..count {
         let params = (0..g.rng.below(4))
             .map(|_| g.rng.pick(&[Ty::Int, Ty::Int, Ty::Bool]))
             .collect();
         let ret = g.rng.pick(&[Ty::Int, Ty::Int, Ty::Bool, Ty::Void]);
         g.functions.push(Function { params, ret });
+    }
+    // Last, so it calls no other function; it may reenter itself, which
+    // reaches the nesting and budget limits.
+    if g.rng.chance(40) {
+        g.functions.push(Function {
+            params: vec![Ty::Int],
+            ret: Ty::Int,
+        });
+        g.callback = Some(count);
+        count += 1;
     }
     g.out += "import test from \"test\"\n";
     for f in 0..count {
@@ -223,6 +236,14 @@ impl Gen {
         self.out += "\n";
     }
 
+    fn name(&self, f: usize) -> String {
+        if self.callback == Some(f) {
+            "callback".to_owned()
+        } else {
+            format!("f{f}")
+        }
+    }
+
     fn fresh(&mut self, ty: Ty, mutable: bool) -> Var {
         let var = Var {
             id: self.next_var,
@@ -246,7 +267,8 @@ impl Gen {
             self.scope.push(var);
         }
         let ret = self.functions[f].ret;
-        self.line(&format!("fn f{f}({params}) -> {} {{", type_name(ret)));
+        let name = self.name(f);
+        self.line(&format!("fn {name}({params}) -> {} {{", type_name(ret)));
         self.indent += 1;
         for _ in 0..self.rng.below(5) {
             self.stmt(2);
@@ -377,7 +399,7 @@ impl Gen {
         let f = self.rng.pick(&candidates);
         let params = self.functions[f].params.clone();
         let args: Vec<String> = params.iter().map(|&p| self.expr(p, 1)).collect();
-        Some(format!("f{f}({})", args.join(", ")))
+        Some(format!("{}({})", self.name(f), args.join(", ")))
     }
 
     fn literal(&mut self) -> String {
@@ -415,6 +437,13 @@ impl Gen {
                     format!("({lhs} {op} {rhs})")
                 }
                 6 => format!("-{}", self.expr(Ty::Int, depth - 1)),
+                // Reentry, mostly when there is a `callback` to run.
+                7 if self
+                    .rng
+                    .chance(if self.callback.is_some() { 50 } else { 3 }) =>
+                {
+                    format!("test.reenter({})", self.expr(Ty::Int, depth - 1))
+                }
                 7 => format!("test.id({})", self.expr(Ty::Int, depth - 1)),
                 _ => self
                     .callee(Ty::Int)
