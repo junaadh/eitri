@@ -1,0 +1,5 @@
+//! pending: T008
+fn outer() -> void {
+    fn inner() -> void {
+    }
+}

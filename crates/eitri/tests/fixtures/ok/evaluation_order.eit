@@ -1,0 +1,8 @@
+//! host: test
+//! pending: T010
+import test from "test"
+fn pair(a: i64, b: i64) -> i64 {
+    return a * 10 + b
+}
+test.emit(pair(test.id(1), test.id(2)))
+test.emit(test.id(3) - test.id(4))

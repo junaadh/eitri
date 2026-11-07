@@ -1,0 +1,31 @@
+// Entry point. The editor runs this file at startup.
+
+import editor from "editor"
+import compiler from "eitri:compile"
+import options from "options"
+import plugins from "plugins"
+import theme from "theme"
+import keymaps from "keymaps"
+import autocmds from "autocmds"
+import language_servers from "language_servers"
+import statusline from "statusline"
+
+options.setup()             // first: leader keys must exist before keymaps
+plugins.setup()
+theme.setup()
+keymaps.setup()
+autocmds.setup()
+language_servers.setup()
+statusline.setup()
+
+// Machine-specific tweaks live in local.eit, outside version control.
+// A missing file is normal; a broken one is reported but doesn't stop startup.
+let local_path = "${editor.config_dir()}/local.eit"
+let source = editor.read_file(local_path) else _ => ""
+if source != "" {
+    let apply: fn() -> void = compiler.load(source) else e => {
+        editor.notify("local.eit: ${e}", level: .Warn)
+        () => {}
+    }
+    apply()
+}

@@ -1,0 +1,924 @@
+# Implementation tasks
+
+Status: bootstrap implemented (T001); the first slice is frozen (T002);
+T045 and T046 are in progress. The compiler and runtime are not implemented. Unchecked boxes describe work
+still to do. This is the executable work breakdown for the
+[roadmap](roadmap.md), [execution design](implementation/execution-design.md),
+and [research ledger](implementation/vm-research.md).
+
+Work in dependency order. A task is done only when its stated completion
+checks pass. Record the change, checks, and any measured result against its
+ID. Add scope changes here rather than silently expanding the first runtime.
+No timings or implementation dates are promised before a baseline exists.
+
+## Working rules
+
+- Ship a small end-to-end path before implementing all language features.
+  Unsupported features get compile diagnostics before any submitted script
+  executes. They must never silently acquire different semantics.
+- Keep the source language, logical operations, and executable encoding
+  distinct. Numeric opcode assignments are internal and generated.
+- Preserve source order, faults, budgets, and GC/host contracts when optimizing.
+- Run focused semantic tests as features land; use differential and boundary
+  tests for the compiler/runtime. Do not make timing thresholds unit tests.
+- Compare candidates on the same supported subset and semantics. Report
+  allocation, metadata, and code footprint as well as latency.
+- Keep experiments behind explicit switches until their promotion gates pass.
+  A rejected experiment is a useful result, not an incomplete feature.
+- Stage 1–5 in the roadmap are release stages. M0–M6 below are smaller
+  implementation milestones within and across those stages.
+- Task IDs are stable. New tasks get the next free ID and are placed in the
+  milestone where they belong, so IDs are not in reading order.
+
+## Definition of done
+
+Every task, in addition to its own completion checks:
+
+- [ ] Fixtures for the new behavior, including at least one rejected program
+  or fault case, in the format from T045.
+- [ ] The documentation chapter that specifies the behavior is still true; a
+  ⚠️ or "experimental" marker it resolves is removed (T065).
+- [ ] Any decision or experiment it touches has its result recorded in the
+  [research ledger](implementation/vm-research.md), including rejections.
+- [ ] If it changes the compiler or a handler on the source-to-result path,
+  the T011 harness is rerun and the result is recorded against the task ID.
+- [ ] New `unsafe` code follows the T046 policy.
+- [ ] Unsupported neighbors of the feature produce a deliberate diagnostic.
+
+## Task format
+
+Each task lists what it depends on, what it delivers, and when it is done.
+Newer tasks also list **Refs**: the documentation that specifies the work
+and the decisions (D) and experiments (E) from the ledger it implements. The
+[traceability tables](#traceability) map the older tasks the same way.
+
+## Milestones
+
+| Milestone | Outcome | Gate |
+|---|---|---|
+| M0 | Fresh scalar source executes and calls a typed host function | T001–T012, T045–T047; first reproducible source-to-result measurements |
+| M1 | Managed data, results, and closures execute with correct roots | T013–T020; forced-GC and retained-callback checks |
+| M2 | Stage 1 core language and embedding workload | T021–T026, T048–T050; explicit Stage 1 corpus and Lua equivalent |
+| M3 | Generics, interfaces, extern data, and C embedding | T027–T030, T051; Stage 2 gate |
+| M4 | Stackful async, tasks, and channels | T031–T033; Stage 3 gate |
+| M5 | Dynamic data, runtime facilities, and the standard library | T034–T036, T052–T056; Stage 4 gate: Lua parity |
+| M6 | Measured optimizations and optional native/AOT execution | T037–T043, T057–T060; individual experimental gates |
+| Later | Reload, grammar extensions, convenience features, release | T044, T061–T063 |
+| Continuous | Security and resource limits; documentation kept true | T064, T065 |
+
+M6 experiments can run as soon as their dependencies exist; they do not
+require completing M5. M0 is the immediate critical path. Some M0–M2 tasks
+have independent prerequisites, but shared interfaces must be agreed before
+concurrent implementation.
+
+## M0: source text to a measured result
+
+### T001 — Bootstrap the Rust library and runner
+
+- [x] Depends on: none.
+- Deliver a minimal Cargo package with library and `eitri` binary targets,
+  source/test/benchmark-fixture directories, and documented developer commands.
+  Use a Cargo workspace with `members = ["crates/*"]`, initially containing
+  one `eitri` package with focused modules.
+- Done when: a clean checkout builds; formatting and focused tests run;
+  the runner reports a structured placeholder error without pretending that
+  unsupported source executes. Do not introduce a stable public API yet.
+- Completed 2026-11-07: dependency-free Cargo library/binary, pinned Rust
+  1.97.1, developer commands in the root README, structured bootstrap `E0001`
+  rejection, and source/test/benchmark-fixture directories. Local AArch64
+  macOS validation: locked build, formatting, Clippy with warnings denied,
+  three CLI tests and four source fixtures pass. No execution timings claimed.
+  Workspace follow-up: moved the package to `crates/eitri`; metadata and
+  lints are inherited from the root workspace, and CI checks all members.
+
+### T002 — Freeze the first supported semantic slice
+
+- [x] Depends on: T001.
+- Record the supported syntax/types: `i64`, `bool`, locals, assignment,
+  checked/wrapping arithmetic, comparisons, `if`, `while`, annotated
+  functions, calls, and `return`. Specify top-level success and source traces.
+- Decide the initial arithmetic/fuel/resource boundaries, including overflow,
+  division edge cases if enabled, temporary initialization, and code ownership.
+- Done when: accepted programs and rejected unsupported programs are listed
+  as fixtures, with expected results/diagnostics. Forward calls are supported;
+  broader inference and syntax are explicitly deferred, not redefined.
+- Until T022, function bodies may access parameters, locals, declared function
+  symbols, and registered host bindings, but not script module-state bindings.
+  Reject that access explicitly so deferring initialization analysis cannot
+  admit reads before initialization.
+- Completed 2026-11-07: [First supported slice](implementation/first-slice.md)
+  records the syntax, types, top-level outcome, traces, arithmetic (including
+  the resolved `MIN % -1 == 0`), source-defined budget polls, a frame-count
+  call-depth limit, compilation limits, code ownership, and diagnostic codes.
+  88 fixtures (16 accepted, 15 faults, 29 rejected, 28 unsupported neighbors)
+  carry expected effects, results, diagnostics with spans, and traces. All are
+  marked `pending: T008` or `pending: T010`; the harness checks that each is
+  still rejected and that its expectation is well formed. Validated locally
+  with formatting, Clippy, and the full test suite on AArch64 macOS.
+
+### T003 — Create the machine-readable operation specification
+
+- [ ] Depends on: T002.
+- Inventory all currently proposed opcode variants (currently 163), but mark
+  only the first executable subset implemented. Specify formats, operand
+  roles, width/sign/precision, effects, instruction lengths, and fault PCs.
+- Generate opcode declarations, the manifest, encoders/decoders, operand
+  metadata, disassembly scaffolding, and the 256-opcode capacity assertion.
+- Done when: the generated count matches the inventory or an explained
+  correction; assignments are deterministic; unsupported operations cannot
+  reach execution. Include exact float-complement and `WIDE` legality tables.
+
+### T004 — Implement a small independent semantic oracle
+
+- [ ] Depends on: T002, T003.
+- Implement reference operations for the first subset, with independent
+  arithmetic/control-flow logic rather than copying optimized handlers.
+  Add narrow-shift/conversion and IEEE comparison models as their variants land.
+- Done when: checked/wrapping boundary cases are covered; the float truth
+  table includes NaNs, infinities, and signed zeros; narrow integer cases
+  can be checked exhaustively at eight bits. No performance claims from this oracle.
+
+### T005 — Assemble and validate executable functions
+
+- [ ] Depends on: T003.
+- Build code/constant/site containers, logical instruction IDs, label fixups,
+  instruction-start maps, source spans, and final word PCs. Implement `WIDE`
+  lengths/legality and far-branch lowering, including stateful loop fallback
+  when that operation is enabled.
+- Done when: round trips and boundary fixtures cover slots 255/256, signed
+  displacement limits, widened extended followers, and illegal branch targets.
+  Reject uninitialized slots, incompatible joins, wrong operand types, and
+  malformed code in the supported subset, not merely invalid indexes.
+- Initially expose only compiler/assembler-produced code to the runtime;
+  untrusted serialized bytecode is a separate, deferred API boundary.
+
+### T006 — Implement the scalar register interpreter
+
+- [ ] Depends on: T004, T005.
+- Use portable Rust dispatch, untagged eight-byte slots on 64-bit targets,
+  explicit control frames, and non-overlapping script call frames. Implement
+  only the enabled operations and checked argument/result transfers.
+- Done when: hand-assembled programs agree with the oracle; script recursion
+  uses bounded VM storage rather than Rust handler recursion; calls and taken
+  backward edges share the host-call budget; faults carry the correct PC.
+
+### T007 — Implement source storage, interning, and the core lexer
+
+- [ ] Depends on: T001, T002.
+- Build source/span ownership, dense spelling IDs with collision-safe lookup,
+  compact token buffers, delimiter indexes, and resettable compilation scratch.
+  Apply the specified newline and operator rules for the supported syntax.
+- Done when: identifiers are not mistaken for bindings; shadowed spellings
+  share spelling IDs; malformed input has correct spans; repeated compilation
+  resets scratch without invalidating published source metadata.
+- In progress 2026-11-07: `eitri-base` provides the shared base types:
+  `newtype_index!` ids (`NonZeroU32`, so `Option<Id>` is four bytes; no
+  `unsafe`), `IndexVec`, `IdRange`, `List`/`ListPool` with scratch-stack
+  construction, `Span`/`SourceId` (now used by `eitri-diag`), the Fx hasher,
+  and a context-owned `Interner`. Unlike a process-wide interner it has no
+  lock or leaked memory: spellings share one byte buffer, lookup is
+  open addressing comparing a 32-bit hash tag before bytes, keywords and
+  predeclared names are predefined constants at fixed indexes, and `reset`
+  removes only the symbols added since the last reset, keeping allocations
+  (tested to retain no extra memory across runs). Not yet wired into
+  `Context` (the lexer is its first user); no timing has been measured.
+
+### T008 — Parse, resolve, and check the scalar subset
+
+- [ ] Depends on: T007.
+- Build compact indexed syntax, lexical scopes and binding IDs, preliminary
+  function signatures, expected-type checking, assignment rules, return-path
+  checks, and scalar control-flow typing. Require annotations in this slice.
+- Done when: forward calls, shadowing, precedence, and source-order fixtures
+  pass. Any error anywhere in the submitted slice prevents all its setup
+  effects; unsupported syntax receives a deliberate diagnostic.
+
+### T009 — Lower checked bodies into typed bytecode
+
+- [ ] Depends on: T005, T008.
+- Connect checked binding/type IDs to slots, constants, call sites, branches,
+  and source information. Start with cheap temporary reuse and destination
+  passing; retain a simple lowering mode for later optimization comparisons.
+- Done when: source programs and their oracle equivalents agree, no dynamic
+  name/type lookup remains in ordinary scalar handlers, and the disassembler
+  exposes the actual emitted words and frame size.
+
+### T010 — Connect typed host calls and the runner
+
+- [ ] Depends on: T006, T009.
+- Register one scalar host signature by index, execute submitted source, and
+  return structured compile errors, success, or faults. Capture observable
+  host effects in fixtures. Keep the first call context thread-bound.
+- Done when: a script computes, branches, calls another script function, and
+  passes a checked scalar result to the host. A later compile error causes
+  zero host effects. Nested host reentry shares the existing budget.
+
+### T011 — Establish the first performance harness
+
+- [ ] Depends on: T010.
+- Add arithmetic, branch, script-call, and minimal-host-call fixtures and
+  equivalent Lua 5.4 sources. Measure compilation, first execution, total
+  latency, allocations, scratch high-water, frames, code, and metadata bytes.
+- Done when: release results include machine/build details and raw samples;
+  a reused initialized runtime is distinguished from fresh runtime creation;
+  compilation and first execution are included in every source-to-result claim.
+  Keep an actual observable result so benchmark work cannot disappear.
+
+### T012 — Close the first end-to-end semantic gate
+
+- [ ] Depends on: T010, T011.
+- Differentially exercise supported source/control-flow combinations and
+  encoding limits. Add malformed-input/bytecode fuzz entry points, execution
+  limits, and repeated compile/run/dispose checks.
+- Done when: unsupported code cannot execute, valid boundary cases agree
+  with the oracle, loops/recursion return control on budget exhaustion, and
+  repeated runs show no unbounded retained artifact growth. Record the
+  baseline even if it misses the latency target.
+
+### T045 — Build the test and fixture infrastructure
+
+- [ ] Depends on: T001.
+- Refs: [Performance: method](implementation/performance.md#method).
+- Define one fixture format: source files, the host bindings it may use,
+  and the expected outcome (result value, structured diagnostics, fault with
+  trace, recorded host effects, or budget exhaustion). Add golden
+  disassembly snapshots, an oracle hook (T004), and a runner that executes
+  every fixture under the interpreter and, later, every tier.
+- Done when: a fixture can assert each outcome kind; a failing fixture
+  prints a readable diff; fixtures run in parallel and deterministically;
+  updating golden output is an explicit command, never automatic.
+- In progress 2026-11-07: Rust integration harness discovers paired `.eit` /
+  `.expect` files, validates the corpus, runs isolated cases in bounded
+  parallel batches, and reports expected/actual diagnostics and byte spans.
+  Snapshots are edited explicitly. Updated with T002: recursive discovery,
+  `host`/`budget`/`depth`/`pending` directives, the harness `test` host
+  module, and an expectation format for effects, `ok`, diagnostics, and
+  faults with traces, validated even while pending. Remaining: execution
+  adapters (T010), disassembly snapshots, and the T004 oracle/tier adapters.
+
+### T046 — Set up CI, target matrix, and the `unsafe` policy
+
+- [ ] Depends on: T001.
+- Refs: D24; [Performance: method](implementation/performance.md#method).
+- CI builds and tests on x86-64 Linux and AArch64 (Linux and macOS); Windows
+  builds and runs fixtures once T010 lands. Pin the Rust toolchain (D24),
+  and record it with every benchmark.
+- `unsafe` policy: permitted with an explained performance benefit (cost
+  removed, safe alternative, measurements or planned experiment). Each block
+  states its invariants and why they hold in a `SAFETY` comment; frame,
+  slot, and handler code runs under Miri where Miri supports it; the C API
+  (T030) runs under AddressSanitizer and UndefinedBehaviorSanitizer.
+- Done when: every target in the matrix is green on a clean checkout, and a
+  deliberately broken `unsafe` invariant is caught by the configured tools.
+- In progress 2026-11-07: CI configured for x86-64 Linux and AArch64
+  Linux/macOS; toolchain pinned; workspace lints deny undocumented unsafe
+  blocks and implicit unsafe operations inside unsafe functions. Performance
+  justification and validation policy are in the root README. Only local AArch64
+  macOS checks have run. Hosted matrix results, memory-tool enforcement
+  when unsafe components exist, and Windows at T010 remain outstanding.
+
+### T047 — Implement structured diagnostics and error recovery
+
+- [ ] Depends on: T008.
+- Refs: [Compiler: diagnostics](implementation/compiler.md#diagnostics).
+- Give each diagnostic a stable code (`E0204`), severity, message, and
+  source ranges; render the documented terminal form and hand the host the
+  same data. Recover at the next statement or declaration boundary, up to a
+  cap, so one run reports several errors. Valid scripts pay nothing for
+  recovery.
+- Done when: snapshot tests cover every code in the supported slice; one
+  file with several independent errors reports each once; recovery never
+  produces a cascade of follow-on errors for one mistake; the code catalog
+  is a generated list, kept with T065.
+- In progress 2026-11-07: the `eitri-diag` crate provides the shared model
+  (severities warning, error, fault, and bug; `E`-codes; primary/secondary
+  labels over `u32` byte spans with source ids; notes and help), a capped
+  `Diagnostics` sink for recovery, and a renderer matching the features of
+  codespan-reporting 0.12 that Eitri needs: rounded box drawing with an
+  ASCII fallback, rich/medium/short styles, configurable ANSI styles,
+  multi-line labels as nested brackets, start/end context for long spans,
+  context lines around labels, stacked messages, multi-file sections, tab
+  expansion, approximate wide/zero-width columns, and clamped invalid spans.
+  Not adopted: a `Files` trait (the context owns sources) and a termcolor
+  dependency. The CLI renders through it. 21 rendering tests plus
+  width-table checks pass locally. Remaining: recovery in the
+  parser/checker, snapshot coverage of every code, and the generated catalog.
+
+**M0 exit:** a usable measured scalar slice. Completing all 163 operations,
+the collector, the editor config, or a native backend is not an M0 dependency.
+
+## M1: managed values and callbacks
+
+### T013 — Complete scalar representations and conversions
+
+- [ ] Depends on: T012.
+- Add `i8`, `u8`, `u64`, `f32`, `f64`, `char`, conversions, bitwise operations,
+  width-aware shifts, and precise float arithmetic/comparisons. Keep storage-only
+  extern widths distinct from ordinary source types.
+- Done when: canonical slot representations and conversion faults agree
+  with reference models, including narrow arithmetic and all float conditions.
+
+### T014 — Define layouts and root descriptors
+
+- [ ] Depends on: T013.
+- Implement canonical types, aggregate layouts, ordinary reference maps,
+  dynamic-root recipe support, helper roots, and pre-call/suspended/post-call
+  root states. Distinguish tracing safepoint PCs from precise fault PCs.
+- Done when: layout tests cover padding, inactive union slots, nested
+  references, and reused temporaries; every allocation-capable path has a
+  defined root publication point before allocation.
+
+### T015 — Implement allocation and non-moving collection
+
+- [ ] Depends on: T014.
+- Add memory accounting, non-moving mark-sweep, runtime/host roots, artifact
+  roots, retained handles, and generation-checked host identities. Implement
+  precise roots first; conservative scanning remains an independent experiment.
+- Done when: forced collection at every legal safepoint preserves all live
+  data and reclaims unreachable graphs; handle release and allocation failure
+  are tested; memory limits include retained compiler/code metadata.
+
+### T016 — Implement strings, bytes, and characters
+
+- [ ] Depends on: T013, T015.
+- Add immutable UTF-8 strings, binary bytes, literals, content equality/hashes,
+  runtime literal interning, byte/character access, and essential conversions.
+- Done when: separately compiled equal strings hash equally, UTF-8 boundaries
+  are respected, source lifetime is safe, and no runtime interning assumption
+  replaces required content comparison.
+
+### T017 — Implement aggregates and tagged values
+
+- [ ] Depends on: T014, T015, T016.
+- Add structs/classes, fixed arrays, enums and indirect payloads, optionals
+  with collapse, results, defaults, construction, and core matching.
+- Done when: copies and shared identity follow the language; large aggregates
+  use bounded code generation; invalid recursive inline layouts are rejected;
+  payload roots survive collection in every active case.
+
+### T018 — Implement growable arrays, ordered maps, and ranges
+
+- [ ] Depends on: T017.
+- Add packed element storage and correct width/stride accesses, pre-sized
+  literal allocation, basic methods, insertion order, iteration mutation
+  detection, and overflow-free integer range execution.
+- Done when: optional map values, missing lookups, equality/hash invariants,
+  signed zeros/NaNs in keys, and maximum-endpoint loops behave as specified.
+  Literal evaluations create independent mutable collections.
+
+### T019 — Implement closures and captured variables
+
+- [ ] Depends on: T015, T017, T018.
+- Add capture classification, closure environments, shared mutable cells as
+  the initial implementation, fresh loop captures, and noncapturing functions.
+  Keep open upvalues as a measured alternative.
+- Done when: callbacks outlive their source invocation safely, shared captures
+  observe mutations, noncapturing functions allocate no closure object, and
+  host-retained callbacks remain rooted until released.
+
+### T020 — Implement results, recovery, and deferred cleanup
+
+- [ ] Depends on: T017, T019.
+- Finish `try`, mapping, `try?`, recovery, `E!void`, cleanup ordering, secondary
+  faults, cleanup budgets, and the reserved-memory policy.
+- Done when: returns, breaks, faults, and propagation run the required cleanup
+  in order; looping/faulting/exhausted cleanup returns control and reports
+  skipped work without hiding the primary failure.
+
+## M2: complete the Stage 1 workload
+
+### T021 — Complete core syntax and checking
+
+- [ ] Depends on: T020.
+- Complete lexical forms, named/default arguments, destructuring, optional
+  chains, narrowing, guards, exhaustive payload/range patterns, labeled loops,
+  methods, visibility, static members, and formatting/string helpers.
+- Done when: non-generic core examples compile and execute; expected types,
+  argument evaluation order, shadowing, and diagnostics match the reference.
+  Add feature fixtures as each feature lands rather than one final test dump.
+
+### T022 — Implement source modules and module analyses
+
+- [ ] Depends on: T021.
+- Add host-controlled loading, import graphs/cycle rejection, immutable exports,
+  module instances, SCC-based return inference, and late-binding reachability.
+- Done when: initialization happens once in dependency order; function-value
+  references count in initialization safety; stress tests include functions
+  and late bindings growing together; failed initialization has defined state.
+
+### T023 — Implement declaration modules and runtime templates
+
+- [ ] Depends on: T022.
+- Parse/check host declarations, bind typed functions/properties/values once,
+  and share immutable descriptors through templates. Keep instance state and
+  per-runtime IDs/caches separate.
+- Done when: mismatched bindings fail registration; source imports never
+  reparse host declarations; fresh runtimes share descriptors without sharing
+  mutable script module state.
+
+### T024 — Complete the Stage 1 Rust embedding contract
+
+- [ ] Depends on: T019, T020, T023.
+- Implement thread-bound runtime APIs, checked lookup/calls, typed host
+  objects, retention, stale handles, reentry, and context-borrowed views.
+- Done when: compile-fail tests prevent views spanning reentry; nested runs
+  share budget; handles from another runtime are rejected; destruction and
+  panics/faults follow the documented contract.
+
+### T025 — Build and document the Stage 1 editor corpus
+
+- [ ] Depends on: T021, T023, T024.
+- Create an explicit Stage 1 fixture derived from the reference config,
+  replacing dynamic options with typed data and omitting runtime compilation
+  and async features. Keep the full reference fixture unchanged as the target.
+  Supply the equivalent Lua tree and instrumented host stubs.
+- Done when: both programs produce equivalent recorded setup effects and
+  retained callbacks; exclusions are listed, not hidden behind no-op bindings.
+
+### T026 — Publish the Stage 1 baseline and CLI
+
+- [ ] Depends on: T011, T022, T025.
+- Complete the supported CLI/diagnostics and benchmark single/repeated runs,
+  fresh source modules versus loaded dependencies, GC, allocations, metadata,
+  and first callback invocations.
+- Done when: commands reproduce the report; supported features and limitations
+  are documented; results state whether targets were achieved. Stage 1 can
+  complete even if the performance hypothesis needs revision.
+
+### T048 — Track performance across targets
+
+- [ ] Depends on: T011, T046.
+- Refs: [Performance](implementation/performance.md); D24.
+- Extend the harness to the full workload and stress-workload lists, run on
+  Intel, AMD, and AArch64 machines with recorded models, and capture the
+  counters the Method section requires (instructions, cycles, indirect-branch
+  MPKI, µop-cache delivery where available). Store raw samples per commit.
+- Done when: a report compares any two commits per workload and target with
+  confidence intervals; a change can be attributed to a feature workload;
+  regressions are flagged for review, never as failing unit tests.
+
+### T049 — Implement the core numeric library
+
+- [ ] Depends on: T013, T016.
+- Refs: [Expressions: arithmetic](language/expressions.md#arithmetic),
+  [Types: conversions](language/types.md#conversions),
+  [Eitri and Lua: numbers and strings](lua.md#numbers-and-strings).
+- Add the Lua parity numerics: power, `floor_div` and `floor_mod`, absolute
+  value, min/max/clamp, float rounding (`floor`, `ceil`, `round`, `trunc`),
+  `sqrt`, exponentials, logarithms, trigonometry, constants (`pi`, `inf`,
+  `nan`, per-type min and max), and the documented number parsing
+  (`i64.parse`, `f64.parse`) and exact formatting. Random numbers come from a
+  host-provided module, so scripts stay deterministic unless the host opts in.
+- Done when: integer helpers fault exactly where the language says; float
+  functions match IEEE results (correctly rounded where the host library
+  is); parse/format round trips are exact for every finite `f64` tested.
+
+### T050 — Implement the core string, bytes, and UTF-8 library
+
+- [ ] Depends on: T016, T018.
+- Refs: [Strings](language/strings.md), [Collections](language/collections.md).
+- Complete the built-in string methods in the Strings chapter, `bytes`
+  access and slicing, and the UTF-8 outcomes of Lua's `utf8` library:
+  validation, decoding at a byte offset, character counting, encoding a
+  `char`, and iterating characters with byte offsets.
+- Done when: every method in the chapter has fixtures, including empty
+  strings, invalid UTF-8 in `bytes`, and non-ASCII case mapping; the
+  Strings workload runs; Lua-style patterns are explicitly deferred to T052.
+
+## M3: generics, interfaces, and foreign layouts
+
+### T027 — Implement checked generics and bounded specialization
+
+- [ ] Depends on: T026.
+- Add generic declarations/aliases, constraints, expected-type inference,
+  checked-once bodies, instantiation identity, and specialization limits.
+- Done when: illegal polymorphic recursion and depth/count exhaustion produce
+  diagnostics before setup effects; unused instantiations emit no code;
+  compile time/code size are measured on combination-growth workloads.
+
+### T028 — Implement interfaces and extensions
+
+- [ ] Depends on: T027.
+- Add explicit conformance, default methods, extension ownership checks,
+  existential interface values, boxing, and indirect calls. Define which
+  `Self`/generic/static requirements can be invoked through an existential.
+- Done when: incoherent conformances and unsupported existential operations
+  are rejected; boxed values are traced and dispatch matches static semantics.
+
+### T029 — Implement extern layouts and checked host memory access
+
+- [ ] Depends on: T024, T027.
+- Add target-aware C-layout validation, storage types, extern arrays/classes,
+  stale-handle checks, read/write permissions, checked stores, and explicit
+  unsafe host obligations for pointer/string validity and aliasing.
+- Done when: size/alignment/offset mismatches fail registration; narrow
+  accesses never overread; pointer fields remain inaccessible to scripts;
+  reentry cannot leave a safe Rust memory view alive.
+
+### T030 — Implement the C API and binding generation
+
+- [ ] Depends on: T028, T029.
+- Add status/outcome APIs, mirror generation, handles/retention, templates,
+  callbacks, reentry contracts, and diagnostics without cross-ABI unwinding.
+- Done when: a C host executes the Stage 2 corpus; generated layout assertions
+  catch drift; ownership and errors are tested in release as well as debug.
+  Freeze ABI promises only after this implementation review.
+
+### T051 — Implement the generic collection library
+
+- [ ] Depends on: T027, T028.
+- Refs: [Collections: array methods](language/collections.md#array-methods),
+  [Generics: built-in constraints](design/generics.md#built-in-constraints).
+- Write, as ordinary generic Eitri or built-in generic functions: sorting
+  (stable, with `Ordered` or a comparator), binary search, map/filter/fold
+  over arrays, reversing, range copy (Lua's `table.move`), and map
+  key/value collection. These replace Lua's `table` library.
+- Done when: sorting is stable and faults (not corrupts) when a comparator
+  faults; helpers allocate only their result; specialization limits from
+  T027 hold for the library's own instantiations.
+
+## M4: stackful concurrency
+
+### T031 — Implement async effects and movable coroutine stacks
+
+- [ ] Depends on: T026.
+- Add async typing, sync-to-async conversion, stackful tasks, suspension tokens,
+  frame relocation, and sync callback barriers. Root suspended frames.
+- Done when: suspension never crosses a native host frame; stack growth
+  preserves captures/roots; stale/doubled tokens are host API errors.
+
+### T032 — Implement joining, cancellation, fault containment, and reports
+
+- [ ] Depends on: T020, T031.
+- Add terminal states, `Stopped!T`, FIFO waiters/ready queue, cancellation at
+  awaits, shared budgets, cleanup, host reports, and explicit drain behavior.
+- Done when: reentrant start/resume/cancel, completion races, cleanup faults,
+  and budget-exhausted queues match the documented state machine.
+
+### T033 — Implement channels and async binding APIs
+
+- [ ] Depends on: T030, T032.
+- Add channel send/receive/close, wakeup ordering, optional-value semantics,
+  async host callbacks, and operation cancellation hooks.
+- Done when: FIFO/close/cancellation tests pass and coroutine cost measurements
+  include ordinary nonsuspending-call overhead. Stage 3 gate is recorded.
+
+## M5: dynamic and runtime features
+
+### T034 — Implement dynamic values, type patterns, and JSON
+
+- [ ] Depends on: T028, T030.
+- Add `dyn` representation/boxing, typed extraction, dynamic reads/writes/calls,
+  visibility-aware descriptors, tracing, and host-enabled JSON facilities.
+- Done when: missing data, misuse faults, exact type tests, NaN behavior,
+  and nested boxed/reference values match the language. Begin without caches.
+
+### T035 — Implement weak references and queued collection cleanup
+
+- [ ] Depends on: T015, T033, T034.
+- Add weak references, ephemeron weak-key maps, safe-point finalization queues,
+  and host drain policy without running script code inside collection.
+- Done when: backreferences do not accidentally retain ephemeron entries;
+  callbacks cannot receive resurrectable collected objects; cleanup failures
+  are independently reported and bounded.
+
+### T036 — Implement runtime compilation and the full reference config
+
+- [ ] Depends on: T033, T034, T035.
+- Add host-enabled `compiler.load`, expected-signature checking, capability-
+  limited imports, loaded-code ownership, and initialization outcomes.
+- Done when: the complete editor fixture and equivalent Lua tree execute;
+  invalid loaded source has no setup effects; loaded closures survive
+  collections. Record Stage 4 feature coverage and the remaining library work.
+
+### T052 — Decide and implement the string pattern library
+
+- [ ] Depends on: T050, T051.
+- Refs: [Strings: methods](language/strings.md#methods),
+  [Open questions: Lua parity](open-questions.md#lua-parity).
+- First record a decision: Lua pattern syntax, or a regular-expression
+  subset, and what matching guarantees (linear time, or charged to the
+  execution budget). Then implement find, match with captures, global
+  iteration, and substitution.
+- Done when: the decision is in the Strings chapter; every Lua pattern
+  outcome used by the Lua equivalent of the reference config has an Eitri
+  fixture; a pathological pattern returns control through the budget.
+
+### T053 — Provide reference system modules as host modules
+
+- [ ] Depends on: T024, T030, T033.
+- Refs: [Embedding: host modules](implementation/embedding.md#host-modules),
+  [Eitri and Lua: embedding and runtime](lua.md#embedding-and-runtime).
+- Ship optional declaration files and Rust/C implementations for the
+  outcomes of Lua's `io` and `os`: files, time and clocks, environment
+  variables, and process exit status, with async variants where the
+  operation blocks. They are never imported by default: the host decides
+  which ones a runtime can see.
+- Done when: a runtime without them cannot reach any of their effects;
+  each module works from both Rust and C hosts; blocking operations have an
+  async form that suspends instead of blocking the host thread.
+
+### T054 — Implement GC control and memory introspection
+
+- [ ] Depends on: T015, T035.
+- Refs: [VM: garbage collection](implementation/vm.md#garbage-collection),
+  [Eitri and Lua: embedding and runtime](lua.md#embedding-and-runtime).
+- Give hosts the outcomes of `collectgarbage`: a full collection, an
+  incremental step if the collector has one, memory statistics (heap,
+  retained compiler metadata, code), and limit changes. Expose a script
+  module for these only when the host enables it.
+- Done when: statistics reconcile with T015's accounting; a forced
+  collection from the host during reentry is safe; a script without the
+  module cannot trigger collection directly.
+
+### T055 — Implement debug introspection
+
+- [ ] Depends on: T024, T031.
+- Refs: [Embedding: faults and traces](implementation/embedding.md#faults-and-traces).
+- Give hosts the outcomes of Lua's `debug` library that the parity table
+  lists: tracebacks across script, host, and task frames; reading the
+  locals and arguments of a suspended or faulted frame through debug
+  metadata; and function and source information. Execution hooks remain
+  the budget mechanism; breakpoints are out of scope.
+- Done when: traces name every frame kind correctly, including tasks and
+  reentrant host calls; reading locals never observes a dead or reused slot
+  as live (it uses the same liveness as the root maps).
+
+### T056 — Audit Lua parity
+
+- [ ] Depends on: T036, T051–T055.
+- Refs: [Eitri and Lua](lua.md).
+- For every row of the parity tables, write an Eitri fixture that achieves
+  the outcome and the Lua program it replaces. A row without a working
+  fixture is a gap, reported in Open questions, not a footnote.
+- Done when: every ✅, 🔁, and 📚 row has a passing fixture pair, the 📚 rows
+  name the module that provides them, and the Stage 4 gate records the
+  result.
+
+## M6: optimize measured costs
+
+Each task ends with a retained/rejected/deferred decision and reproducible
+data. These tasks do not authorize replacing the correctness baseline first.
+
+### T037 — Optimize lowering and slot allocation
+
+- [ ] Depends on: T012; repeat on T026 when available.
+- Compare lazy value materialization, constant/immediate selection, copy
+  coalescing, and short-operand slot placement against simple lowering (E2/E3).
+- Done when: differential semantics pass and reports include compilation time,
+  executed moves, `WIDE` frequency, frame size, allocations, and first result.
+
+### T038 — Optimize literal construction and execution metadata
+
+- [ ] Depends on: T018, T025.
+- Compare pre-sized constructors and compact initialization paths (E14), plus
+  hot/cold call-site splitting and shared root maps (E13).
+- Done when: source effects/identity/fault ordering are preserved; report
+  allocations/reallocations, total artifact bytes, call-handler loads, and GC cost.
+
+### T039 — Compare dispatch, register caching, and measured fusion
+
+- [ ] Depends on: T026, T037.
+- Run E5/E11/E12 with pinned compilers, inspected assembly, and corpus-derived
+  candidates. Distinguish canonical bytecode opcode space from private
+  execution-handler variants; cache only scalars initially.
+- Done when: spills/joins/safepoints preserve state; handler footprint and
+  compilation cost accompany latency/counter results; target-specific wins
+  are labeled rather than generalized across CPUs.
+
+### T040 — Compare root production and collector representations
+
+- [ ] Depends on: T026.
+- Run E7: precise live maps versus typed-slot lifetime maps and conservative
+  frame scanning, with explicit initialization and pointer-validity rules.
+- Done when: collection stress passes; report false retention, root metadata,
+  compile time, frame footprint, allocation-failure behavior, and pause tails.
+
+### T041 — Implement and evaluate dynamic site caches
+
+- [ ] Depends on: T034.
+- Implement complete guards and epoch-aware reentrant state joins, then run
+  E6 against uncached operations. Compare side caches first; private-code
+  rewriting remains optional and separately accounted.
+- Done when: same-type/different-map layouts, invalidation, megamorphism,
+  reentry, and GC ownership pass differential tests; total setup/hit/miss
+  costs and retained cache memory are reported.
+
+### T042 — Evaluate lazy function lowering
+
+- [ ] Depends on: T026, T037.
+- Run E10 using retained checked bodies/capture metadata separate from scratch.
+  Keep eager lowering available and charge first-callback compilation fully.
+- Done when: diagnostics remain complete before setup; retained bytes,
+  first-result/first-callback latency, and total-workload time determine
+  promotion under the ledger's stated gate.
+
+### T043 — Prototype baseline native execution and optional AOT
+
+- [ ] Depends on: T026, T039.
+- Run E1/E8/E9 on the same semantic subset: interpreter/checked-tree candidate,
+  a small baseline emitter, and a copy-and-patch candidate as resources permit.
+  Reuse canonical VM state at safepoints and preserve budgets/fault PCs.
+- Done when: differential checks pass; first-use and reused code-memory costs,
+  publication/cache synchronization, native bytes, runtime binary size, and
+  break-even execution counts are published. AOT results identify linking,
+  target/ABI, verification/trust, and reload constraints separately from the
+  fresh-source target. No mandatory native tier without a measured win.
+
+### T057 — Compare lexing, interning, and syntax storage
+
+- [ ] Depends on: T012; repeat on T026.
+- Refs: D2, D3, D18; E2.
+- Run E2: intern while lexing versus while resolving, a token buffer versus
+  streaming, and a SIMD scanning path for identifiers, whitespace, and
+  string bodies.
+- Done when: results are reported per source byte, by input size, with
+  allocation counts and the long-string and nested-lambda cases; the SIMD
+  path is kept only if it wins on the reference config, not only on large
+  inputs.
+
+### T058 — Compare call frame models
+
+- [ ] Depends on: T026.
+- Refs: D8; E4; [Execution design: frame and call model](implementation/execution-design.md#frame-and-call-model).
+- Run E4: separate copied call frames versus shared call windows with
+  liveness checks.
+- Done when: end-to-end latency, argument and result moves, frame growth,
+  nested calls, and host reentry are reported; suspension and root maps stay
+  correct under both models.
+
+### T059 — Evaluate identity, hashing, and map representations
+
+- [ ] Depends on: T026, T040.
+- Refs: [Identity and hashing: experiments](implementation/identity.md#experiments),
+  [map representations](implementation/identity.md#map-representations).
+- Run the identity experiments: a moving collector with header hash states,
+  eager interning of short strings, and specialized map representations.
+- Done when: the identity invariants hold under each candidate (forced
+  collection between hashing and lookup included), and memory, lookup, and
+  collection costs are reported against the first implementation.
+
+### T060 — Evaluate closure representation and generic shape sharing
+
+- [ ] Depends on: T019, T027.
+- Refs: [VM: closures](implementation/vm.md#closures),
+  [Generics: specialization](design/generics.md#implementation-specialization);
+  [R27](implementation/vm-research.md#r27-specialization-versus-shared-generic-code).
+- Compare heap cells with open upvalues for captured variables, and full
+  specialization with sharing code between instantiations of the same shape.
+- Done when: captured-variable semantics, suspension, and collection are
+  unchanged; closure creation and call costs, code bytes, and compile time
+  are reported; shape sharing is kept only if its saving is measurable.
+
+## Later: reload and release hardening
+
+### T044 — Settle and implement reload, then freeze release contracts
+
+- [ ] Depends on: T036; incorporate any promoted T037–T043 representation.
+- Resolve state retention, folded constants, generic copies, caches, closures,
+  old frames, and code reclamation before implementing reload. Define
+  transactional publication and initialization-failure behavior.
+- Done when: rejected reloads preserve published state under the chosen
+  contract; old frames/callbacks remain valid; invalidation is tested.
+  Review public Rust/C APIs and release feature/library coverage before
+  declaring ABI stability or full Lua capability coverage.
+
+### T061 — Settle and implement the grammar extensions
+
+- [ ] Depends on: T029.
+- Refs: [Open questions: not yet in the grammar](open-questions.md#not-yet-in-the-grammar).
+- Decide and implement attribute arguments (`@name(...)`), packed
+  `@extern` layouts and explicit offsets, and enum field storage widths
+  other than `i32`. Explicit type arguments in expressions stay deferred
+  unless a decision changes that.
+- Done when: the grammar, the Structs chapter, and `eitri-bindgen` agree;
+  packed layouts are checked against the C compiler's layout on every
+  target in T046.
+
+### T062 — Decide the convenience features
+
+- [ ] Depends on: T056.
+- Refs: [Open questions: convenience, not parity](open-questions.md#convenience-not-parity).
+- Write a decision record for each: tuples or multiple returns, varargs,
+  operator overloading, mixed integer and float arithmetic, circular
+  imports, runtime-wide globals, and generators. Each record weighs the
+  porting benefit against cost on the source-to-result path.
+- Done when: each feature is accepted with a design chapter and tasks, or
+  rejected with its reason in Open questions. None is implemented before
+  its record.
+
+### T063 — Package and release
+
+- [ ] Depends on: T044.
+- Define versioning for the language, the Rust crate, and the C ABI
+  separately; a minimum supported Rust version; the license; the published
+  crates (splitting the crate only where build time or API boundaries
+  justify it); the C header and library packaging; and a changelog.
+- Done when: a release can be produced from a tag by one documented command,
+  and the C ABI version follows the rules in the C API chapter.
+
+## Continuous
+
+### T064 — Security and resource-limit review
+
+- [ ] Depends on: T012; repeat at the M2 and M5 exits.
+- Refs: [Embedding](implementation/embedding.md), [Rust API](implementation/rust-api.md),
+  [C API](implementation/c-api.md).
+- Maintain a threat model for untrusted script source: what a script can
+  reach without host imports (nothing outside its runtime), limits on
+  memory, execution budget, call depth, task count, and compiler recursion,
+  and pathological inputs (deep nesting, huge literals, long identifiers,
+  combinatorial generics). Fuzz the lexer, parser, checker, and assembler;
+  audit `unsafe` code.
+- Done when: every limit has a fixture that hits it and returns control to
+  the host; fuzzers run in CI on a schedule; findings are fixed or recorded
+  with their accepted risk.
+
+### T065 — Keep the documentation true
+
+- [ ] Depends on: none; runs with every task.
+- When behavior lands, update its chapter; remove resolved ⚠️ markers;
+  move settled questions from Open questions into chapters; record
+  experiment outcomes in the ledger; keep the diagnostic catalog (T047) and
+  the opcode manifest (T003) generated rather than hand-edited.
+- Done when (each milestone exit): no chapter describes behavior the
+  implementation contradicts, and the internal link check passes.
+
+## Traceability
+
+### Ledger decisions and experiments
+
+| Decisions | Implemented in | Measured in |
+|---|---|---|
+| D1 typed register bytecode | T005, T006 | T043 (E1) |
+| D2, D3, D18 lexing, interning, scratch, SIMD | T007, T008 | T057 (E2) |
+| D4 signatures before bodies | T008 | — |
+| D5, D22, D37, D38 typed operations, copy coalescing, lazy materialization, slot allocation | T009 | T037 (E3) |
+| D6, D13, D28, D36 encoding, generated specification, families, manifest | T003, T005 | T039 (E11) |
+| D7, D21 slot width and full-width stores | T006, T013 | T037 (E3) |
+| D8 control frames and call windows | T006 | T058 (E4) |
+| D9, D19, D20, D24 dispatch and handler rules | T006 | T039 (E5) |
+| D10, D42 fusion | — | T039 (E5) |
+| D11, D23 dynamic site caches | T034, T041 | T041 (E6) |
+| D12 precise safepoints and roots | T014, T015 | T040 (E7) |
+| D27 conservative frame scanning | — | T040 (E7) |
+| D14–D17, D25 native tiers and AOT | — | T043 (E1, E8, E9) |
+| D26 lazy lowering | — | T042 (E10) |
+| D29–D32 field positions, signedness, canonical integers, compares | T003, T006, T013 | T039 (E11) |
+| D33 `SEL` | — | T039 (E11) |
+| D34 load/store and access widths | T017, T018 | T039 (E11) |
+| D35 pair move and range loops | T006, T018 | T039 (E11) |
+| D39 register-cached temporaries | — | T039 (E12) |
+| D40 pre-sized literals | T018 | T038 (E14) |
+| D41 metadata layout | T014 | T038 (E13) |
+
+### Language and design chapters
+
+| Chapter | Tasks |
+|---|---|
+| [Lexical structure](language/lexical-structure.md) | T007, T021; attributes T029, T061 |
+| [Types](language/types.md) | T002, T013, T021 (aliases), T022 (return inference) |
+| [Bindings and functions](language/bindings-and-functions.md) | T008, T019, T021, T031 |
+| [Structs, classes, enums](language/structs-classes-enums.md) | T017, T021, T028, T029 |
+| [Optionals](language/optionals.md) | T017, T021 |
+| [Errors and faults](language/errors.md) | T006, T012, T020 |
+| [Pattern matching](language/pattern-matching.md) | T017, T021, T034 (type patterns) |
+| [Collections](language/collections.md) | T018, T051 |
+| [Expressions](language/expressions.md) | T008, T013, T018, T021, T049 |
+| [Strings](language/strings.md) | T016, T050, T052 |
+| [Modules](language/modules.md) | T022, T023 |
+| [Generics](design/generics.md) | T027, T028, T060 |
+| [Dynamic type](design/dynamic.md) | T034, T041 |
+| [Coroutines](design/coroutines.md) | T031, T032, T033 |
+| [Runtime features](design/runtime-features.md) | T033, T035, T036, T044 |
+| [Embedding](implementation/embedding.md), [Rust API](implementation/rust-api.md) | T010, T023, T024, T033 |
+| [C API](implementation/c-api.md) | T030, T053 |
+| [Identity and hashing](implementation/identity.md) | T016, T017, T018, T059 |
+| [Typed bytecode](implementation/bytecode.md) | T003, T005, T006, T013, T018 |
+| [Performance](implementation/performance.md) | T011, T026, T048 |
+| [Eitri and Lua](lua.md) | T049–T056 |
+
+## Risks and replanning triggers
+
+| Trigger | Response |
+|---|---|
+| E1 (T043) shows checked-tree or direct native execution beating bytecode on first result | Revisit T005–T009 before M2; the ledger allows E1 to change the default path |
+| The generated manifest (T003) leaves too little opcode space for M3–M5 families | Merge families or move rare variants behind a second-level opcode, before adding features |
+| The Stage 1 baseline (T026) misses the latency target by a wide margin | Profile and fix the largest cost before starting M3 |
+| Precise root maps (T014) dominate compile time | Bring T040 forward and compare conservative frame scanning |
+| Movable coroutine stacks (T031) conflict with host borrowing or callbacks | Spike T031's stack relocation against T024's borrowing rules during M2 |
+| Pattern matching (T052) cannot be made budget-safe | Choose the linear-time design even if it differs from Lua's syntax |
+
+## Out of scope until a decision
+
+Generators, tuples, varargs, operator overloading, circular imports, and
+runtime-wide globals (T062); explicit type arguments in expressions (T061);
+a debugger with breakpoints (T055); a mandatory native tier (T043).
+
+## Immediate next task
+
+**T003 — the generated operation specification** and **T007 — source
+storage and the core lexer**, which are independent of each other. T002 is
+complete: its fixtures are pending and become live as T008 (diagnostics) and
+T010 (execution) land. Extend T045's harness and T046's CI/safety coverage
+alongside the components they validate.

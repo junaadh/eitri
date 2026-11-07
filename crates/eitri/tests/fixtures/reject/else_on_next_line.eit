@@ -1,0 +1,5 @@
+//! pending: T008
+if true {
+}
+else {
+}

@@ -1,0 +1,5 @@
+//! pending: T008
+let limit = 10
+fn f() -> i64 {
+    return limit
+}

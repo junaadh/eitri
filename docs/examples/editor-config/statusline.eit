@@ -1,0 +1,52 @@
+// A statusline drawn by a script function. The editor calls render()
+// whenever the statusline needs redrawing, so it keeps allocations few:
+// each helper returns a literal or one interpolated string, and render()
+// joins them in a single interpolation.
+
+import editor from "editor"
+import util from "util"
+
+fn mode_label(mode: editor.Mode) -> string {
+    return match mode {
+        .Normal => "NORMAL",
+        .Insert => "INSERT",
+        .Visual => "VISUAL",
+        .Replace => "REPLACE",
+        .Command => "COMMAND",
+        .Terminal => "TERMINAL",
+    }
+}
+
+fn diagnostics(buffer: i64) -> string {
+    let errors = editor.diagnostic_count(buffer, .Error)
+    let warnings = editor.diagnostic_count(buffer, .Warn)
+    if errors > 0 && warnings > 0 {
+        return "E${errors} W${warnings}  "
+    }
+    if errors > 0 {
+        return "E${errors}  "
+    }
+    if warnings > 0 {
+        return "W${warnings}  "
+    }
+    return ""
+}
+
+pub fn render() -> string {
+    let buffer = editor.current_buffer()
+    let path = util.shorten_path(editor.buffer_name(buffer))
+    let name = if path == "" { "[No Name]" } else { path }
+    let modified = if editor.buffer_modified(buffer) { " ●" } else { "" }
+    let git = if let branch = editor.git_branch() { "   ${branch}" } else { "" }
+
+    let line = editor.line()
+    let total = editor.line_count(buffer)
+    let percent = line * 100 / total
+    let filetype = editor.filetype(buffer)
+
+    return " ${mode_label(editor.mode())} │ ${name}${modified}${git}%=${diagnostics(buffer)}${filetype}  ${line}:${editor.column()}  ${percent}%% "
+}
+
+pub fn setup() -> void {
+    editor.options.status_line = render
+}

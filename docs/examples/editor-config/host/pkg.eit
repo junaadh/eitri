@@ -1,0 +1,21 @@
+// Host declaration file for module "pkg", the plugin manager.
+
+pub enum PkgError {
+    CloneFailed(repo: string, message: string)
+    BuildFailed(repo: string, message: string)
+    MissingDependency(repo: string, needs: string)
+}
+
+pub struct Spec {
+    pub repo: string
+    pub lazy: bool = true
+    pub priority: i64 = 50
+    pub events: []string = []
+    pub commands: []string = []
+    pub depends: []string = []
+    pub build: ?string = null
+    pub config: ?fn() -> void = null
+}
+
+pub fn install(specs: []Spec) -> PkgError!void
+pub fn setup(plugin: string, options: dyn) -> void

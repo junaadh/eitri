@@ -1,0 +1,5 @@
+//! host: test
+//! pending: T008
+import test from "test"
+test.emit(1)
+let x: i64 = true

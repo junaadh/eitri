@@ -1,0 +1,10 @@
+//! host: test
+//! pending: T010
+import test from "test"
+test.emit(1_000_000)
+test.emit(0xFF_FF)
+test.emit(0o755)
+test.emit(0b1010_0001)
+test.emit(9_223_372_036_854_775_807)
+test.emit(-9_223_372_036_854_775_808)
+test.emit(0)

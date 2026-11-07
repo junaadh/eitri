@@ -1,0 +1,18 @@
+//! host: test
+//! pending: T010
+import test from "test"
+let x = 1
+let x = x + 10
+test.emit(x)
+fn inner(x: i64) -> i64 {
+    var y = x
+    if true {
+        let y = 100
+        test.emit(y)
+    }
+    let x = y * 2
+    return x
+}
+test.emit(inner(3))
+let x = x == 11
+test.check(x)

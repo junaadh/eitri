@@ -1,0 +1,66 @@
+// Editor options: the equivalent of a block of vim.opt settings.
+
+import editor from "editor"
+
+// Indentation width per filetype, applied by autocmds.eit.
+pub let indent: map[string]i64 = [
+    "lua": 2,
+    "javascript": 2,
+    "typescript": 2,
+    "json": 2,
+    "yaml": 2,
+    "html": 2,
+    "css": 2,
+    "nix": 2,
+]
+
+pub fn setup() -> void {
+    // Leader keys must be set before any mapping uses them.
+    editor.globals["mapleader"] = " "
+    editor.globals["maplocalleader"] = "\\"
+
+    let o = editor.options
+
+    // Line numbers and gutter
+    o.number = true
+    o.relative_number = true
+    o.sign_column = "yes"
+    o.cursor_line = true
+
+    // Indentation
+    o.tab_stop = 4
+    o.shift_width = 4
+    o.expand_tab = true
+    o.smart_indent = true
+
+    // Search
+    o.ignore_case = true
+    o.smart_case = true
+    o.hl_search = true
+    o.inc_search = true
+
+    // Splits and scrolling
+    o.split_right = true
+    o.split_below = true
+    o.scroll_off = 8
+    o.side_scroll_off = 8
+    o.wrap = false
+
+    // Files
+    o.undo_file = true
+    o.swap_file = false
+    o.backup = false
+    o.update_time = 250
+    o.timeout_len = 300
+
+    // Interface
+    o.term_gui_colors = true
+    o.mouse = "a"
+    o.clipboard = "unnamedplus"
+    o.show_mode = false
+    o.list = true
+    o.list_chars = ["tab": "» ", "trail": "·", "nbsp": "␣"]
+    o.fill_chars = ["eob": " "]
+    o.complete_opt = ["menu", "menuone", "noselect"]
+    o.confirm = true
+}

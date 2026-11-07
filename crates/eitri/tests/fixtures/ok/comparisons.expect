@@ -1,0 +1,11 @@
+effect: test.check(true)
+effect: test.check(true)
+effect: test.check(false)
+effect: test.check(false)
+effect: test.check(false)
+effect: test.check(true)
+effect: test.check(false)
+effect: test.check(true)
+effect: test.check(true)
+effect: test.check(false)
+ok

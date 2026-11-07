@@ -1,0 +1,12 @@
+//! host: test
+//! pending: T010
+import test from "test"
+test.emit(-7 / 2)
+test.emit(-7 % 2)
+test.emit(7 / -2)
+test.emit(7 % -2)
+test.emit(-7 / -2)
+test.emit(-7 % -2)
+let min = -9_223_372_036_854_775_808
+test.emit(min % -1)
+test.emit(min / 1)

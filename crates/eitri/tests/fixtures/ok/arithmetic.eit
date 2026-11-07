@@ -1,0 +1,15 @@
+//! host: test
+//! pending: T010
+import test from "test"
+let a = 17
+let b = -5
+test.emit(a + b)
+test.emit(a - b)
+test.emit(a * b)
+test.emit(a / b)
+test.emit(a % b)
+test.emit(-a)
+test.emit(1 + 2 * 3 - 4)
+test.emit((1 + 2) * (3 - 4))
+test.emit(10 - 3 - 2)
+test.emit(100 / 10 / 5)

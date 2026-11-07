@@ -1,0 +1,8 @@
+effect: test.emit(1000000)
+effect: test.emit(65535)
+effect: test.emit(493)
+effect: test.emit(161)
+effect: test.emit(9223372036854775807)
+effect: test.emit(-9223372036854775808)
+effect: test.emit(0)
+ok

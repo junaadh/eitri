@@ -1,0 +1,9 @@
+//! host: test
+//! pending: T010
+import test from "test"
+fn run() -> void {
+    test.emit(1)
+    test.fail()
+    test.emit(2)
+}
+run()

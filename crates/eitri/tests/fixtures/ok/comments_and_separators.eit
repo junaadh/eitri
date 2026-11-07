@@ -1,0 +1,11 @@
+//! host: test
+//! pending: T010
+// line comment
+/* block
+   comment */ import test from "test"
+let a = 1; let b = 2
+let c = a +
+    b
+test.emit(c)   // trailing
+test.emit((a
+    + b) * 2)

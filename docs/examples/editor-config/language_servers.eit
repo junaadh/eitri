@@ -1,0 +1,104 @@
+// Language servers: which to start, their settings, and buffer-local keymaps
+// once a server attaches.
+
+import editor from "editor"
+import lsp from "lsp"
+
+struct Server {
+    cmd: []string
+    filetypes: []string
+    root_markers: []string = [".git"]
+    settings: dyn = null
+}
+
+let servers: map[string]Server = [
+    "lua_ls": Server {
+        cmd: ["lua-language-server"],
+        filetypes: ["lua"],
+        root_markers: [".luarc.json", "stylua.toml", ".git"],
+        settings: [
+            "Lua": [
+                "runtime": ["version": "LuaJIT"],
+                "diagnostics": ["globals": ["vim"]],
+                "workspace": ["checkThirdParty": false],
+                "telemetry": ["enable": false],
+            ],
+        ],
+    },
+    "rust_analyzer": Server {
+        cmd: ["rust-analyzer"],
+        filetypes: ["rust"],
+        root_markers: ["Cargo.toml", ".git"],
+        settings: [
+            "rust-analyzer": [
+                "check": ["command": "clippy"],
+                "cargo": ["allFeatures": true],
+            ],
+        ],
+    },
+    "gopls": Server {
+        cmd: ["gopls"],
+        filetypes: ["go", "gomod", "gowork"],
+        root_markers: ["go.work", "go.mod", ".git"],
+        settings: ["gopls": ["gofumpt": true, "staticcheck": true, "usePlaceholders": true]],
+    },
+    "pyright": Server {
+        cmd: ["pyright-langserver", "--stdio"],
+        filetypes: ["python"],
+        root_markers: ["pyproject.toml", "setup.py", ".git"],
+    },
+    "ts_ls": Server {
+        cmd: ["typescript-language-server", "--stdio"],
+        filetypes: ["javascript", "typescript", "javascriptreact", "typescriptreact"],
+        root_markers: ["package.json", "tsconfig.json", ".git"],
+    },
+    "clangd": Server {
+        cmd: ["clangd", "--background-index"],
+        filetypes: ["c", "cpp"],
+        root_markers: ["compile_commands.json", ".git"],
+    },
+]
+
+pub fn setup() -> void {
+    for name, server in servers {
+        // Skip servers that aren't installed on this machine.
+        if !editor.executable(server.cmd[0]) {
+            continue
+        }
+        lsp.enable(
+            name,
+            cmd: server.cmd,
+            filetypes: server.filetypes,
+            root_markers: server.root_markers,
+            settings: server.settings,
+        )
+    }
+
+    editor.diagnostic_config(virtual_text: true, severity_sort: true, float_border: "rounded")
+    editor.on(.LspAttach, (ev) => attach(ev.buffer), group: "lsp")
+}
+
+fn attach(buffer: i64) -> void {
+    let bind = (keys: string, action: fn() -> void, desc: string) => {
+        editor.map(.Normal, keys, action, desc: "LSP: ${desc}", buffer: buffer)
+    }
+
+    bind("gd", () => lsp.definition(), "Go to definition")
+    bind("gD", () => lsp.declaration(), "Go to declaration")
+    bind("gr", () => lsp.references(), "References")
+    bind("gi", () => lsp.implementation(), "Go to implementation")
+    bind("K", () => lsp.hover(), "Hover")
+    bind("<leader>rn", () => lsp.rename(), "Rename symbol")
+    bind("<leader>ca", () => lsp.code_action(), "Code action")
+    bind("<leader>cf", () => format(buffer), "Format buffer")
+    bind("<leader>ci", () => {
+        let on = !lsp.inlay_hints_enabled(buffer)
+        lsp.set_inlay_hints(buffer, on)
+    }, "Toggle inlay hints")
+}
+
+fn format(buffer: i64) -> void {
+    lsp.format(buffer, timeout_ms: 1000) else e => {
+        editor.notify("format failed: ${e}", level: .Warn)
+    }
+}

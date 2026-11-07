@@ -1,0 +1,13 @@
+[package]
+name = "eitri"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "A small, typed, embeddable scripting language for immediate execution"
+
+[dependencies]
+eitri-base.workspace = true
+eitri-diag.workspace = true
+
+[lints]
+workspace = true

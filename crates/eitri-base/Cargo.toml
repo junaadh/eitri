@@ -1,0 +1,9 @@
+[package]
+name = "eitri-base"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Typed ids, id-indexed storage, and pooled list handles shared by Eitri layers"
+
+[lints]
+workspace = true

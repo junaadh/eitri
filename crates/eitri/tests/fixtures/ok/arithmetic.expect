@@ -1,0 +1,11 @@
+effect: test.emit(12)
+effect: test.emit(22)
+effect: test.emit(-85)
+effect: test.emit(-3)
+effect: test.emit(2)
+effect: test.emit(-17)
+effect: test.emit(3)
+effect: test.emit(-3)
+effect: test.emit(5)
+effect: test.emit(2)
+ok

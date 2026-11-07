@@ -1,0 +1,2 @@
+fault: integer overflow
+  at <module> 63..71

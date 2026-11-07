@@ -1,0 +1,13 @@
+//! host: test
+//! pending: T010
+import test from "test"
+var i = 0
+var total = 0
+while i < 10 {
+    i += 1
+    total += i
+}
+test.emit(total)
+while false {
+    test.emit(-1)
+}

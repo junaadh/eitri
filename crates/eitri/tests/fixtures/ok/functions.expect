@@ -1,0 +1,6 @@
+effect: test.emit(5)
+effect: test.emit(2432902008176640000)
+effect: test.check(true)
+effect: test.check(false)
+effect: test.emit(4)
+ok

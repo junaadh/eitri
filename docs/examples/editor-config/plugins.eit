@@ -1,0 +1,130 @@
+// Plugin specs, in the style of lazy.nvim. Each plugin's options are
+// dynamic data passed straight to the plugin.
+
+import editor from "editor"
+import pkg from "pkg"
+
+pub fn setup() -> void {
+    let specs: []pkg.Spec = [
+        pkg.Spec {
+            repo: "folke/tokyonight.nvim",
+            lazy: false,
+            priority: 1000,
+            config: () => pkg.setup("tokyonight", ["style": "night", "transparent": false]),
+        },
+
+        pkg.Spec {
+            repo: "nvim-treesitter/nvim-treesitter",
+            build: ":TSUpdate",
+            events: ["BufReadPost", "BufNewFile"],
+            config: () => pkg.setup("nvim-treesitter.configs", [
+                "ensure_installed": [
+                    "lua", "vim", "vimdoc", "markdown", "rust", "go", "python",
+                    "typescript", "javascript", "json", "yaml", "toml", "bash",
+                ],
+                "highlight": ["enable": true],
+                "indent": ["enable": true],
+            ]),
+        },
+
+        pkg.Spec {
+            repo: "nvim-telescope/telescope.nvim",
+            depends: ["nvim-lua/plenary.nvim"],
+            commands: ["Telescope"],
+            config: () => pkg.setup("telescope", [
+                "defaults": [
+                    "layout_strategy": "flex",
+                    "sorting_strategy": "ascending",
+                    "layout_config": ["prompt_position": "top"],
+                    "file_ignore_patterns": ["%.git/", "node_modules/", "target/"],
+                ],
+            ]),
+        },
+
+        pkg.Spec {
+            repo: "saghen/blink.cmp",
+            events: ["InsertEnter"],
+            config: () => pkg.setup("blink.cmp", [
+                "keymap": ["preset": "default"],
+                "sources": ["default": ["lsp", "path", "snippets", "buffer"]],
+                "completion": ["documentation": ["auto_show": true]],
+            ]),
+        },
+
+        pkg.Spec {
+            repo: "stevearc/conform.nvim",
+            events: ["BufWritePre"],
+            config: () => pkg.setup("conform", [
+                "formatters_by_ft": [
+                    "lua": ["stylua"],
+                    "go": ["gofumpt", "goimports"],
+                    "python": ["ruff_format"],
+                    "javascript": ["prettierd"],
+                    "typescript": ["prettierd"],
+                ],
+                "format_on_save": ["timeout_ms": 500, "lsp_format": "fallback"],
+            ]),
+        },
+
+        pkg.Spec {
+            repo: "lewis6991/gitsigns.nvim",
+            events: ["BufReadPre"],
+            config: () => pkg.setup("gitsigns", [
+                "signs": [
+                    "add": ["text": "▎"],
+                    "change": ["text": "▎"],
+                    "delete": ["text": ""],
+                ],
+                "current_line_blame": false,
+            ]),
+        },
+
+        pkg.Spec {
+            repo: "folke/which-key.nvim",
+            events: ["VeryLazy"],
+            config: () => pkg.setup("which-key", ["preset": "modern", "delay": 300]),
+        },
+
+        pkg.Spec {
+            repo: "echasnovski/mini.nvim",
+            events: ["VeryLazy"],
+            config: () => {
+                pkg.setup("mini.pairs", [:])
+                pkg.setup("mini.surround", [:])
+                pkg.setup("mini.ai", ["n_lines": 500])
+            },
+        },
+
+        pkg.Spec {
+            repo: "stevearc/oil.nvim",
+            lazy: false,
+            config: () => pkg.setup("oil", [
+                "view_options": ["show_hidden": true],
+                "skip_confirm_for_simple_edits": true,
+            ]),
+        },
+
+        pkg.Spec {
+            repo: "folke/trouble.nvim",
+            commands: ["Trouble"],
+            config: () => pkg.setup("trouble", [:]),
+        },
+
+        pkg.Spec {
+            repo: "folke/todo-comments.nvim",
+            events: ["BufReadPost"],
+            depends: ["nvim-lua/plenary.nvim"],
+            config: () => pkg.setup("todo-comments", ["signs": false]),
+        },
+
+        pkg.Spec {
+            repo: "j-hui/fidget.nvim",
+            events: ["LspAttach"],
+            config: () => pkg.setup("fidget", [:]),
+        },
+    ]
+
+    pkg.install(specs) else e => {
+        editor.notify("plugin manager: ${e}", level: .Error)
+    }
+}

@@ -1,0 +1,3 @@
+//! pending: T008
+for i in 0..3 {
+}

@@ -1,0 +1,41 @@
+// Colorscheme, chosen by time of day, plus a few highlight tweaks.
+
+import editor from "editor"
+
+pub enum Theme {
+    Night
+    Storm
+    Day
+
+    pub fn colorscheme() -> string {
+        return match self {
+            .Night => "tokyonight-night",
+            .Storm => "tokyonight-storm",
+            .Day => "tokyonight-day",
+        }
+    }
+
+    pub static fn for_hour(hour: i64) -> Theme {
+        return match hour {
+            7..=18 => .Day,
+            19..=21 => .Storm,
+            _ => .Night,
+        }
+    }
+}
+
+pub fn setup(choice: ?Theme = null) -> void {
+    let theme = choice ?? Theme.for_hour(editor.local_hour())
+    editor.options.background = if theme == Theme.Day { "light" } else { "dark" }
+    editor.command("colorscheme ${theme.colorscheme()}")
+
+    let tweaks: map[string]editor.Highlight = [
+        "CursorLineNr": editor.Highlight { fg: "#ff9e64", bold: true },
+        "WinSeparator": editor.Highlight { fg: "#3b4261" },
+        "StatusLine": editor.Highlight { fg: "#c0caf5", bg: "#1f2335" },
+        "TrailingSpace": editor.Highlight { bg: "#db4b4b" },
+    ]
+    for group, highlight in tweaks {
+        editor.set_highlight(group, highlight)
+    }
+}

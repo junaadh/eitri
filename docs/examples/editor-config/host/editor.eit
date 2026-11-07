@@ -1,0 +1,161 @@
+// Host declaration file for module "editor".
+// Functions without a body, host classes, and `pub let` without an
+// initializer are implemented or supplied by the editor at registration.
+
+pub enum Mode {
+    Normal
+    Insert
+    Visual
+    Replace
+    Command
+    Terminal
+}
+pub enum Level {
+    Debug
+    Info
+    Warn
+    Error
+}
+pub enum Severity {
+    Error
+    Warn
+    Info
+    Hint
+}
+
+pub enum Event {
+    BufReadPre
+    BufReadPost
+    BufNewFile
+    BufWritePre
+    FileType
+    TextYankPost
+    VimResized
+    FocusGained
+    InsertEnter
+    LspAttach
+}
+
+pub enum IoError {
+    NotFound(path: string)
+    Denied(path: string)
+    Other(message: string)
+}
+
+pub struct AutocmdEvent {
+    pub buffer: i64
+    pub file: string
+    pub matched: string          // what the pattern matched, e.g. the filetype
+    pub data: dyn
+}
+
+pub struct Position {
+    pub line: i64
+    pub column: i64
+}
+
+pub struct Highlight {
+    pub fg: ?string = null
+    pub bg: ?string = null
+    pub bold: bool = false
+    pub italic: bool = false
+}
+
+// Global options. Every field is a property: setting one calls the editor,
+// which applies it (and redraws if needed).
+pub class Options {
+    pub number: bool
+    pub relative_number: bool
+    pub sign_column: string
+    pub cursor_line: bool
+    pub tab_stop: i64
+    pub shift_width: i64
+    pub expand_tab: bool
+    pub smart_indent: bool
+    pub ignore_case: bool
+    pub smart_case: bool
+    pub hl_search: bool
+    pub inc_search: bool
+    pub split_right: bool
+    pub split_below: bool
+    pub scroll_off: i64
+    pub side_scroll_off: i64
+    pub wrap: bool
+    pub undo_file: bool
+    pub swap_file: bool
+    pub backup: bool
+    pub update_time: i64
+    pub timeout_len: i64
+    pub term_gui_colors: bool
+    pub mouse: string
+    pub clipboard: string
+    pub show_mode: bool
+    pub list: bool
+    pub list_chars: map[string]string
+    pub fill_chars: map[string]string
+    pub complete_opt: []string
+    pub confirm: bool
+    pub background: string
+    pub status_line: ?fn() -> string
+    pub let version: string      // read-only
+}
+
+// Options local to one buffer.
+pub class BufferOptions {
+    pub tab_stop: i64
+    pub shift_width: i64
+    pub expand_tab: bool
+    pub spell: bool
+    pub wrap: bool
+}
+
+// A saved window view, opaque to scripts.
+pub class View {}
+
+pub let options: Options
+pub let globals: map[string]dyn
+
+// Keymaps, commands, and events
+pub fn map(mode: Mode, keys: string, action: fn() -> void,
+           desc: string = "", buffer: ?i64 = null) -> void
+pub fn on(event: Event, callback: fn(AutocmdEvent) -> void,
+          pattern: string = "*", group: string = "") -> void
+pub fn command(cmd: string) -> void
+pub fn notify(message: string, level: Level = .Info) -> void
+
+// Environment
+pub fn read_file(path: string) -> IoError!string
+pub fn config_dir() -> string
+pub fn executable(name: string) -> bool
+pub fn local_hour() -> i64
+
+// Buffers and the cursor
+pub fn current_buffer() -> i64
+pub fn buffer_name(buffer: i64) -> string
+pub fn buffer_modified(buffer: i64) -> bool
+pub fn buffer_options(buffer: i64) -> BufferOptions
+pub fn filetype(buffer: i64) -> string
+pub fn line_count(buffer: i64) -> i64
+pub fn line() -> i64
+pub fn column() -> i64
+pub fn mode() -> Mode
+pub fn git_branch() -> ?string
+pub fn last_position(buffer: i64) -> ?Position
+pub fn set_cursor(position: Position) -> void
+pub fn save_view() -> View
+pub fn restore_view(view: View) -> void
+pub fn highlight_yank(timeout: i64 = 150) -> void
+pub fn set_highlight(group: string, highlight: Highlight) -> void
+
+// Diagnostics
+pub fn diagnostic_count(buffer: i64, severity: Severity) -> i64
+pub fn diagnostic_jump(count: i64) -> void
+pub fn diagnostic_config(virtual_text: bool = true, severity_sort: bool = false,
+                         float_border: string = "none") -> void
+pub fn diagnostics_enabled() -> bool
+pub fn set_diagnostics_enabled(on: bool) -> void
+
+// A helper written in Eitri, shipped with the host module.
+pub fn warn(message: string) -> void {
+    notify(message, level: .Warn)
+}

@@ -1,0 +1,105 @@
+// Global keymaps. Buffer-local LSP keymaps live in language_servers.eit.
+
+import editor from "editor"
+import util from "util"
+
+struct Binding {
+    modes: []editor.Mode = [.Normal]
+    keys: string
+    action: fn() -> void
+    desc: string
+}
+
+pub fn setup() -> void {
+    let o = editor.options
+    let cmd = util.command
+
+    let bindings: []Binding = [
+        // Files and buffers
+        Binding { keys: "<leader>w", action: cmd("write"), desc: "Save file" },
+        Binding { keys: "<leader>q", action: cmd("quit"), desc: "Quit window" },
+        Binding { keys: "<S-l>", action: cmd("bnext"), desc: "Next buffer" },
+        Binding { keys: "<S-h>", action: cmd("bprevious"), desc: "Previous buffer" },
+        Binding { keys: "<leader>bd", action: cmd("bdelete"), desc: "Delete buffer" },
+        Binding { keys: "-", action: cmd("Oil"), desc: "Open parent directory" },
+
+        // Finding things
+        Binding { keys: "<leader>ff", action: cmd("Telescope find_files"), desc: "Find files" },
+        Binding { keys: "<leader>fg", action: cmd("Telescope live_grep"), desc: "Grep" },
+        Binding { keys: "<leader>fb", action: cmd("Telescope buffers"), desc: "Buffers" },
+        Binding { keys: "<leader>fh", action: cmd("Telescope help_tags"), desc: "Help" },
+        Binding { keys: "<leader>fr", action: cmd("Telescope oldfiles"), desc: "Recent files" },
+        Binding { keys: "<leader>fd", action: cmd("Telescope diagnostics"), desc: "Diagnostics" },
+
+        // Windows
+        Binding { keys: "<C-h>", action: cmd("wincmd h"), desc: "Window left" },
+        Binding { keys: "<C-j>", action: cmd("wincmd j"), desc: "Window down" },
+        Binding { keys: "<C-k>", action: cmd("wincmd k"), desc: "Window up" },
+        Binding { keys: "<C-l>", action: cmd("wincmd l"), desc: "Window right" },
+        Binding { keys: "<leader>sv", action: cmd("vsplit"), desc: "Split vertically" },
+        Binding { keys: "<leader>sh", action: cmd("split"), desc: "Split horizontally" },
+
+        // Editing
+        Binding { keys: "<Esc>", action: cmd("nohlsearch"), desc: "Clear search highlight" },
+        Binding {
+            modes: [.Visual],
+            keys: "J",
+            action: cmd(r"move '>+1 | normal! gv=gv"),
+            desc: "Move selection down",
+        },
+        Binding {
+            modes: [.Visual],
+            keys: "K",
+            action: cmd(r"move '<-2 | normal! gv=gv"),
+            desc: "Move selection up",
+        },
+        Binding { modes: [.Visual], keys: "<", action: cmd("normal! <gv"), desc: "Indent left" },
+        Binding { modes: [.Visual], keys: ">", action: cmd("normal! >gv"), desc: "Indent right" },
+        Binding {
+            modes: [.Normal, .Visual],
+            keys: "<leader>y",
+            action: cmd("normal! \"+y"),
+            desc: "Copy to system clipboard",
+        },
+
+        // Diagnostics and quickfix
+        Binding { keys: "]d", action: () => editor.diagnostic_jump(1), desc: "Next diagnostic" },
+        Binding { keys: "[d", action: () => editor.diagnostic_jump(-1), desc: "Previous diagnostic" },
+        Binding { keys: "]q", action: cmd("cnext"), desc: "Next quickfix item" },
+        Binding { keys: "[q", action: cmd("cprevious"), desc: "Previous quickfix item" },
+        Binding { keys: "<leader>xx", action: cmd("Trouble diagnostics toggle"), desc: "Diagnostics list" },
+
+        // Toggles
+        Binding {
+            keys: "<leader>tn",
+            action: () => {
+                o.relative_number = !o.relative_number
+            },
+            desc: "Toggle relative numbers",
+        },
+        Binding {
+            keys: "<leader>tw",
+            action: () => {
+                o.wrap = !o.wrap
+            },
+            desc: "Toggle wrap",
+        },
+        Binding {
+            keys: "<leader>td",
+            action: () => {
+                let on = !editor.diagnostics_enabled()
+                editor.set_diagnostics_enabled(on)
+                editor.notify("diagnostics ${if on { "on" } else { "off" }}")
+            },
+            desc: "Toggle diagnostics",
+        },
+
+        // Terminal
+        Binding { keys: "<leader>tt", action: cmd("botright split | terminal"), desc: "Open terminal" },
+        Binding { modes: [.Terminal], keys: "<Esc><Esc>", action: cmd("stopinsert"), desc: "Leave terminal mode" },
+    ]
+
+    for b in bindings {
+        util.map_modes(b.modes, b.keys, b.action, b.desc)
+    }
+}

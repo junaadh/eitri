@@ -1,0 +1,39 @@
+// Small helpers shared by the other modules.
+
+import editor from "editor"
+
+// A keymap action that runs an editor command.
+pub fn command(cmd: string) -> fn() -> void {
+    return () => editor.command(cmd)
+}
+
+// Maps the same keys in several modes.
+pub fn map_modes(modes: []editor.Mode, keys: string, action: fn() -> void, desc: string) -> void {
+    for mode in modes {
+        editor.map(mode, keys, action, desc: desc)
+    }
+}
+
+// "~/projects/eitri/src/main.eit" -> "~/p/e/s/main.eit" when the path is long.
+pub fn shorten_path(path: string, max: i64 = 40) -> string {
+    if path.len() <= max {
+        return path
+    }
+    let parts = path.split("/")
+    let short: []string = []
+    for i, part in parts {
+        if i < parts.len() - 1 {
+            short.push(first_char(part))
+        } else {
+            short.push(part)
+        }
+    }
+    return short.join("/")
+}
+
+fn first_char(text: string) -> string {
+    for c in text {
+        return "${c}"
+    }
+    return ""
+}

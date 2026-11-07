@@ -1,0 +1,5 @@
+effect: test.emit(1)
+fault: requested by fixture
+  at test.fail
+  at run 97..108
+  at <module> 128..133

@@ -1,0 +1,4 @@
+//! pending: T008
+fn f(n: i64) -> void {
+    n = 2
+}

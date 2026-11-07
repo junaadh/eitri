@@ -1,0 +1,15 @@
+//! host: test
+//! pending: T010
+import test from "test"
+let a = 3
+let b = 4
+test.check(a < b)
+test.check(a <= b)
+test.check(a > b)
+test.check(a >= b)
+test.check(a == b)
+test.check(a != b)
+test.check(true == false)
+test.check(true != false)
+test.check(a + 1 == b)
+test.check(!(a < b))

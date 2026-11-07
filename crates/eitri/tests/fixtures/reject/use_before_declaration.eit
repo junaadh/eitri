@@ -1,0 +1,3 @@
+//! pending: T008
+let x = y
+let y = 1

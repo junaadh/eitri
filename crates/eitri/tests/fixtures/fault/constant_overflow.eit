@@ -1,0 +1,6 @@
+//! host: test
+//! pending: T010
+import test from "test"
+test.emit(1)
+let x = 9_223_372_036_854_775_807 + 1
+test.emit(x)

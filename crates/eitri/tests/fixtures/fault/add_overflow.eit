@@ -1,0 +1,9 @@
+//! host: test
+//! pending: T010
+import test from "test"
+fn bump(n: i64) -> i64 {
+    return n + 1
+}
+test.emit(1)
+test.emit(bump(9_223_372_036_854_775_807))
+test.emit(2)

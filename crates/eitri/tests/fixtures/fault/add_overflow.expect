@@ -1,0 +1,4 @@
+effect: test.emit(1)
+fault: integer overflow
+  at bump 93..98
+  at <module> 124..155

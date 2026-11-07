@@ -1,0 +1,9 @@
+//! host: test
+//! pending: T010
+import test from "test"
+let x = test.check(false) && test.check(true)
+let y = test.check(true) || test.check(false)
+let z = test.check(true) && test.check(false) || test.check(true)
+test.check(x)
+test.check(y)
+test.check(z)

@@ -1,0 +1,5 @@
+fault: call depth exceeded
+  at down 67..78
+  at down 67..78
+  at down 67..78
+  at <module> 85..92

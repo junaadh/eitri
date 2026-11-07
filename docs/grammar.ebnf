@@ -1,0 +1,600 @@
+(* ======================================================================
+   Eitri grammar, draft 0.6  (0.2: async / await; 0.3: spawn, task T; 0.4: static;
+                      0.5: attributes, @extern, @indirect;
+                      0.6: pub members; 0.7: char literals;
+                      0.8: weak T, chan T, spawn of any call;
+                      0.9: generics and interfaces;
+                      0.10: dyn, type patterns, recovery;
+                      0.11: scalar set, static let, enum methods,
+                            extend, labeled loops, ?[, range patterns,
+                            multi-line and raw strings;
+                      0.12: host declaration modules;
+                      0.13: @extern storage types;
+                      0.14: let fields, mutating interface members)
+
+   Notation (W3C-style EBNF):
+     =   definition            ;   end of rule
+     |   alternative           ( ) grouping
+     ?   optional              *   zero or more        +   one or more
+     "x" terminal token        UPPER_CASE  token produced by the lexer
+   Rules the EBNF cannot express are written as  (* constraint: ... *)
+   and collected in section 9.
+   ====================================================================== *)
+
+
+(* ======================================================================
+   1. Lexical structure
+   ====================================================================== *)
+
+(* Source text is UTF-8. Identifiers are ASCII in this draft. *)
+
+letter       = "A" .. "Z" | "a" .. "z" ;
+digit        = "0" .. "9" ;
+hex_digit    = digit | "A" .. "F" | "a" .. "f" ;
+
+IDENT        = ( letter | "_" ) ( letter | digit | "_" )* ;
+(* constraint: an IDENT is never a keyword, and a lone "_" is the
+   WILDCARD token, not an IDENT. *)
+
+WILDCARD     = "_" ;
+
+(* Keywords *)
+(*   async  await  break  class  continue  defer  else  enum  extend
+     false  fn  for  guard  if  import  in  interface  let  match  mutating
+     null  pub  return  self  spawn  static  struct  true  try  type
+     var  while
+   Reserved for future use:
+     yield
+   Contextual words (identifiers elsewhere):
+     from   only after  import IDENT
+     map    only at the start of a type
+     task   only at the start of a type
+     weak   only at the start of a type
+     chan   only at the start of a type
+     any    only at the start of a type, before an interface name
+   Predeclared type names (not keywords):
+     i8  i64  u8  u64  f32  f64  bool  char  string
+     bytes  void  dyn
+     Self   inside struct, class, enum and interface bodies
+   Storage types (only as field types of @extern types):
+     i16  i32  u16  u32  isize  usize  ptr  cstr
+   Built-in constraints (usable only as constraints):
+     Eq  Ordered  Numeric  Formattable *)
+
+(* Integer and float literals. "_" separates digits. *)
+INT_LIT      = dec_lit | hex_lit | oct_lit | bin_lit ;
+dec_lit      = digit ( digit | "_" )* ;
+hex_lit      = "0x" hex_digit ( hex_digit | "_" )* ;
+oct_lit      = "0o" ( "0" .. "7" ) ( "0" .. "7" | "_" )* ;
+bin_lit      = "0b" ( "0" | "1" ) ( "0" | "1" | "_" )* ;
+
+FLOAT_LIT    = dec_lit "." dec_lit exponent?
+             | dec_lit exponent ;
+exponent     = ( "e" | "E" ) ( "+" | "-" )? dec_lit ;
+(* A digit must follow ".", so  0..n  lexes as INT_LIT ".." IDENT. *)
+
+(* Strings with interpolation *)
+STRING_LIT   = '"' string_part* '"'
+             | '"""' NEWLINE ( string_part | NEWLINE )* '"""'
+             | "r" '"' raw_char* '"'
+             | "r" '"""' NEWLINE ( raw_char | NEWLINE )* '"""' ;
+raw_char     = (* any character except the closing delimiter and, for
+                  single-line raw strings, newline *) ;
+(* Multi-line strings start on the line after the opening """ and end on
+   the line before the closing """, whose indentation is removed from
+   every line. Raw strings have no escapes and no interpolation. *)
+string_part  = string_char | escape | interpolation ;
+string_char  = (* any character except  "  \  newline,
+                  and except the start of the sequence  ${  *) ;
+escape       = "\" ( "n" | "r" | "t" | "0" | "\" | '"' | "$"
+                   | "u{" hex_digit+ "}" ) ;
+interpolation = "${" expr "}" ;
+(* "\$" produces a literal "$", so "\${" produces a literal "${". *)
+
+CHAR_LIT     = "'" ( char_char | escape | "\'" ) "'" ;
+char_char    = (* any character except  '  \  newline *) ;
+(* A char literal holds exactly one Unicode scalar value. *)
+
+(* Attributes. "@" must be immediately followed by the name. Attribute
+   names are not keywords and don't clash with identifiers. *)
+ATTRIBUTE    = "@" IDENT ;
+
+(* Comments are discarded by the lexer. *)
+COMMENT      = "//" (* any characters up to end of line *)
+             | "/*" (* any characters, non-nesting *) "*/" ;
+
+(* Multi-character tokens. The lexer applies longest match except where
+   noted.
+     try?   emitted only when "?" immediately follows "try"
+     ?.  ?[  ??  =>  ->  ..  ..=  ==  !=  <=  >=  &&  ||  <<
+     &+  &-  &*  +=  -=  *=  /=  %=  &=  |=  ^=  <<=  &+=  &-=  &*=
+   The lexer never emits ">>" or ">>=". It always emits ">" singly, so
+   type groups like  []<[]<E!T>>  close cleanly. The expression parser
+   reads two adjacent ">" tokens as a right shift and ">" followed by an
+   adjacent ">=" as ">>=". The type parser splits a ">=" token when it
+   closes a group. *)
+
+
+(* ======================================================================
+   2. Newlines and statement separation
+   ====================================================================== *)
+
+(* The lexer emits a NEWLINE token at a line break only when both hold:
+
+     (a) the innermost open delimiter is "{" or there is none
+         (inside "(" or "[" line breaks are ignored), and
+
+     (b) the previous significant token is not a continuation token:
+           ,  =  =>  ->  .  ?.  :
+           ||  &&  ??  ..  ..=  ==  !=  <=  >=
+           +  -  *  /  %  &+  &-  &*  |  ^  &  <<
+           any compound assignment operator
+           try  try?  await  spawn
+
+   "<" and ">" are deliberately not continuation tokens, because a type
+   such as  ?<E!T>  can end a line. A comparison split across lines
+   needs parentheses.
+
+   A leading "." never joins the previous line, because the rule looks
+   only at the previous token. Multi-line method chains need parentheses.
+
+   Consecutive NEWLINE tokens are equivalent to one. *)
+
+seps         = ( NEWLINE | ";" )+ ;
+nl           = NEWLINE* ;
+
+
+(* ======================================================================
+   3. Modules
+   ====================================================================== *)
+
+module       = seps? ( module_item ( seps module_item )* seps? )? EOF ;
+
+module_item  = import_decl
+             | attributes? "pub"? declaration
+             | "pub"? binding
+             | statement ;
+
+attributes   = ( attribute nl )+ ;
+attribute    = ATTRIBUTE call_args? ;
+(* Attributes come before "pub". The set of attributes is fixed by the
+   language; an unknown attribute is an error.
+     @extern     on a struct: C layout, a value
+                 on a class in a host module: a view of host memory
+     @indirect   on an enum or an enum case: payloads are boxed
+   constraint: no current attribute takes arguments; the call_args form
+   is reserved. *)
+
+import_decl  = "import" IDENT "from" STRING_LIT ;
+(* constraint: the import path is a plain string, with no interpolation. *)
+
+
+(* ======================================================================
+   4. Declarations
+   ====================================================================== *)
+
+declaration  = fn_decl
+             | struct_decl
+             | class_decl
+             | enum_decl
+             | interface_decl
+             | extend_decl
+             | type_alias ;
+
+fn_decl      = "async"? "fn" IDENT type_params? "(" param_list? ")"
+               ( "->" type )? block? ;
+(* constraint: a fn without a block is implemented by the host. It is
+   allowed only in modules the host registers, as are host classes and
+   "pub let" bindings without an initializer. *)
+
+type_params  = "<" type_param ( "," type_param )* ","? ">" ;
+type_param   = IDENT ( ":" constraints )? ;
+constraints  = qualified_name ( "+" qualified_name )* ;
+(* A constraint is an interface or a built-in constraint. Generic bodies
+   are checked once, against their constraints, where they are declared. *)
+
+conformance  = ":" qualified_name type_args? ( "," qualified_name type_args? )* ;
+param_list   = param ( "," param )* ","? ;
+param        = IDENT ":" type ( "=" expr )? ;
+
+struct_decl  = "struct" IDENT type_params? conformance? member_block ;
+class_decl   = "class" IDENT type_params? conformance? member_block ;
+
+member_block = "{" seps? ( member ( seps member )* seps? )? "}" ;
+member       = "pub"? ( field_decl | method_decl | static_let ) ;
+static_let   = "static" "let" IDENT ( ":" type )? "=" expr ;
+(* Members are private to the defining module unless marked pub. *)
+field_decl   = "let"? IDENT ":" type ( "=" expr )? ;
+(* A "let" field can't be assigned after construction. In a host class
+   it is a read-only property; in an @extern type, a read-only field. *)
+method_decl  = ( "mutating" | "static" )? fn_decl ;
+(* constraint: "mutating" appears only in struct bodies (including
+   @extern structs). "static" declares a type-level function with no receiver,
+   called as  Type.name(...) . *)
+
+enum_decl    = "enum" IDENT type_params? conformance?
+               "{" seps? ( enum_item ( seps enum_item )* seps? )? "}" ;
+enum_item    = enum_case | "pub"? ( method_decl | static_let ) ;
+(* constraint: cases come before members; enums have no fields and no
+   mutating methods. *)
+
+extend_decl  = "extend" qualified_name type_params? conformance? member_block ;
+(* constraint: an extension appears in the module that declares the type
+   or the interface it adds, and declares no stored fields. *)
+
+interface_decl = "interface" IDENT type_params?
+               "{" seps? ( interface_member ( seps interface_member )* seps? )? "}" ;
+interface_member = ( "static" | "mutating" )? "async"? "fn" IDENT type_params?
+               "(" param_list? ")" ( "->" type )? block? ;
+(* A member without a block is required; one with a block is a default
+   that conforming types may replace. *)
+enum_case    = attributes? IDENT ( "(" case_field ( "," case_field )* ","? ")" )? ;
+case_field   = IDENT ":" type ;
+
+type_alias   = "type" IDENT type_params? "=" type ;
+
+
+(* ======================================================================
+   5. Types
+   ====================================================================== *)
+
+type         = error_type "!" operand_type
+             | operand_type ;
+(* Parse a qualified_name first; if "!" follows, it was an error type. *)
+
+error_type   = qualified_name ;
+(* The error position accepts only a named type. Compound error types
+   go through an alias:  type BatchErrors = []LoadError  *)
+
+operand_type = "?" operand_type
+             | "[" "]" operand_type
+             | "[" INT_LIT "]" operand_type
+             | "map" "[" type "]" operand_type
+             | "task" operand_type
+             | "weak" operand_type
+             | "chan" operand_type
+             | fn_type
+             | "<" type ">"
+             | "any" qualified_name type_args?
+             | qualified_name type_args? ;
+
+type_args    = "<" type ( "," type )* ","? ">" ;
+(* "<" after a type name starts type arguments; "<" at the start of an
+   operand_type is grouping. Explicit type arguments in expressions,
+   f<T>(x), are not part of the grammar: type arguments are inferred from
+   arguments and from the expected type. *)
+
+fn_type      = "async"? "fn" "(" type_list? ")" "->" type ;
+(* The return type is a full type, so  fn(T) -> E!U  returns a result.
+   "async" is part of the type: async fn(T) -> U may suspend. *)
+
+type_list    = type ( "," type )* ","? ;
+
+qualified_name = IDENT ( "." IDENT )* ;
+
+(* Consequences of this grammar:
+     []E!T      rejected: "!" is left over after  []E
+     ?E!T       rejected for the same reason
+     E!E2!T     rejected: the right side of "!" is an operand_type
+     ??T        rejected: "??" is a single token, not two "?"
+     task E!T   rejected for the same reason as []E!T
+   The correct spellings are  []<E!T>,  ?<E!T>,  E!<E2!T>,  task <E!T>.
+   ?<?T> is accepted and is the same type as ?T: optionals collapse,
+   including through aliases and generic substitution. *)
+
+
+(* ======================================================================
+   6. Statements and blocks
+   ====================================================================== *)
+
+block        = "{" seps? ( statement ( seps statement )* seps? )? "}" ;
+(* When a block is used as an expression, its value is its final
+   expression statement. *)
+
+statement    = binding
+             | fn_decl
+             | guard_stmt
+             | labeled_loop
+             | defer_stmt
+             | return_stmt
+             | "break" IDENT?
+             | "continue" IDENT?
+             | assignment
+             | expr ;
+
+binding      = ( "let" | "var" ) binding_target ( ":" type )? ( "=" expr )? ;
+(* constraint: the initializer may be omitted only for a module-level
+   "pub let" in a host-registered module, where the host supplies the
+   value. *)
+binding_target = IDENT
+             | struct_destructure
+             | array_destructure ;
+struct_destructure = "{" nl field_bind ( "," nl field_bind )* ","? nl "}" ;
+field_bind   = IDENT ( ":" IDENT )? ;
+array_destructure = "[" IDENT ( "," IDENT )* ","? "]" ;
+(* constraint: array destructuring applies only to fixed arrays [N]T,
+   with exactly N names. *)
+
+condition    = "let" IDENT ( ":" type )? "=" expr_ns
+             | expr_ns ;
+(* The subject of "let" is a ?T; the binding gets the T.
+   With a type annotation and a dyn subject, the condition is a type
+   test: it holds when the value has that type. *)
+
+guard_stmt   = "guard" condition "else" block ;
+(* constraint: the else block must diverge (return, break, continue,
+   or panic). *)
+
+labeled_loop = ( IDENT ":" )? ( while_stmt | for_stmt ) ;
+(* constraint: break and continue with a label must be inside the loop
+   with that label. *)
+
+while_stmt   = "while" condition block ;
+
+for_stmt     = "for" loop_name ( "," loop_name )? "in" expr_ns block ;
+loop_name    = IDENT | WILDCARD ;
+(* One name: array elements, map keys, or range values.
+   Two names: array index and element, or map key and value.
+   constraint: ranges allow only the one-name form. *)
+
+defer_stmt   = "defer" block ;
+
+return_stmt  = "return" expr? ;
+(* "return" followed by NEWLINE, ";" or "}" is a bare return. *)
+
+assignment   = postfix_expr assign_op expr ;
+assign_op    = "=" | "+=" | "-=" | "*=" | "/=" | "%="
+             | "&+=" | "&-=" | "&*="
+             | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
+(* constraint: the left side must be an assignable place: a var
+   binding, a field of an assignable struct or of a class reference, or
+   an array or map element. *)
+
+
+(* ======================================================================
+   7. Expressions
+   ====================================================================== *)
+
+(* Lowest precedence first. *)
+
+expr         = lambda
+             | try_map
+             | recover
+             | or_expr ;
+
+(* expr_ns is expr in a statement header: the condition of if, while
+   and guard, the subject of match, and the iterable of for.
+   constraint: inside expr_ns, a struct_lit may appear only inside
+   parentheses or brackets. *)
+expr_ns      = expr ;
+
+lambda       = "async"? lambda_params "=>" ( block | expr ) ;
+(* A lambda is also async when its expected type is an async fn type. *)
+lambda_params = IDENT
+             | "(" ( lambda_param ( "," lambda_param )* ","? )? ")" ;
+lambda_param = IDENT ( ":" type )? ;
+(* To tell a lambda from a parenthesized expression, scan to the
+   matching ")" and check for "=>". *)
+
+try_map      = "try" await_expr "else" ( IDENT | WILDCARD ) "=>" ( block | expr ) ;
+
+recover      = await_expr "else" ( IDENT | WILDCARD ) "=>" ( block | expr ) ;
+(* Recovery. The operand has type E!T. On success the result is the
+   value; on failure the fallback runs, and must produce a T or diverge.
+   Allowed in any context, since it never propagates. *)
+(* Error mapping. The mapping runs only on failure; its result must
+   have the enclosing function's error type, or it must diverge.
+   This differs from guard's  else {  because "else" here is followed by
+   a name and "=>", never by "{". *)
+
+or_expr      = and_expr ( "||" and_expr )* ;
+and_expr     = cmp_expr ( "&&" cmp_expr )* ;
+
+cmp_expr     = coalesce_expr ( cmp_op coalesce_expr )? ;
+cmp_op       = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+(* Comparisons do not chain:  a < b < c  is a syntax error. *)
+
+coalesce_expr = range_expr ( "??" coalesce_expr )? ;
+(* "??" is right-associative and binds tighter than comparison, so
+   name ?? "x" == "y"  means  (name ?? "x") == "y". *)
+
+range_expr   = bitor_expr ( ( ".." | "..=" ) bitor_expr )? ;
+
+bitor_expr   = bitxor_expr ( "|" bitxor_expr )* ;
+bitxor_expr  = bitand_expr ( "^" bitand_expr )* ;
+bitand_expr  = shift_expr ( "&" shift_expr )* ;
+shift_expr   = add_expr ( ( "<<" | ">" ">" ) add_expr )* ;
+(* constraint: the two ">" tokens of a right shift must be adjacent. *)
+
+add_expr     = mul_expr ( ( "+" | "-" | "&+" | "&-" ) mul_expr )* ;
+mul_expr     = prefix_expr ( ( "*" | "/" | "%" | "&*" ) prefix_expr )* ;
+
+prefix_expr  = ( "-" | "!" | "~" ) prefix_expr
+             | ( "try" | "try?" ) await_expr
+             | "spawn" postfix_expr
+             | await_expr ;
+await_expr   = "await" postfix_expr
+             | postfix_expr ;
+(* try, try? and await take exactly one postfix chain:
+     try? load(p) ?? fallback    means  (try? load(p)) ?? fallback
+     (try load(p)).title         needs its parentheses
+     try await fetch(u)          try comes before await
+   constraint: the operand of spawn is a function call. *)
+
+postfix_expr = primary postfix_op* ;
+postfix_op   = "." IDENT
+             | "?." IDENT
+             | call_args
+             | "[" expr "]"
+             | "?[" expr "]" ;
+(* After "?." or "?[" a null short-circuits every remaining postfix_op in the
+   chain, including the evaluation of call arguments. Parentheses end
+   the chain. *)
+
+call_args    = "(" ( arg ( "," arg )* ","? )? ")" ;
+arg          = ( IDENT ":" )? expr ;
+(* constraint: labeled arguments may follow positional ones, but not the
+   reverse. *)
+
+primary      = literal
+             | IDENT
+             | "self"
+             | "(" expr ")"
+             | collection_lit
+             | struct_lit
+             | enum_shorthand
+             | if_expr
+             | match_expr
+             | block ;
+(* constraint: "self" appears only inside methods. *)
+
+literal      = INT_LIT | FLOAT_LIT | STRING_LIT | CHAR_LIT
+             | "true" | "false" | "null" ;
+
+collection_lit = "[" "]"
+             | "[" ":" "]"
+             | "[" expr ( "," expr )* ","? "]"
+             | "[" map_entry ( "," map_entry )* ","? "]" ;
+map_entry    = expr ":" expr ;
+(* Parse the first element; a following ":" means a map literal. *)
+
+struct_lit   = qualified_name "{" nl struct_body? "}" ;
+struct_body  = ( field_init "," nl )* ( field_init ","? | ".." expr ) nl ;
+field_init   = IDENT ":" expr ;
+
+enum_shorthand = "." IDENT call_args? ;
+(* constraint: requires an expected type, e.g.  .NotFound(path: p) .
+   Qualified cases such as  Theme.Custom(color: c)  parse as an IDENT
+   followed by postfix operations. *)
+
+if_expr      = "if" condition block ( "else" ( if_expr | block ) )? ;
+(* constraint: "else" must be on the same line as the closing "}".
+   An if used as a value requires an else branch. *)
+
+match_expr   = "match" expr_ns "{" nl
+               ( match_arm ( arm_sep match_arm )* ","? nl )?
+               "}" ;
+match_arm    = pattern ( "if" or_expr )? "=>" ( block | expr ) ;
+arm_sep      = "," nl
+             | NEWLINE+ ;
+(* constraint: the NEWLINE-only separator is allowed only after an arm
+   whose body is a block. The guard is an or_expr so that "=>" is never
+   read as a lambda. *)
+
+
+(* ======================================================================
+   8. Patterns
+   ====================================================================== *)
+
+pattern      = primary_pattern ( "|" primary_pattern )* ;
+
+primary_pattern = WILDCARD
+             | "null"
+             | literal_pattern
+             | range_pattern
+             | IDENT
+             | type_pattern
+             | enum_pattern
+             | "(" pattern ")" ;
+
+literal_pattern = "-"? INT_LIT
+             | "-"? FLOAT_LIT
+             | STRING_LIT
+             | CHAR_LIT
+             | "true"
+             | "false" ;
+
+range_pattern = literal_pattern ( ".." | "..=" ) literal_pattern ;
+(* constraint: both ends are integer or char literals of the same type. *)
+
+enum_pattern = "." IDENT payload_patterns?
+             | IDENT ( "." IDENT )+ payload_patterns? ;
+payload_patterns = "(" payload_pattern ( "," payload_pattern )* ","? ")" ;
+payload_pattern = ( IDENT ":" )? pattern ;
+
+type_pattern = ( IDENT | WILDCARD ) ":" type ;
+(* Matches a dyn value holding that type, binding it as that type.
+   In a payload, "IDENT :" is always a label; write a positional type
+   pattern in parentheses:  .Wrap((v: i64)) . *)
+
+(* Semantics that affect exhaustiveness:
+     - A lone IDENT is a binding; a dotted name is an enum case path.
+     - In a position of type ?T, a binding matches only non-null values
+       and binds T. WILDCARD matches anything, including null.
+     - The patterns for ?T are the patterns for T plus "null".
+     - A guarded arm never counts toward exhaustiveness.
+     - Alternatives separated by "|" must bind the same names with the
+       same types. *)
+
+
+(* ======================================================================
+   9. Constraints summary
+   ====================================================================== *)
+
+(* Parsing
+     1. NEWLINE emission follows section 2.
+     2. Struct literals are not allowed unparenthesized in expr_ns.
+     3. The lexer emits ">" singly; see section 1.
+     4. try_map's "else" is followed by a name or "_" and "=>";
+        guard's "else" is followed by "{".
+     5. Match arms need commas except after a block body.
+     6. "else" stays on the line of the preceding "}".
+
+   Placement
+     7.  "pub" appears only on module-level items and on struct and
+         class members. On a binding it requires "let":  pub var  is
+         rejected. Enum cases are as visible as their enum.
+     8.  struct, class, enum, interface, extend, type and import appear
+         only at module level, and imports come before every other item.
+         fn may also appear inside blocks. Attributes appear only on
+         module-level declarations and on enum cases.
+     9.  "mutating" appears only in struct bodies, including @extern.
+     10. "self" appears only in non-static methods.
+     11. try, try_map and await are not allowed inside a defer block.
+     12. await appears only inside an async fn or async lambda, never in
+         module top-level code.
+
+   Typing rules enforced after parsing
+     13. try returns from the innermost function or lambda; module
+         top-level code is an implicit Error!void body.
+     14. try requires exactly matching error types; try_map converts.
+     15. try? on E!T yields ?T; when T is already optional, the
+         optionals collapse.
+     16. ?<?T> is the same type as ?T, including through aliases and
+         generic substitution.
+     17. Unannotated lambda parameters require an expected type.
+     18. Integer literals must fit their expected type.
+     19. Interpolated values must be formattable; ?T is not.
+     20. match is exhaustive.
+     21. Calling an async fn requires await. await's operand must be a
+         call to an async fn (result T) or a task T value (result
+         Stopped!T).
+     22. fn(A) -> R converts implicitly to async fn(A) -> R; the reverse
+         is not allowed.
+     23. spawn's operand must be a call to a function returning T, async
+         or not; the result has type task T. spawn is allowed in any
+         context.
+     24. A type must not contain itself inline. Struct fields, ?T, E!T,
+         [N]T and enum payloads are inline; class, []T, map[K]V, task T,
+         weak T, chan T, function types and @indirect enum cases are not.
+     25. weak T requires T to be a reference type. In map[K]V, K may be
+         written  weak K  for weak keys.
+     26. A type conforms to an interface only by declaring it, and must
+         provide every required member. any I requires I to be an
+         interface. Type arguments must satisfy their constraints.
+     27. Any value converts implicitly to dyn. Values leave dyn only
+         through type patterns and typed if let / guard let.
+     28. recover's operand must have a result type E!T; its fallback must
+         produce a T or diverge.
+     29. Fields of @extern types may only have scalar, storage, payload-less
+         enum, fixed array, or @extern struct types. Storage types appear
+         nowhere else. ptr fields can't be read or written; cstr fields
+         can't be written. @extern class appears only in host modules. *)
+
+
+(* ======================================================================
+   10. Not yet in the grammar
+   ====================================================================== *)
+
+(* Generators (yield is reserved), explicit type arguments in
+   expressions (f<T>(x)), and attributes with arguments. *)

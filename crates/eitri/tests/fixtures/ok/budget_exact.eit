@@ -1,0 +1,9 @@
+//! host: test
+//! budget: 4
+//! pending: T010
+import test from "test"
+var i = 0
+while i < 3 {
+    i += 1
+}
+test.emit(i)

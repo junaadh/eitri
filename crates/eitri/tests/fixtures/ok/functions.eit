@@ -1,0 +1,34 @@
+//! host: test
+//! pending: T010
+import test from "test"
+test.emit(add(2, 3))
+test.emit(fact(20))
+test.check(is_even(10))
+test.check(is_even(7))
+report(4)
+
+fn add(a: i64, b: i64) -> i64 {
+    return a + b
+}
+
+fn fact(n: i64) -> i64 {
+    if n <= 1 {
+        return 1
+    }
+    return n * fact(n - 1)
+}
+
+fn is_even(n: i64) -> bool {
+    return if n == 0 { true } else { is_odd(n - 1) }
+}
+
+fn is_odd(n: i64) -> bool {
+    return if n == 0 { false } else { is_even(n - 1) }
+}
+
+fn report(n: i64) -> void {
+    if n < 0 {
+        return
+    }
+    test.emit(n)
+}

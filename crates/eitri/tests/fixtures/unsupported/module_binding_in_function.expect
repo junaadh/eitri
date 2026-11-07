@@ -1,0 +1,1 @@
+error[E0001] 60..65: not supported yet: module bindings inside functions (T022)

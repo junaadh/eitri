@@ -1,0 +1,4 @@
+//! host: test
+//! pending: T008
+let x = 1
+import test from "test"

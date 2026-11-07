@@ -1,0 +1,12 @@
+//! host: test
+//! pending: T010
+import test from "test"
+let max = 9_223_372_036_854_775_807
+let min = -9_223_372_036_854_775_808
+test.emit(max &+ 1)
+test.emit(min &- 1)
+test.emit(max &* 2)
+test.emit(min &* -1)
+var x = max
+x &+= 2
+test.emit(x)

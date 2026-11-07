@@ -1,0 +1,67 @@
+// Autocommands: editor events and what to do on them.
+
+import editor from "editor"
+import options from "options"
+import util from "util"
+
+pub fn setup() -> void {
+    // Briefly highlight yanked text.
+    editor.on(.TextYankPost, (ev) => {
+        editor.highlight_yank(timeout: 150)
+    }, group: "user")
+
+    // Trim trailing whitespace on save, except where it matters.
+    editor.on(.BufWritePre, (ev) => {
+        let filetype = editor.filetype(ev.buffer)
+        if filetype == "markdown" || filetype == "diff" {
+            return
+        }
+        let view = editor.save_view()
+        editor.command(r"keeppatterns %s/\s\+$//e")
+        editor.restore_view(view)
+    }, group: "user")
+
+    // Reopen files at the last cursor position.
+    editor.on(.BufReadPost, (ev) => {
+        if let pos = editor.last_position(ev.buffer) {
+            if pos.line > 1 && pos.line <= editor.line_count(ev.buffer) {
+                editor.set_cursor(pos)
+            }
+        }
+    }, group: "user")
+
+    // Per-filetype indentation.
+    editor.on(.FileType, (ev) => {
+        if let width = options.indent.get(ev.matched) {
+            let o = editor.buffer_options(ev.buffer)
+            o.tab_stop = width
+            o.shift_width = width
+        }
+    }, group: "user")
+
+    // Go uses real tabs.
+    editor.on(.FileType, (ev) => {
+        editor.buffer_options(ev.buffer).expand_tab = false
+    }, pattern: "go", group: "user")
+
+    // Spell checking for prose.
+    editor.on(.FileType, (ev) => {
+        let o = editor.buffer_options(ev.buffer)
+        o.spell = true
+        o.wrap = true
+    }, pattern: "markdown,gitcommit,text", group: "user")
+
+    // Close helper windows with q.
+    let closable = ["help", "qf", "man", "checkhealth", "lspinfo", "notify"]
+    editor.on(.FileType, (ev) => {
+        if closable.contains(ev.matched) {
+            editor.map(.Normal, "q", util.command("close"), desc: "Close window", buffer: ev.buffer)
+        }
+    }, group: "user")
+
+    // Keep splits equal when the terminal is resized.
+    editor.on(.VimResized, (ev) => editor.command("tabdo wincmd ="), group: "user")
+
+    // Check whether files changed outside the editor when coming back to it.
+    editor.on(.FocusGained, (ev) => editor.command("checktime"), group: "user")
+}

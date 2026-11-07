@@ -1,0 +1,22 @@
+// Host declaration file for module "lsp".
+
+pub enum LspError {
+    NoClient
+    Timeout(ms: i64)
+    Failed(message: string)
+}
+
+pub fn enable(name: string, cmd: []string, filetypes: []string,
+              root_markers: []string, settings: dyn) -> void
+pub fn format(buffer: i64, timeout_ms: i64 = 1000) -> LspError!void
+
+pub fn definition() -> void
+pub fn declaration() -> void
+pub fn references() -> void
+pub fn implementation() -> void
+pub fn hover() -> void
+pub fn rename() -> void
+pub fn code_action() -> void
+
+pub fn inlay_hints_enabled(buffer: i64) -> bool
+pub fn set_inlay_hints(buffer: i64, on: bool) -> void
