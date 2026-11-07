@@ -663,6 +663,508 @@ with small expected gains. Qualifies the ban on polymorphic recursion: it
 follows from compiling everything before running, not from necessity, and
 could be lifted later by lazy instantiation.
 
+## Experiment results
+
+### T011 baseline: source to result against Lua 5.4 — 2026-11-07
+
+**Method.** `cargo bench -p eitri --bench source_to_result` and
+`crates/eitri/benches/lua/run.sh`, run one after the other on an Apple M5
+(10 cores), macOS 27.0.1. Eitri: Rust 1.97.1, LLVM 22.1.6, release profile,
+system allocator, `match` dispatch (D9), no `unsafe` in the VM. Lua 5.4.9
+from Homebrew, linked statically, Apple clang 21 `-O2`. Five workloads in
+`crates/eitri/benches/fixtures/`, each written once in each language and
+ending in one host call carrying a result checked on every run: `module` (a
+40-line setup-script shape, about 1.2 KB), `arithmetic` (1,000 loop
+iterations of checked and wrapping arithmetic), `branching` (1,000
+iterations of `else if` chains, `&&`/`||`, and a call), `calls` (recursive
+`fib(15)`, 1,973 calls), and `host_calls` (1,000 scalar host calls). Per
+sample: compile (Eitri lex/parse/check/lower; Lua `luaL_loadbuffer`) and
+first execution (`execute`; `lua_pcall`) are timed separately, and the
+total is their sum. 20,001 individually timed samples per cell; the timer
+is quantized to 41.7 ns. "Reused" is one initialized runtime warmed by
+1,000 runs; "fresh" creates a runtime per sample, creation excluded and
+reported on its own. Raw samples: `target/bench-results/*.csv`.
+
+**Results (reused runtime, p50; p99 in the bench output).**
+
+| Workload | Eitri compile | Lua compile | Eitri execute | Lua execute | Eitri total | Lua total |
+|---|---|---|---|---|---|---|
+| module | 6.4 µs | 8.9 µs | 0.21 µs | 0.21 µs | 6.6 µs | 9.2 µs |
+| arithmetic | 1.7 µs | 2.1 µs | 18.8 µs | 15.0 µs | 20.5 µs | 17.2 µs |
+| branching | 3.3 µs | 4.1 µs | 43.1 µs | 31.1 µs | 46.4 µs | 35.3 µs |
+| calls | 1.3 µs | 1.5 µs | 27.0 µs | 14.3 µs | 28.2 µs | 15.8 µs |
+| host_calls | 0.9 µs | 1.1 µs | 10.5 µs | 10.2 µs | 11.3 µs | 11.4 µs |
+
+Fresh runtimes: creation is about 0.9 µs in both. Eitri's fresh compile
+is 0.7–2.1 µs slower than its reused compile (scratch not yet grown);
+Lua's differs by 0.1–0.2 µs.
+
+Memory, per reused run: 11–55 allocations (0.7–4.8 KB), mostly the
+compiled functions' boxed slices and diagnostics storage. The context
+retains 7.8–24.7 KB of scratch after warm-up. Code is 52–364 bytes; the
+metadata beside it (spans, start bits, sites, constants) is 4–5× larger.
+
+**Reading.** Compilation is 1.2–1.4× faster than Lua's and the small
+module is about 1.4× faster end to end, but it is 6.4 µs for 1.2 KB
+(5.2 ns/byte), well above the frontend's 3.4 ns/byte: lowering, the
+`Compiled` allocations, and cold paths need a profile. Execution loses
+wherever the loop runs: 1.25× on arithmetic, 1.4× on branching, and 1.9×
+on script calls (about 14 ns per call against Lua's 7). Host calls are on
+par. The module target (sub-microsecond to a few microseconds) is missed:
+6.6 µs. Next: profile the VM's dispatch and call path (E5, E4) and the
+compile path beyond the frontend, before changing either.
+
+### E4/E5 and T011: path profiles — 2026-11-07
+
+**Scope and method.** Profiled the existing call and loop paths first, then
+compilation beyond the frontend; no optimization or production-path changes.
+Same Apple M5/macOS 27.0.1, Rust 1.97.1/LLVM 22.1.6, system allocator and
+workspace release defaults as T011. The new `eitri` example `path_profile`
+uses the T011 fixtures and known answers without the benchmark counting
+allocator. Build with `CARGO_PROFILE_RELEASE_DEBUG=2 cargo build --release
+-p eitri --example path_profile`; `xcrun dsymutil` provides macOS symbols.
+The initial Instruments recordings used `CARGO_PROFILE_RELEASE_DEBUG=1`;
+full symbols were then built for the `sample` recordings. VM instruction
+addresses were checked against disassembly. No CPU affinity was imposed.
+Exact commands and timing boundaries are in the
+[benchmark README](../../crates/eitri/benches/README.md#cpu-profiles-and-compile-stages).
+
+`vm calls`, `vm arithmetic`, and `vm branching` execute already-compiled
+modules repeatedly, checking every result. Instruments Time Profiler recorded
+5 seconds of work at 1 ms sampling; independent 5-second macOS `sample`
+recordings supplied symbolicated stacks. The latter loop profiles skipped
+startup by one second; the call profile included loader samples, which are
+excluded from its 3,825 steady execution samples. `compile module` profiles
+fresh compilation plus disposal; `lower module` builds the checked input once
+and profiles lowering plus disposal. These isolate CPU costs and make no
+fresh-source or first-execution latency claim.
+
+**VM findings.** Among running Instruments samples, the shared instruction
+head (image offsets `0x5700..0x57c4`, end exclusive) holds 2,798/5,004
+samples for calls (55.9%), 4,173/4,990 for arithmetic (83.6%), and
+3,877/4,998 for branching (77.6%). This includes fetching the instruction,
+`WIDE` handling, opcode validation/mapping, frame slice checks, operand
+extraction and the dispatch-table lookup/indirect branch. The hottest PC
+is the dispatch-table load at `0x57b8`. Samples near a branch can include
+stalls; these percentages do **not** isolate branch misprediction cost or
+prove a particular dispatch replacement will win.
+
+The symbolicated call profile has 493/3,825 samples (12.9%) in `memmove`
+and its stubs: 245 argument-copy samples and 248 result-copy samples, mapped
+by their return addresses to `CALL_SCRIPT` and `RET`. The branching profile
+has 161/4,222 (3.8%) there. Arithmetic has 4,246/4,248 samples directly in
+the VM and only two in startup-frame initialization/copy helpers. Call-frame
+zeroing has only 5 call-profile samples; repeated allocation/frame growth
+is not the dominant steady cost. Control-frame push/pop, range checks and
+callee/caller restoration remain inside the interpreter's own samples.
+
+**Reading:** shared instruction overhead is the first VM experiment to
+measure; copying alone is unlikely to close the roughly 2× call gap. E4
+must still report the total call/return path, rather than treating the
+`memmove` percentage as its full cost. E5 needs an assembly-controlled
+comparison; neither unsafe indexing, threaded dispatch, fusion nor shared
+call windows is promoted by this profile. Budgets and checked arithmetic
+remain required work, including when comparing against Lua.
+
+**Compile breakdown.** `path_profile stages NAME 20001`, 1,000 warm-up
+runs, retained raw individual intervals. Each fresh artifact executes and
+its answer is checked outside the compiler timers. Times below are p50 /
+p99, in µs; tiny stages are quantized by the ~42 ns clock. No overhead is
+subtracted. Disposal is measured after execution and is excluded from the
+original T011 compile interval.
+
+| Workload | Lex | Parse | Check | Lower + artifact construction | Artifact disposal |
+|---|---|---|---|---|---|
+| module (1,236 B) | 1.917 / 2.500 | 1.125 / 1.458 | 0.916 / 1.167 | 2.416 / 3.125 | 0.250 / 0.375 |
+| calls | 0.292 / 0.417 | 0.208 / 0.292 | 0.167 / 0.250 | 0.583 / 0.791 | 0.166 / 0.209 |
+| arithmetic | 0.458 / 0.750 | 0.292 / 0.542 | 0.250 / 0.500 | 0.750 / 1.500 | 0.125 / 0.292 |
+| branching | 0.875 / 1.125 | 0.583 / 0.792 | 0.417 / 0.583 | 1.375 / 1.875 | 0.167 / 0.250 |
+| host_calls | 0.250 / 0.333 | 0.167 / 0.209 | 0.125 / 0.167 | 0.375 / 0.500 | 0.083 / 0.125 |
+
+For the module, the frontend is about 4 µs and lowering about 2.4 µs,
+roughly 38% of the sum of stage medians. This comparison uses the same
+fixture; subtracting the earlier synthetic 40-function frontend's
+ns/byte from the module's total was only a lead, not a phase measurement.
+Reset and diagnostics lifecycle are outside the stage timers, so use T011
+for the full compile cost; sums of medians/p99 are not total percentiles.
+
+The `compile module` sample has 1,540/4,114 samples under lowering (37.4%).
+The isolated lower/dispose sample has 1,452/3,932 under `Assembler::finish`
+(36.9%), 965 in `encoding::encode` (24.5%), and 1,173 with allocator frames
+(29.8%, including allocation, reallocation and freeing). These are
+**overlapping inclusive shares**, not additive buckets. `finish` does branch
+layout, output code/spans/start bits/literal metadata construction and owned
+slice finalization; emission also uses the general operand encoder for
+statically selected scalar operations. Those are the first compile-side
+candidates to measure under T037. The profile does not justify changing
+branch bounds, dropping diagnostics metadata or adding an arena wholesale.
+
+**Cross-check and limits.** Reran `cargo bench -p eitri --bench
+source_to_result -- 20001`, then `crates/eitri/benches/lua/run.sh 20001`,
+without a profiler. Reused p50 compile/execute: module 6.542/0.250 µs;
+arithmetic 1.750/18.9; branching 3.333/48.0; calls 1.292/28.3;
+host_calls 0.917/10.5. Lua execution is 15.0 µs arithmetic, 31.3 branching,
+14.3 calls and 10.6 host calls. The largest relative gap remains calls;
+the small module still misses the few-microsecond target (6.792 µs total).
+This is a profiling baseline, not a before/after speedup. The original
+allocation, scratch, code and metadata measurements are unchanged by this
+instrumentation. Sampling shares are approximate, target-specific and
+subject to profiler/allocator effects; no hardware counters were collected.
+
+Raw stage CSVs, `sample-{calls,arithmetic,branching,compile,lower}.txt`,
+Instruments `.trace`/XML exports, PC histograms, disassembly, tool output,
+source fingerprints, correctness output and T011/Lua CSVs are retained in
+`target/bench-results/`. The compact evidence archive is
+`target/bench-results/path-profile-2026-11-07.tar.gz`.
+`cargo test --workspace`, `cargo fmt --all -- --check`, and
+`cargo clippy -p eitri --example path_profile -- -D warnings` pass.
+E4/E5 and T037 remain experiments to run, not completed optimization tasks.
+
+### E15: per-run allocation vs reused scratch (lexer) — 2026-11-07
+
+**Question.** Should the context own a memory context (a scratch arena or
+pooled buffers) that compilation stages borrow, instead of each stage
+allocating its own tables and freeing them when it finishes?
+
+**Method.** `cargo bench -p eitri-syntax --features experiment-scratch
+--bench lex_alloc`. Apple M5 (10 cores), macOS 27.0.1, Rust 1.97.1, LLVM
+22.1.6, release profile, system allocator. Two strategies on the same
+lexer, interleaved batch by batch: `lex` (fresh token arrays and stacks per
+run, the shipped path) and `lex_reusing` (warm buffers kept between runs).
+Reuse removes every allocation after warm-up, so its saving is the upper
+bound for any arena. Each run resets the interner and checks the token
+count. 201 batches of about 1 ms; single runs timed individually for p50 and
+p99 (timer overhead below the 1 ns reporting resolution). Allocation counts
+come from a counting allocator in the benchmark binary. Raw single-run
+samples: `target/bench-results/lex_alloc.csv`.
+
+| Workload | Ephemeral (batch p50) | Reused (batch p50) | Saving | Run p99, ephemeral / reused | Allocations per run |
+|---|---|---|---|---|---|
+| One line (`let answer = 42`) | 125 ns | 48 ns | 77 ns (62%) | 166 / 83 ns | 5 |
+| `util.eit`, 39 lines, 985 B | 2,153 ns | 2,066 ns | 87 ns (4.0%) | 2,792 / 2,666 ns | 6 |
+| `plugins.eit`, 130 lines, 4.3 KB | 7,053 ns | 6,931 ns | 122 ns (1.7%) | 11,666 / 11,625 ns | 6 |
+| Whole reference config, 12 files, 26 KB | 49.4 µs | 48.3 µs | 1.1 µs (2.3%) | 63.8 / 61.9 µs | 66 |
+| Reference config ×16, 415 KB | 772 µs | 768 µs | 4.5 µs (0.6%) | 872 / 854 µs | 6 |
+
+**Findings.**
+
+- The lexer makes a fixed number of allocations per file (three token
+  columns plus small stacks), independent of file size, at about 15–20 ns
+  each including the free. Reuse saves 2–4% on real modules and less on
+  large ones. Only the one-line script shows a large share, because lexing
+  it takes about 45 ns.
+- Allocation count is bounded by the number of tables, not the number of
+  nodes, because syntax is stored in index-addressed columns and pooled
+  lists. Arenas earn their keep in compilers that allocate each node
+  separately (R31); with this layout that per-node cost does not exist.
+- Unexpected and larger: lexing itself costs about 2 ns per source byte
+  (2.2 µs for a 1 KB module). That alone threatens the few-microsecond
+  small-module goal and is the first thing to profile under E2.
+
+**Decision.** The data alone supported keeping stages ephemeral (D43). The
+project owner chose a context-held `Scratch` struct instead (D44), for one
+home for reusable memory as more stages and the VM arrive; the measured
+effect of that choice is the small saving above, not a regression. No bump
+arena: per-table reuse already reaches the ceiling E15 measures. T011 must
+report the retained scratch high-water, the cost of this choice. The
+benchmark compares a fresh `LexScratch` per run with a kept one:
+`cargo bench -p eitri-syntax --bench lex_alloc`.
+
+### E2 (first pass): lexer throughput — 2026-11-07
+
+**Question.** Where does the lexer spend its time, and which low-level
+changes reduce it without changing behavior?
+
+**Method.** Same machine and toolchain as E15. Throughput from
+`cargo run --release -p eitri-syntax --example lex_profile` (the reference
+config, 12 files, 25,921 bytes, 5,068 tokens per run; median of three
+3-second runs). Profiles from Instruments' Time Profiler (`xctrace`), with
+leaf addresses mapped to source lines through a dSYM. Every step had to pass
+a differential test against a frozen copy of the original lexer
+(`lexer/reference.rs`): identical kinds, spans, spellings, delimiter
+partners, and diagnostics on the corpus, all fixtures, and 20,000 seeded
+mutations and fragment strings.
+
+**Profile before.** Main loop and dispatch 47%, interning 22%, token push
+18% (three columns, each checking id overflow and capacity), string
+scanning 11%.
+
+| Step | Change | ns/byte | Result |
+|---|---|---|---|
+| 0 | Baseline | 1.88 | |
+| 1 | Token push: one capacity check and one id for all three columns | 1.64 | kept (−12.5%) |
+| 2 | Interner hit: compare bytes with overlapping word loads instead of `str` slicing and a `memcmp` call | 1.56 | kept (−5%) |
+| 3 | SWAR scanning (8 bytes per step): identifier runs, indentation runs, line comments, string bodies | 1.37 | kept (−12%) |
+| 4 | Step over one space after a token without a branch, bypassing the dispatch | 1.35 | kept (−1.7%) |
+| 5 | Token push: unchecked writes after the shared capacity check (`unsafe`, below) | 1.29 | kept (−4.2%) |
+| 6 | Short-key hash (one 128-bit multiply) instead of Fx | 1.29 | **rejected**: no change; hashing was not the cost |
+| 7a | Dispatch through a 256-entry byte-class table | 1.65 | **rejected**: +27%, one more dependent load per token |
+| 7b | Guard-free `match` on the byte (one jump table) | 1.50 | **rejected**: +16%, inlining the push path into ten arms bloated the loop |
+| 8 | Plain-string fast path | 1.31 | **rejected**: no change on this corpus |
+| 9 | SWAR for raw strings and block comments | 1.33 | kept: unchanged on the corpus (it has neither); 0.47 → 0.11 ns/byte on comment- and raw-string-heavy input |
+
+**Result.** 1.88 → about 1.30 ns/byte on the reference config (−31%), 6.7 ns
+per token. By workload (`lex_alloc`, kept scratch, batch p50): one line
+33 ns (was 48), `util.eit` 1.42 µs (2.07), `plugins.eit` 4.68 µs (6.93),
+whole config 33.9 µs (48.3), 415 KB 545 µs (768), 296 KB of comments and
+raw strings 30.6 µs. Zero allocations per warm run throughout.
+
+**`unsafe` (step 5).** `Tokens::push` writes each column's next slot
+through a raw pointer after one shared check against the smallest column
+capacity, then sets the lengths. The safe form repeats the capacity check
+and length update per column because the compiler cannot prove the
+capacities equal; removing them measured −4.2%. The invariant (equal
+lengths, cached capacity at most every column's) is stated in a `SAFETY`
+comment. Validation: the lexer tests pass under Miri (`cargo +nightly miri
+test -p eitri-syntax -- --skip differential --skip adversarial`, 23 tests);
+overstating the cached capacity by one is reported by Miri as an
+out-of-bounds access, so the check would catch a broken invariant.
+
+**Remaining.** Cost is now spread over per-token work: dispatch, interning
+of each identifier (insertion dominates, since every compilation starts
+from a reset interner), and the push. The next candidates need a
+different structure rather than tuning, such as recognizing keywords
+before interning or caching the newline rule's brace state, and each
+should be measured against the parser's needs once T008 exists.
+
+### E2 (second pass): parser and checker throughput — 2026-11-07
+
+**Method.** Same machine and toolchain as E15.
+`cargo run --release -p eitri-check --example frontend_profile` times lexing,
+parsing, and checking separately on a synthetic 17,964-byte program in the
+first slice (40 functions with loops, branches, recursion, and host calls);
+three 3-second runs. Profiles from `xctrace` as in the first pass. Each step
+had to pass differential tests against frozen copies of the T008 parser and
+checker (`parser/reference.rs`, `check/reference.rs`): the same printed tree
+and diagnostics on the corpus, 25 operator edge cases, and 10,000 seeded
+mutations; the same diagnostics, types, resolutions, bindings, and literal
+values on over 3,000 checked programs.
+
+**Profile before.** Lexing 42%, parsing 35%, checking 23% (3.87 ns/byte,
+69.5 µs per run). The parser descended through ten precedence functions per
+operand, each re-reading the current token through a bounds-checked index;
+the checker built its side tables one push per node and kept literal values
+in a hash map.
+
+| Step | Change | Stage ns/byte | Result |
+|---|---|---|---|
+| P1 | Precedence climbing (one loop per operator level, binding levels from a table) and the current token kind cached in the parser | parse 1.36 → 1.04 | kept (−23%) |
+| C1 | Side tables sized with one `resize`; literal values in a vector referenced from the resolution slot instead of a hash map; decimal fast path for literal values | check 0.89 → 0.76 | kept (−15%) |
+| C2 | Compare types before fetching a span; reporting moved out of line | check 0.76 → 0.69 | kept (−8%) |
+| P2 | Load the operator span only for prefix operators | parse 1.04 → 1.03–1.06 | neutral; kept as it only removes work |
+
+**Result.** 3.87 → about 3.35 ns/byte for the whole frontend (−13%),
+69.5 → 59–61 µs per run. Lexing is now the largest share on this
+identifier-heavy workload (about 1.6 ns/byte, 48%), mostly interning each
+identifier occurrence.
+
+**Found along the way.** The T008 parser handled `??` (outside the slice) by
+right recursion, so `a ?? a ?? …` long enough would overflow the stack. The
+precedence-climbing parser consumes it iteratively; a test parses a
+100,000-long chain. The frozen reference keeps the recursion, since the
+differential inputs never reach that depth.
+
+**Follow-up (T009/T010).** `else if` chains recursed once per link in the
+parser and checker; 100,000 links overflowed the stack (reproduced through
+the CLI). Both now walk the chain in a loop, unwinding pending links from
+scratch stacks so ids, types, and diagnostics come out as recursion gave
+them (the differential tests still pass; tests check 100,000-link chains).
+Inlined into its callers, the checker's loop cost about 3% of checking
+(0.727 → 0.750 ns/byte, three runs each); with `if_expr` kept out of line
+it measured 0.727–0.745 (median 0.731), within run-to-run noise. Parsing
+was unchanged (1.046–1.056). One deliberate behavior change was made to
+both the checker and its reference: an `if` with an expected type no
+longer reports a mismatch of its own, because its branches already did
+(`let x: i64 = if c { true } else { 1 }` gave the same error twice).
+
+### E5/E4 first pass: the instruction head and the call copy — 2026-11-07
+
+**Question.** The path profiles put 56–84% of VM samples in the shared
+instruction head. Which of its costs can safe Rust remove, and what does
+each removal buy?
+
+**What the head did.** From the release disassembly of the loop: reload the
+current function's code pointer and length, frame size, and the slot
+vector's pointer and length from memory; bounds-check the code index;
+validate the opcode byte through `Op::ALL`; re-slice the frame (an
+overflow-checked add and a range check); decode all three operands with the
+`WIDE` high byte merged in (about nine instructions, even for jumps, which
+use none); then load from the jump table and branch. Roughly 35 instructions
+before any work.
+
+**Method.** `path_profile vm NAME 1` (compiled modules executed repeatedly,
+every answer checked) on the T011 fixtures. Same machine, toolchain, and
+release profile as T011. Each variant was built once into its own binary,
+and the variants were run round-robin, alternating order each round, 7–9
+rounds; medians of ns/run (aggregate throughput, not latency tails). An
+earlier build-then-measure sequence showed ±5% swings from code layout
+alone, which round-robin removes. Every variant passed the VM, lowering,
+and fixture suites; a new test runs the oracle comparison through
+`WIDE`-prefixed instructions (slots 300–302).
+
+| Variant | Change | arith | branch | calls | host | module |
+|---|---|---|---|---|---|---|
+| base | T011 interpreter | 21,084 | 48,178 | 29,582 | 11,693 | 186 |
+| V1 | Dispatch on the raw opcode byte instead of `Op::from_byte` | ±2–3% (sequential runs) | | | | |
+| V2 | Code and frame held as local slices, re-derived only by `CALL`/`RET` | 17,915 | 44,159 | 27,616 | 9,964 | 186 |
+| V3 | Operands decoded inside the handlers that use them | 16,062 | 39,157 | 26,722 | 8,262 | 170 |
+| V4 | Call/return slot copies as an inline loop, not `memmove` | 15,361 | 37,763 | 23,082 | 8,614 | 153 |
+| V4b | Inline single-slot copy, `copy_within` otherwise | 14,677 | 36,065 | 20,126 | 8,843 | 158 |
+| V5 | Handlers expanded twice: `hi` constant 0 on the common path, the prefix word after `WIDE` | 12,808 | 34,013 | 19,307 | 7,286 | 144 |
+
+(V5 is from a second round-robin against V4b, whose medians there were
+14,629 / 35,730 / 19,891 / 8,402 / 161.)
+
+**Results.** V1 was neutral: LLVM already folded the validation table into
+the jump-table range check, so it was reverted. V2, V3, and V5 each paid
+on every loop-bound workload. V4 cut the call workload 14% but slowed
+`host_calls`, which makes no script calls, by about 5% in interleaved
+runs: a code-generation side effect on the shared loop, not the copy
+itself. V4b kept most of the call gain; `host_calls` stayed about 7% above
+V3 until V5 recovered it. Kept: V2, V3, V4b, V5. All safe Rust; the
+interpreter still cannot cause undefined behavior on unverified code.
+
+**End to end (T011 bench, reused runtime, execute p50).** arithmetic 18.8
+→ 11.7 µs (Lua 15.0), branching 43.1 → 30.8 µs (Lua 31.1), calls 27.0 →
+18.6 µs (Lua 14.3), host calls 10.5 → 7.3 µs (Lua 10.2). Arithmetic and
+host calls now beat Lua 5.4, branching is level, and script calls trail by
+1.3× (about 9.4 ns per call and return against Lua's 7). Compile times are
+unchanged, so the small module is still 6.6 µs end to end.
+
+**Not concluded.** No hardware counters were read, so the gains are not
+attributed to fewer instructions versus fewer stalls. Per-slot bounds checks
+remain in every handler; removing them needs `unsafe` justified by the
+verifier, which is a separate decision, not a step in this pass. The call
+path's remaining cost (site lookup, depth check, control-frame push and
+pop, callee and caller lookups) has not been profiled since V4b.
+
+### E5 second pass: tail-call threaded interpreter and immediates — 2026-11-07
+
+**Question.** Can a qualitative change, rather than further shaving of the
+`match` loop, put Eitri clearly ahead of Lua 5.4, starting with script
+calls (the remaining 1.3× gap after the first pass)?
+
+**What changed.** Toolchain moved to the pinned `nightly-2026-11-05`
+(rustc 1.101.0, LLVM 23.1.5) for `become` and `extern
+"rust-preserve-none"`. Two independent changes:
+
+1. `eitri_vm::run_threaded` (experimental, selected by
+   `Context::set_threaded`): one handler per opcode, each ending in a tail
+   call through a 256-entry table (R15, R19). The preserve-none convention
+   keeps code, PC, the instruction word, and the frame pointer and length
+   in registers across handlers (R5, R19). Steps, each kept only if
+   measured:
+   - T1, the handlers: loops 0.75–0.88× the `match` loop, calls 1.04×.
+   - T2, no calls on fast paths: faults record and tail-call a cold `raise`
+     handler; out-of-frame slots (unverified code only) trap with
+     `abort_immediate` instead of panicking. Handlers dropped their stack
+     frames except the frame-pointer pair macOS requires: loops 0.69–0.76×.
+   - T3, call path: growth of the slot or frame stack goes to a cold
+     `grow` handler that re-executes the `CALL` before any budget debit;
+     the fast path copies through the frame pointer and pushes within
+     capacity. `call_script` went from about 200 instructions with spills
+     to 172 with almost none: calls 1.09× → 0.81×.
+   - T4, one-slot argument and result copies without loops: calls −4.5%.
+   Slots stay bounds-checked against the frame length, so unverified code
+   still cannot cause undefined behavior; the frame pointer is derived
+   from the whole slot buffer, and Miri (Stacked Borrows) passes the
+   recursion, growth, call, fault, host-window, and reuse tests on both
+   interpreters (recursion depth reduced to 1,000 under Miri).
+2. C2, immediate forms from the spec: `ADDI`/`SUBI` (checked and
+   wrapping), `MULI.CHK.S`, and `CBI.EQ/NE/LT/GT` implemented in the
+   verifier, assembler (`branch_imm`, long form through `imm_complement`:
+   `x < k` negates to `x > k - 1`), and both interpreters. Lowering uses
+   them when one operand is a literal in range, on either side of a
+   comparison; the literal has no effects, so source order is unchanged.
+   `fib` went from 10 to 7 instructions on its recursive path.
+
+Every step ran the VM tests, the 113 fixtures (on both interpreters, which
+must agree on results, faults with traces, and host effects), and new
+oracle tests for widened and immediate operations, including the far form
+of every `CBI`.
+
+**Method.** `path_profile vm NAME 1`, one binary with both interpreters
+selected by `EITRI_THREADED`, run round-robin, 7 rounds, medians; then
+the T011 bench and Lua harness in the same session.
+
+| VM only, ns/run | `match` + C2 | threaded + C2 + T4 |
+|---|---|---|
+| arithmetic | 10,996 | 8,494 |
+| branching | 26,942 | 17,421 |
+| calls | 15,869 | 12,168 |
+| host calls | 6,859 | 5,187 |
+| module | 137 | 121 |
+
+**End to end (T011, reused runtime, p50 of compile + first execution,
+threaded).** module 6.5 µs (Lua 9.5), arithmetic 10.0 µs (Lua 17.2),
+branching 20.4 µs (Lua 36.9), calls 13.3 µs (Lua 16.1), host calls 5.9 µs
+(Lua 11.3): 1.2–1.9× faster than Lua 5.4 on every workload; execution
+alone of `fib(15)` is 12.1 µs against Lua's 14.5 (about 6.1 ns per call
+and return).
+
+**Promoted** to the default on 2026-11-07 by the project owner, with the
+`match` loop kept as the portable reference (`Context::set_threaded(false)`).
+**Not concluded.** AArch64 (Apple M5) only; the promotion gates ask for
+x86-64 as well, which is still owed. No hardware counters. The aborting
+out-of-frame check changes unverified code's failure from a panic to a
+trap, which needs a decision before promotion. Compile time is now the
+larger part of the small module's latency (6.3 of 6.5 µs).
+
+### Compile path, first pass: lowering — 2026-11-07
+
+**Question.** Lowering and artifact construction were the largest compile
+stage for the small module (2.2–2.3 µs of about 6.3 µs). What does it
+spend that time on?
+
+**Method.** `path_profile stages module 10001`, six alternating rounds per
+pair of binaries, medians of per-run stage medians; `sample` profiles of
+`path_profile lower module` with symbols. Same machine, pinned nightly.
+
+**Profile before.** Self time: `encoding::encode` 28% (it re-derived every
+field's position and range from the specification per instruction),
+`Assembler::finish` 14%, the lowering walk 13%, allocator about 12%.
+`finish` allocated three layout arrays per function and moved the
+constant and call-site vectors out, so the next function started from
+zero capacity.
+
+| Step | Change | Lowering ns | Result |
+|---|---|---|---|
+| L1 | Layout arrays kept in the assembler; constants and sites copied out at exact size | 2,333 → 2,084 | kept (−11%; disposal +40 ns) |
+| L2 | `encode` packs narrow instructions from a compile-time table built from `OPS`; any other case, including every error, takes the general encoder | 2,083 → 1,666 | kept (−20%) |
+| L3 | Instruction words copied directly instead of `extend_from_slice` (a `memmove` call per instruction) | 1,666 → 1,583 | kept (−5%) |
+
+A differential test checks the fast encoder against the general one on
+every opcode with operands around every range boundary (about 326,000
+encodings): same words, same errors.
+
+**Result.** Lowering −32%. T011 module, reused runtime: compile 6.3 →
+5.7 µs p50, source to result 5.8 µs (Lua 5.4: 9.5 µs); allocations per
+compile 55 → 37. Lexing (about 1.9 µs, mostly interning identifiers) is
+now the largest stage, then lowering (1.6 µs), parsing (1.2 µs), and
+checking (0.9 µs). A fresh context still compiles about 2.5 µs slower than
+a warm one while its scratch grows.
+
+### R31: Where compilers use arenas
+
+V8 allocates parser AST nodes in a `Zone` and frees the tree in one step
+after bytecode generation; a 2015 change moved inner-function nodes into a
+shorter-lived zone freed after scope analysis
+([v8pedia](https://v8pedia.void.app/frontend/parser),
+[crrev](https://crrev.com/33ec0b79b8ea60dcccf1d445b0cbd2eed8e1a165)).
+SpiderMonkey measured 10–35% parse-time gains from changing how parse
+nodes were pooled ([bug 558971](https://bugzilla.mozilla.org/show_bug.cgi?id=558971)).
+rustc places long-lived compiler data in `TypedArena`s and a
+`DroplessArena` tied to the `'tcx` lifetime
+([rustc_arena](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_arena/index.html),
+[rustc_middle arena](https://doc.rust-lang.org/nightly/nightly-rustc/src/rustc_middle/arena.rs.html)).
+Zig instead reworked its AST into fixed-size nodes with a shared extra-data
+array and stores tokens and nodes in `MultiArrayList` columns
+([AST layout commit](https://git.jakstys.lt/motiejus/zig/src/commit/4dca99d3f6b732c415d270f0c97def144ed6d3b7),
+[Hashimoto's notes](https://mitchellh.com/zig/parser)).
+Limit: these are secondary sources and design notes, not controlled
+measurements of arena versus heap for an index-based layout; E15 is that
+measurement for Eitri's lexer.
+
 ## Not verified
 
 These were looked for and not confirmed; they are not used as evidence:
@@ -686,7 +1188,7 @@ are explicitly Eitri hypotheses even when the mechanism has precedent.
 |---|---|---|---|
 | D1: typed register bytecode is the default candidate | R1, R2 | An AST or direct native backend may win first-result latency | E1 |
 | D2: intern names while lexing; distinguish spelling from binding | R8; language scope rules | Lookup and hashing have a cost; lexing cannot resolve shadowing | E2 |
-| D3: compact indexed syntax and reusable scratch arenas | R9 | Materialization can cost more than streaming | E2 |
+| D3: compact indexed syntax and reusable scratch arenas | R9 | Materialization can cost more than streaming; scratch reuse is D44, a bump arena is not adopted | E2, E15 |
 | D4: collect signatures before body lowering | Existing forward-call, inference, and full-check semantics | A genuinely one-pass lexer-to-execution design violates those contracts | E2; semantic tests |
 | D5: emit typed operations and propagate local constants | R3, R5 | Variant count and compilation overhead grow | E3 |
 | D6: 32-bit words, short operands; a `WIDE` prefix for large slots, inverted short branch over `J_X` for far targets, and few extended forms (D36) | R1; Lua's implementation is precedent, not proof | 64-bit words or decoded records may be faster | E3 |
@@ -726,6 +1228,8 @@ are explicitly Eitri hypotheses even when the mechanism has precedent.
 | D40: literal allocations are pre-sized from compile-time counts | R29 | Saves little if literals are small | E14 |
 | D41: hot call information separate from root maps and debug data; identical root maps shared; total artifact bytes reported | R12, D12 | Split tables add an indirection on the cold path | E13 |
 | D42: fusion candidates come from measured pairs and sequences in the corpus, with composition rules checked by the specification | R30, R16, R17 | Corpus-specific; a candidate can overfit the reference config | E5 |
+| D43 (superseded by D44): compilation stages allocate their own tables per run; the context keeps only the interner | E15; R31 | Allocation is a fixed cost per table, so it matters most for one-line scripts (62% of lexing a one-liner, but 77 ns absolute) | E15 |
+| D44: the context owns a `Scratch` struct with one field of reusable working memory per kind of scratch (first: `LexScratch`); stages are functions that borrow their field and clear it on entry. No bump arena | Owner's design choice: one home for reusable memory as stages and the VM arrive; E15 shows the gain is small but positive (2–4% of lexing real modules, 77 ns on a one-liner, zero allocations when warm) | Retains the high-water memory of the largest run; a stage that forgets to clear leaks state between runs (tested per stage) | E15; T011 reports scratch high-water |
 
 ## Experiments and promotion gates
 
@@ -751,6 +1255,7 @@ semantics. Publish source, build flags, machine details, and raw timings.
 | E12 | Slot-only handlers vs one cached integer temporary vs one integer and one float | Executed loads and stores, handler count and bytes, opcode space used, spills in the assembly, cycles on the feature workloads |
 | E13 | One `CallSite` record vs hot/cold split with shared root maps | Total executable-artifact bytes, descriptor bytes per call site, call-handler loads, GC root-scan time |
 | E14 | Growing literal construction vs pre-sized allocation | Allocations and reallocations during the reference config's setup, first result |
+| E15 | Fresh per-run allocation vs warm buffer reuse (the ceiling for any arena or memory context), per compilation stage | Time per stage by workload size, allocations and bytes per run, absolute and relative saving |
 
 A candidate is promoted only after semantic equivalence checks and a measured
 improvement on its intended workload without an unexplained regression in

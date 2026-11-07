@@ -1,0 +1,4 @@
+//! host: test
+import test from "test"
+test.emit("abc)
+let x = 1

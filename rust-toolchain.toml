@@ -1,4 +1,6 @@
 [toolchain]
-channel = "1.97.1"
+# Nightly for explicit tail calls (`become`) in the interpreter (D9, E5).
+# Pinned to a dated build: a compiler change is a change in the experiment.
+channel = "nightly-2026-11-05"
 profile = "minimal"
-components = ["clippy", "rustfmt"]
+components = ["clippy", "rustfmt", "miri"]

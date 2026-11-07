@@ -1,2 +1,2 @@
 fault: integer overflow
-  at <module> 60..65
+  at <module> 42..47

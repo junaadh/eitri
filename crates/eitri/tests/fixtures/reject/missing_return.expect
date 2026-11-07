@@ -1,1 +1,1 @@
-error[E0402] 21..22: function `f` may finish without returning a value
+error[E0402] 3..4: function `f` may finish without returning a value

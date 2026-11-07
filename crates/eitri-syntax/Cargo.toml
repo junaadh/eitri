@@ -1,0 +1,17 @@
+[package]
+name = "eitri-syntax"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Eitri lexer and parser"
+
+[dependencies]
+eitri-base.workspace = true
+eitri-diag.workspace = true
+
+[[bench]]
+name = "lex_alloc"
+harness = false
+
+[lints]
+workspace = true

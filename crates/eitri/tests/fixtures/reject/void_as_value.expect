@@ -1,1 +1,1 @@
-error[E0301] 21..24: type mismatch: expected a value, found `void`
+error[E0301] 27..30: type mismatch: expected a value, found `void`

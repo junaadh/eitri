@@ -1,5 +1,4 @@
 //! host: test
-//! pending: T010
 import test from "test"
 let a = 17
 let b = -5

@@ -1,0 +1,9 @@
+effect: test.emit(1)
+effect: test.emit(100)
+effect: test.emit(2)
+effect: test.emit(101)
+effect: test.emit(3)
+effect: test.emit(102)
+effect: test.emit(4)
+effect: test.emit(5)
+ok

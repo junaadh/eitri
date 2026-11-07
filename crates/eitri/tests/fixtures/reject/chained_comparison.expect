@@ -1,1 +1,1 @@
-error[E0102] 32..33: comparison operators cannot be chained
+error[E0102] 14..15: comparison operators cannot be chained

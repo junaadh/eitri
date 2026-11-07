@@ -1,0 +1,6 @@
+fn f() -> void {
+}
+fn f() -> void {
+}
+f()
+f()

@@ -1,5 +1,4 @@
 //! host: test
-//! pending: T010
 import test from "test"
 let x = test.check(false) && test.check(true)
 let y = test.check(true) || test.check(false)

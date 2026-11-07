@@ -1,1 +1,1 @@
-error[E0301] 46..47: type mismatch: expected `void`, found `i64`
+error[E0301] 28..29: type mismatch: expected `void`, found `i64`

@@ -1,0 +1,25 @@
+import bench from "bench"
+fn classify(n: i64) -> i64 {
+    if n % 15 == 0 {
+        return 4
+    } else if n % 5 == 0 {
+        return 3
+    } else if n % 3 == 0 {
+        return 2
+    }
+    return 1
+}
+var score = 0
+var i = 0
+while i < 1000 {
+    let kind = classify(i)
+    if kind > 2 && i % 2 == 0 || kind == 1 && i > 500 {
+        score += kind
+    } else if !(kind == 2) {
+        score -= 1
+    } else {
+        score += if i < 100 { 7 } else { 5 }
+    }
+    i += 1
+}
+bench.emit(score)

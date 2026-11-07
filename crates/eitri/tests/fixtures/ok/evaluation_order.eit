@@ -1,5 +1,4 @@
 //! host: test
-//! pending: T010
 import test from "test"
 fn pair(a: i64, b: i64) -> i64 {
     return a * 10 + b

@@ -1,1 +1,1 @@
-error[E0301] 26..30: type mismatch: expected `i64`, found `bool`
+error[E0301] 8..12: type mismatch: expected `i64`, found `bool`

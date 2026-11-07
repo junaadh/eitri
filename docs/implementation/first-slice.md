@@ -52,7 +52,13 @@ fn add(a: i64, b: i64) -> i64 {
   parameters are rejected with `E0001`.
 - Names are unique among the module's functions (`E0202`).
 - A non-`void` function must return a value on every path (`E0402`).
-  `return` without a value is allowed only in a `void` function.
+  `return` without a value is allowed only in a `void` function. A path
+  ends in `return` when a statement on it is `return`, or an `if` whose
+  every branch (including the `else`) does; a `while` never counts.
+- Results come only from `return`. The language also lets a body's final
+  expression be its result (`fn square(n: i64) { n * n }`); the slice
+  rejects a final expression with a value in a non-`void` function with
+  `E0001` ("function results without `return`") rather than defining it.
 - Top-level functions may call each other in any order, including recursion
   and calls to functions declared later.
 - A body may use its parameters and locals, the module's functions, and
@@ -219,7 +225,7 @@ memory (checked by T012).
 |---|---|
 | `E0001` | A language feature outside this slice. The message names the feature |
 | `E0002` | An implementation limit from [Resources](#resources) |
-| `E0101` | Unexpected character, malformed literal, or unterminated comment |
+| `E0101` | Unexpected character, malformed literal, or unterminated comment or literal |
 | `E0102` | Syntax error: expected one thing, found another |
 | `E0201` | Unknown name |
 | `E0202` | Duplicate function or import name |
@@ -233,6 +239,29 @@ memory (checked by T012).
 | `E0402` | Missing `return` in a function with a result |
 
 `E0204` is reserved for the initialization-order diagnostic in
-[Compiler: diagnostics](compiler.md#diagnostics). T047 turns this table into
-the generated catalog. Error recovery (several diagnostics per run) is T047;
-until then a run reports at least its first diagnostic, in source order.
+[Compiler: diagnostics](compiler.md#diagnostics). The single source of
+truth is the `Code` catalog in `crates/eitri-diag/src/codes.rs`; a test keeps
+this table identical to it, and T047 generates the published catalog from
+it.
+
+## Error reporting and cascades
+
+A run reports every independent error it finds, but one mistake gets one
+diagnostic, including in half-typed code an editor saves mid-edit:
+
+- Stages run in order and stop after the first one that reports an error:
+  lexical errors suppress parsing, and syntax errors suppress checking, so
+  one malformed token never turns into type errors.
+- The lexer does not report a delimiter as unclosed when an unterminated
+  literal or comment may have swallowed its closer: openers on the same
+  line as an unterminated single-line literal, or anywhere before an
+  unterminated multi-line one.
+- The parser resynchronizes at the next statement boundary after a syntax
+  error, and drops an unsupported construct whole. In a statement header,
+  a `{` where an operand belongs is a missing operand, not a block.
+- The checker treats anything already reported as an error type that is
+  compatible with everything; reports an unknown name once per spelling,
+  however often it is used; and, once an operator's left operand has the
+  wrong type, checks the right one only for its own errors.
+
+The `cascade/` fixtures hold these to account with mid-edit programs.

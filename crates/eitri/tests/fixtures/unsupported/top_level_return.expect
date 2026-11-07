@@ -1,1 +1,1 @@
-error[E0001] 18..24: not supported yet: top-level `return`
+error[E0001] 0..6: not supported yet: top-level `return`

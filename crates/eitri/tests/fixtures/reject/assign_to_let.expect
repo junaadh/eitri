@@ -1,1 +1,1 @@
-error[E0303] 28..29: cannot assign to `x`: it is not a `var` binding
+error[E0303] 10..11: cannot assign to `x`: it is not a `var` binding

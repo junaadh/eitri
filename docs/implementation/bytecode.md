@@ -250,7 +250,9 @@ only for far branches:
 | `TB` true, none | false, some |
 
 Swapping alone is not a complement for floats: on NaN both `a < b` and
-`b <= a` are false. The generated manifest checks this table mechanically.
+`b <= a` are false. The specification's tests check this table by
+evaluating every condition and its complement on values including NaN,
+infinities, and both zeros, at both precisions.
 
 **Float precision.** A float slot holds raw `f32` or `f64` bits (see
 [Memory access](#memory-access)), so every float instruction, including
@@ -358,9 +360,20 @@ words.
 
 ### Opcode manifest
 
-The first subset, counted variant by variant. A generated manifest replaces
-this hand count once the operation specification exists, and the build
-fails if it exceeds 256.
+The first subset, counted variant by variant. The machine-readable
+operation specification is the table in
+`crates/eitri-bytecode/src/spec.rs`: one row per variant with its format,
+operand roles, structured semantics (width, signedness, precision,
+condition), effects, and whether it is executable yet. The `Op` numbering is
+the table order; the build fails if the table exceeds 256 entries, and a
+test checks every row of this manifest against it.
+
+Only the variants the first slice lowers to are implemented: `MOV`, `LDI`,
+`LDK`, `LDK_X`; `ADD`/`SUB`/`MUL` wrapping and signed-checked; `DIV.S`,
+`REM.S`; `XOR` (boolean `!` as `x ^ 1`); `NEG.CHK.S`; `CB` and `CSET` with
+`EQ NE LT LE` (the swapped forms give `GT GE`); `TB` true and false; `J`,
+`J_X`; `CALL` script and host; `RET`; and `WIDE`. The rest can be encoded
+and disassembled, and the verifier rejects them before anything runs.
 
 | Family | Opcodes | Variants |
 |---|---|---|

@@ -1,8 +1,10 @@
 # Implementation tasks
 
-Status: bootstrap implemented (T001); the first slice is frozen (T002);
-T045 and T046 are in progress. The compiler and runtime are not implemented. Unchecked boxes describe work
-still to do. This is the executable work breakdown for the
+Status: T001–T008 and T046 are complete; T009 and T010 are implemented
+with open completion checks (below); T045 and T047 are in progress. Source
+now runs end to end: lex, parse, check, lower, verify (debug builds), and
+interpret.
+Unchecked boxes describe work still to do. This is the executable work breakdown for the
 [roadmap](roadmap.md), [execution design](implementation/execution-design.md),
 and [research ledger](implementation/vm-research.md).
 
@@ -89,7 +91,7 @@ concurrent implementation.
   macOS validation: locked build, formatting, Clippy with warnings denied,
   three CLI tests and four source fixtures pass. No execution timings claimed.
   Workspace follow-up: moved the package to `crates/eitri`; metadata and
-  lints are inherited from the root workspace, and CI checks all members.
+  lints are inherited from the root workspace.
 
 ### T002 — Freeze the first supported semantic slice
 
@@ -112,13 +114,13 @@ concurrent implementation.
   call-depth limit, compilation limits, code ownership, and diagnostic codes.
   88 fixtures (16 accepted, 15 faults, 29 rejected, 28 unsupported neighbors)
   carry expected effects, results, diagnostics with spans, and traces. All are
-  marked `pending: T008` or `pending: T010`; the harness checks that each is
+  marked `pending: T008` or `pending: T010` (all live since T010); the harness checks that each is
   still rejected and that its expectation is well formed. Validated locally
   with formatting, Clippy, and the full test suite on AArch64 macOS.
 
 ### T003 — Create the machine-readable operation specification
 
-- [ ] Depends on: T002.
+- [x] Depends on: T002.
 - Inventory all currently proposed opcode variants (currently 163), but mark
   only the first executable subset implemented. Specify formats, operand
   roles, width/sign/precision, effects, instruction lengths, and fault PCs.
@@ -127,20 +129,43 @@ concurrent implementation.
 - Done when: the generated count matches the inventory or an explained
   correction; assignments are deterministic; unsupported operations cannot
   reach execution. Include exact float-complement and `WIDE` legality tables.
+- Completed 2026-11-07: `eitri-bytecode` holds the specification as one
+  declarative table (`src/spec.rs`, 163 rows): mnemonic, family, format,
+  operand roles, structured semantics, effects, and an `implemented` flag
+  (30 variants, exactly what lowering the first slice emits). A macro
+  derives the `Op` enum in table order (deterministic numbering) with a
+  compile-time 256 assertion; encoding and decoding with role range checks,
+  automatic `WIDE` for slots above 255, and the two-word forms; lengths;
+  `WIDE` legality; condition complements; and a disassembler. Checks: the
+  count is 163 and all 18 manifest rows of the bytecode chapter match the
+  table (no correction needed); complements are verified by evaluation on
+  NaN, infinities, and both zeros at both precisions; every opcode round
+  trips at its role boundaries; reserved bits, unknown opcodes, truncation,
+  and illegal `WIDE` are rejected. Unimplemented variants reach no
+  execution path: none exists yet, and the T005 verifier rejects them.
 
 ### T004 — Implement a small independent semantic oracle
 
-- [ ] Depends on: T002, T003.
+- [x] Depends on: T002, T003.
 - Implement reference operations for the first subset, with independent
   arithmetic/control-flow logic rather than copying optimized handlers.
   Add narrow-shift/conversion and IEEE comparison models as their variants land.
 - Done when: checked/wrapping boundary cases are covered; the float truth
   table includes NaNs, infinities, and signed zeros; narrow integer cases
   can be checked exhaustively at eight bits. No performance claims from this oracle.
+- Completed 2026-11-07: `eitri_bytecode::oracle` defines integer
+  arithmetic by exact `i128` mathematics range-checked against a width and
+  signedness (the handlers use Rust's `checked_*`/`wrapping_*` instead),
+  negation, integer conditions from signed/unsigned readings, and float
+  conditions from the IEEE partial order (independent of
+  `FloatCond::eval`). Checks: i64 checked/wrapping/division boundaries
+  (including `MIN % -1 == 0` and `MIN / -1` overflow); every `i8` and `u8`
+  pair under all ten operations against Rust's fixed-width arithmetic; the
+  float truth table over NaN, infinities, both zeros, and subnormals.
 
 ### T005 — Assemble and validate executable functions
 
-- [ ] Depends on: T003.
+- [x] Depends on: T003.
 - Build code/constant/site containers, logical instruction IDs, label fixups,
   instruction-start maps, source spans, and final word PCs. Implement `WIDE`
   lengths/legality and far-branch lowering, including stateful loop fallback
@@ -151,47 +176,117 @@ concurrent implementation.
   malformed code in the supported subset, not merely invalid indexes.
 - Initially expose only compiler/assembler-produced code to the runtime;
   untrusted serialized bytecode is a separate, deferred API boundary.
+- Completed 2026-11-07, except the stateful loop fallback, which applies
+  once `LOOP` is enabled. `Function` holds code, a one-slot constant pool,
+  call sites, the frame size and signature (results first, then
+  parameters), an instruction-start bitmap, PC-to-span and literal-type
+  tables. `Assembler` records logical instructions with labels and spans,
+  encodes plain instructions on emission, pools constants (`LDI`, `LDK`,
+  or `LDK_X` by value), and lays out branches in two passes from
+  upper-bound positions (no relaxation loop); a long branch is the
+  complement condition over a `J_X`. `verify` checks structure (decoding,
+  implemented opcodes, slots in frame, constants, sites and call windows
+  against signatures, disjoint host windows, targets on instruction
+  starts, no fall-through, exact start map) and types by a dataflow to a
+  fixpoint (uninitialized and conflicting slots, operand types, `bool`
+  literals). Checks: 11 tests, including branches at the exact short/long
+  boundaries both directions, slots 255/256, widened `LDK_X` followers,
+  65,537 pooled constants, branches into operand words and `WIDE`
+  followers, and joins that conflict only where read.
 
 ### T006 — Implement the scalar register interpreter
 
-- [ ] Depends on: T004, T005.
+- [x] Depends on: T004, T005.
 - Use portable Rust dispatch, untagged eight-byte slots on 64-bit targets,
   explicit control frames, and non-overlapping script call frames. Implement
   only the enabled operations and checked argument/result transfers.
 - Done when: hand-assembled programs agree with the oracle; script recursion
   uses bounded VM storage rather than Rust handler recursion; calls and taken
   backward edges share the host-call budget; faults carry the correct PC.
+- Completed 2026-11-07: `eitri-vm` interprets verified functions with a
+  portable `match` (the D9 baseline): untagged slots on one growable stack,
+  control frames separate, script arguments copied into the callee frame
+  and results copied back, host windows borrowed in place (the verifier
+  guarantees they are disjoint). Every call and taken backward branch
+  debits the budget first; depth counts script frames below the entry.
+  Safe Rust throughout. Checks: 8 tests: every implemented arithmetic,
+  negation, compare, and compare-and-branch opcode agrees with the oracle
+  on edge and seeded values, faults included; 100,000-deep recursion runs
+  without Rust recursion and the depth limit faults with the full trace;
+  exact shared budget accounting across calls and backward jumps; fault
+  PCs through calls and `WIDE`; host faults; scratch reused without growth.
 
 ### T007 — Implement source storage, interning, and the core lexer
 
-- [ ] Depends on: T001, T002.
+- [x] Depends on: T001, T002.
 - Build source/span ownership, dense spelling IDs with collision-safe lookup,
   compact token buffers, delimiter indexes, and resettable compilation scratch.
   Apply the specified newline and operator rules for the supported syntax.
 - Done when: identifiers are not mistaken for bindings; shadowed spellings
   share spelling IDs; malformed input has correct spans; repeated compilation
   resets scratch without invalidating published source metadata.
-- In progress 2026-11-07: `eitri-base` provides the shared base types:
+- Completed 2026-11-07. `eitri-base` provides the base types:
   `newtype_index!` ids (`NonZeroU32`, so `Option<Id>` is four bytes; no
-  `unsafe`), `IndexVec`, `IdRange`, `List`/`ListPool` with scratch-stack
-  construction, `Span`/`SourceId` (now used by `eitri-diag`), the Fx hasher,
-  and a context-owned `Interner`. Unlike a process-wide interner it has no
-  lock or leaked memory: spellings share one byte buffer, lookup is
-  open addressing comparing a 32-bit hash tag before bytes, keywords and
-  predeclared names are predefined constants at fixed indexes, and `reset`
-  removes only the symbols added since the last reset, keeping allocations
-  (tested to retain no extra memory across runs). Not yet wired into
-  `Context` (the lexer is its first user); no timing has been measured.
+  `unsafe`), `IndexVec`, `IdRange`, `List`/`ListPool`, `Span`/`SourceId`,
+  the Fx hasher, and a context-owned `Interner` (no lock or leaked memory;
+  one byte buffer; open addressing comparing a hash tag before bytes;
+  keywords and predeclared names are predefined constant symbols; `reset`
+  removes only the symbols added since the last reset). `eitri-syntax` adds
+  the lexer: the whole lexical grammar (so later stages can reject
+  unsupported features precisely), parallel-array tokens of 13 bytes with
+  the symbol or matching-delimiter index as payload, the specified newline,
+  `>`, and `try?` rules, string and interpolation scanning with an explicit
+  stack, number spellings validated but not converted, delimiter matching
+  with unclosed/unexpected reports, and the 256-level nesting limit
+  (`E0002`). `Context` keeps the interner and a `Scratch` struct with one
+  field per kind of reusable working memory (D44); `lex` borrows its
+  `LexScratch`, clears it on entry, and returns the tokens it filled.
+  Lexical errors are returned, all of them.
+  Checks: 21 lexer tests (token shapes, newline rules, delimiters, literal
+  and error spans, linear-time adversarial inputs, no memory growth across
+  reused scratch across different-sized runs) and 13 base tests; fixtures `reject/malformed_literal` and
+  `reject/unterminated_comment` are now live. Decided: a line break inside a
+  block comment counts (recorded in Lexical structure). Known limit: a line
+  break inside an interpolation of a single-line string ends the literal and
+  the next line lexes separately (follow-on errors; T047 recovery may
+  improve it). E15 measured the lexer at about 2 ns per source byte (2.2 µs
+  for a 1 KB module) and per-run allocation at 2–4% of that on real
+  modules; see the research ledger. E2 first pass: lexing went from 1.88
+  to about 1.30 ns per byte (−31%) through measured steps, with rejected
+  attempts recorded; a frozen reference lexer and a 20,000-case
+  differential test guard every optimization.
 
 ### T008 — Parse, resolve, and check the scalar subset
 
-- [ ] Depends on: T007.
+- [x] Depends on: T007.
 - Build compact indexed syntax, lexical scopes and binding IDs, preliminary
   function signatures, expected-type checking, assignment rules, return-path
   checks, and scalar control-flow typing. Require annotations in this slice.
 - Done when: forward calls, shadowing, precedence, and source-order fixtures
   pass. Any error anywhere in the submitted slice prevents all its setup
   effects; unsupported syntax receives a deliberate diagnostic.
+- Frontend complete 2026-11-07; the done check finishes when T010 executes
+  the `ok/` fixtures. `eitri-syntax` parses into a compact tree (nodes in
+  index vectors, 16-byte expressions, pooled child lists, `if` in a side
+  table), rejects every unsupported neighbor with one `E0001` and drops it
+  whole, resynchronizes after syntax errors, and limits nesting to 256
+  (`E0002`). `eitri-check` collects all signatures first (forward calls),
+  resolves names through per-spelling heads with an undo log (O(1) lookup),
+  assigns binding ids (shadowing), checks types against expectations,
+  assignability, call arity, and return paths, and walks long operator
+  chains iteratively (100,000 operators checked without recursion). Host
+  declaration modules are registered by signature (`Context::
+  register_host_module`), with their names committed to the interner.
+  Decided: function results come only from `return` (first-slice chapter).
+  Checks: 55 diagnostic fixtures now live (all of `reject/` and
+  `unsupported/`), 22 new `cascade/` fixtures, and the harness requires the
+  31 execution-pending fixtures to pass the whole frontend cleanly; 36
+  syntax tests, 7 checker tests. E2 second pass: parsing 1.36 → about
+  1.04 ns/byte and checking 0.89 → about 0.69 ns/byte (whole frontend 3.87 →
+  about 3.35 ns/byte) under differential tests against frozen copies of
+  this parser and checker; it also fixed unbounded recursion on long `??`
+  chains. Reference counting (`Rc`, `Arc`, `Weak`) is banned by `clippy.toml`.
+- Complete 2026-11-07: with T010, all 16 `ok/` fixtures execute and pass.
 
 ### T009 — Lower checked bodies into typed bytecode
 
@@ -202,6 +297,17 @@ concurrent implementation.
 - Done when: source programs and their oracle equivalents agree, no dynamic
   name/type lookup remains in ordinary scalar handlers, and the disassembler
   exposes the actual emitted words and frame size.
+- Implemented 2026-11-07 in `crates/eitri-lower`: one function per script
+  `fn` plus `<module>` (function 0). Bindings get fixed slots, temporaries
+  a stack-ordered counter; names are read in place (D37); results are
+  written to their destination (D38). Conditions compile to one
+  compare-and-branch on the complement; `&&`/`||`, operator, and `else if`
+  chains lower iteratively (100,000-operator chains tested). `while` is
+  top-tested with the budget-polling back edge spanned at `while`.
+  Unreachable statements after `return` are not emitted. Every fixture
+  lowers to code the verifier accepts; 5 unit tests. Open: the
+  program-level oracle comparison (the T004 oracle is per operation), and
+  a retained simple lowering mode.
 
 ### T010 — Connect typed host calls and the runner
 
@@ -212,10 +318,18 @@ concurrent implementation.
 - Done when: a script computes, branches, calls another script function, and
   passes a checked scalar result to the host. A later compile error causes
   zero host effects. Nested host reentry shares the existing budget.
+- Implemented 2026-11-07: `Context::run(source, &mut dyn Host)` returns
+  `RunError::Compile(diagnostics)` or `RunError::Fault(FaultReport)`; host
+  functions are called by `Context::host_index`; `set_budget`/`set_depth`;
+  lowering and VM scratch live in the context. Faults become diagnostics
+  with the trace as labels (identical recursive frames collapse into one).
+  The CLI exits `3` on a fault. All 31 execution-pending fixtures are live
+  (110 fixtures pass, none pending). Open: nested host reentry, which needs
+  the embedding API to let a host call back into the active context.
 
 ### T011 — Establish the first performance harness
 
-- [ ] Depends on: T010.
+- [x] Depends on: T010.
 - Add arithmetic, branch, script-call, and minimal-host-call fixtures and
   equivalent Lua 5.4 sources. Measure compilation, first execution, total
   latency, allocations, scratch high-water, frames, code, and metadata bytes.
@@ -223,6 +337,26 @@ concurrent implementation.
   a reused initialized runtime is distinguished from fresh runtime creation;
   compilation and first execution are included in every source-to-result claim.
   Keep an actual observable result so benchmark work cannot disappear.
+- Complete 2026-11-07: `cargo bench -p eitri --bench source_to_result`
+  and the Lua 5.4 baseline `crates/eitri/benches/lua/run.sh` measure five
+  workloads (module, arithmetic, branching, calls, host calls) with compile
+  and first execution timed separately in every sample, reused and fresh
+  runtimes distinguished (creation reported separately), p50/p99 over
+  20,001 samples, raw CSV samples, allocations and bytes per run, context
+  scratch retained after warm-up, code and metadata bytes, and frame
+  slots. Every run's result is checked. `Context::compile` and
+  `Context::execute` split `run` so the phases can be timed. Results are in
+  the [research ledger](implementation/vm-research.md#t011-baseline-source-to-result-against-lua-54--2026-11-07):
+  compilation beats Lua 5.4 by 1.2–1.4×, execution trails by 1.25–1.9×,
+  and the 1.2 KB module takes 6.6 µs, above the few-microsecond target.
+
+- Profiling follow-up 2026-11-07: `path_profile` isolates VM execution,
+  full compilation, lowering, and individual compile stages on T011 fixtures.
+  [Recorded profiles](implementation/vm-research.md#e4e5-and-t011-path-profiles--2026-11-07)
+  identify shared VM decode/dispatch work, script argument/result copies,
+  instruction encoding and assembler finalization. Full correctness and
+  Eitri/Lua performance harnesses rerun; no optimization promoted and
+  T037/T039/T058 remain incomplete.
 
 ### T012 — Close the first end-to-end semantic gate
 
@@ -256,26 +390,33 @@ concurrent implementation.
   faults with traces, validated even while pending. Remaining: execution
   adapters (T010), disassembly snapshots, and the T004 oracle/tier adapters.
 
-### T046 — Set up CI, target matrix, and the `unsafe` policy
+### T046 — Pin the toolchain and set the `unsafe` policy
 
-- [ ] Depends on: T001.
+- [x] Depends on: T001.
 - Refs: D24; [Performance: method](implementation/performance.md#method).
-- CI builds and tests on x86-64 Linux and AArch64 (Linux and macOS); Windows
-  builds and runs fixtures once T010 lands. Pin the Rust toolchain (D24),
-  and record it with every benchmark.
+- Pin the Rust toolchain (D24), and record it with every benchmark.
 - `unsafe` policy: permitted with an explained performance benefit (cost
   removed, safe alternative, measurements or planned experiment). Each block
   states its invariants and why they hold in a `SAFETY` comment; frame,
   slot, and handler code runs under Miri where Miri supports it; the C API
   (T030) runs under AddressSanitizer and UndefinedBehaviorSanitizer.
-- Done when: every target in the matrix is green on a clean checkout, and a
+- Done when: the toolchain is pinned, lints enforce the `SAFETY` rules, and a
   deliberately broken `unsafe` invariant is caught by the configured tools.
-- In progress 2026-11-07: CI configured for x86-64 Linux and AArch64
-  Linux/macOS; toolchain pinned; workspace lints deny undocumented unsafe
-  blocks and implicit unsafe operations inside unsafe functions. Performance
-  justification and validation policy are in the root README. Only local AArch64
-  macOS checks have run. Hosted matrix results, memory-tool enforcement
-  when unsafe components exist, and Windows at T010 remain outstanding.
+- Scope change 2026-11-07: hosted CI and its target matrix were removed by
+  the project owner. Checks are the documented local commands; results
+  from other targets (x86-64, Windows) are reported only when someone runs
+  them there, and never inferred.
+- Scope change 2026-11-07: the pin moved from Rust 1.97.1 to
+  `nightly-2026-11-05` at the project owner's request, for `become` and
+  the `rust-preserve-none` convention (E5). Still a dated pin: a compiler
+  change is a change in every experiment. Miri now ships with the pinned
+  toolchain.
+- Completed 2026-11-07: toolchain pinned (`rust-toolchain.toml`); workspace
+  lints deny undocumented unsafe blocks and implicit unsafe operations
+  inside unsafe functions; the policy is in the root README. The first
+  `unsafe` block (the lexer's token push, E2 step 5) passes Miri locally,
+  and a deliberately overstated capacity is reported by Miri as an
+  out-of-bounds access. Sanitizer coverage arrives with the C API (T030).
 
 ### T047 — Implement structured diagnostics and error recovery
 
@@ -301,8 +442,10 @@ concurrent implementation.
   expansion, approximate wide/zero-width columns, and clamped invalid spans.
   Not adopted: a `Files` trait (the context owns sources) and a termcolor
   dependency. The CLI renders through it. 21 rendering tests plus
-  width-table checks pass locally. Remaining: recovery in the
-  parser/checker, snapshot coverage of every code, and the generated catalog.
+  width-table checks pass locally. Update with T008: recovery in the
+  lexer, parser, and checker, with the cascade rules in the first-slice
+  chapter and 22 `cascade/` fixtures of half-typed programs. Remaining:
+  snapshot coverage of every code and the generated catalog.
 
 **M0 exit:** a usable measured scalar slice. Completing all 163 operations,
 the collector, the editor config, or a native backend is not an M0 dependency.
@@ -793,7 +936,7 @@ data. These tasks do not authorize replacing the correctness baseline first.
   unless a decision changes that.
 - Done when: the grammar, the Structs chapter, and `eitri-bindgen` agree;
   packed layouts are checked against the C compiler's layout on every
-  target in T046.
+  target the layouts are run on.
 
 ### T062 — Decide the convenience features
 
@@ -831,7 +974,7 @@ data. These tasks do not authorize replacing the correctness baseline first.
   combinatorial generics). Fuzz the lexer, parser, checker, and assembler;
   audit `unsafe` code.
 - Done when: every limit has a fixture that hits it and returns control to
-  the host; fuzzers run in CI on a schedule; findings are fixed or recorded
+  the host; fuzzers run through a documented command; findings are fixed or recorded
   with their accepted risk.
 
 ### T065 — Keep the documentation true
@@ -917,8 +1060,6 @@ a debugger with breakpoints (T055); a mandatory native tier (T043).
 
 ## Immediate next task
 
-**T003 — the generated operation specification** and **T007 — source
-storage and the core lexer**, which are independent of each other. T002 is
-complete: its fixtures are pending and become live as T008 (diagnostics) and
-T010 (execution) land. Extend T045's harness and T046's CI/safety coverage
-alongside the components they validate.
+**T009 — lower checked bodies into typed bytecode**, then **T010 — connect
+typed host calls and the runner**, which turns the 31 execution-pending
+fixtures into running programs. T003–T006 are complete.

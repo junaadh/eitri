@@ -1,0 +1,16 @@
+[package]
+name = "eitri-lower"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Lowering checked Eitri syntax to typed bytecode"
+
+[dependencies]
+eitri-base.workspace = true
+eitri-bytecode.workspace = true
+eitri-check.workspace = true
+eitri-diag.workspace = true
+eitri-syntax.workspace = true
+
+[lints]
+workspace = true

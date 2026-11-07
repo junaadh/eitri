@@ -37,6 +37,8 @@ make every recurring cost earn its place.**
   must borrow the active context and preserve its budgets rather than acquire
   a lock or create hidden state. Do not add atomics or claim a concurrent
   lock-free algorithm when ordinary ownership is sufficient.
+- No reference counting: `Rc`, `Arc`, and their `Weak`s are banned in the
+  codebase (enforced by `clippy.toml`). Give data one owner and lend it.
 - Use a Cargo workspace with `members = ["crates/*"]`. Start with the `eitri`
   package and focused modules. Add crates, dependencies, abstraction layers,
   and generated machinery only for a concrete need.

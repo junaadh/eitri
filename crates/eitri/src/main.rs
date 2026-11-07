@@ -25,9 +25,13 @@ fn main() -> ExitCode {
         }
     };
     let mut context = eitri::Context::new();
-    match context.run(&source) {
+    match context.run(&source, &mut NoHost) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(diagnostic) => {
+        Err(error) => {
+            let code = match error {
+                eitri::RunError::Compile(_) => ExitCode::FAILURE,
+                eitri::RunError::Fault(_) => ExitCode::from(3),
+            };
             let name = path.to_string_lossy();
             let mut files = Files::new();
             let id = files.add(&name, &source);
@@ -37,8 +41,24 @@ fn main() -> ExitCode {
                 color: stderr().is_terminal() && env::var_os("NO_COLOR").is_none(),
                 ..RenderOptions::default()
             };
-            eprint!("{}", Renderer::new(&files, options).render(&diagnostic));
-            ExitCode::FAILURE
+            let mut renderer = Renderer::new(&files, options);
+            let rendered: Vec<String> = error
+                .into_diagnostics()
+                .iter()
+                .map(|d| renderer.render(d))
+                .collect();
+            // A blank line between diagnostics, as rustc and codespan do.
+            eprint!("{}", rendered.join("\n"));
+            code
         }
+    }
+}
+
+/// The CLI registers no host modules, so no script can call one.
+struct NoHost;
+
+impl eitri::Host for NoHost {
+    fn call(&mut self, index: u32, _: &[u64], _: &mut [u64]) -> Result<(), String> {
+        unreachable!("no host function {index} is registered")
     }
 }

@@ -1,5 +1,4 @@
 //! host: test
-//! pending: T010
 import test from "test"
 let x = 1
 let x = x + 10

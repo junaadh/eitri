@@ -1,4 +1,3 @@
-//! pending: T008
 @extern
 fn f() -> void {
 }

@@ -1,0 +1,1 @@
+let x: i64 = if true { true } else { 1 }

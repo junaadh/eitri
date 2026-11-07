@@ -1,3 +1,2 @@
-//! pending: T010
 let zero = 0
 let x = 1 % zero

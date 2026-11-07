@@ -7,7 +7,16 @@ description = "A small, typed, embeddable scripting language for immediate execu
 
 [dependencies]
 eitri-base.workspace = true
+eitri-bytecode.workspace = true
+eitri-check.workspace = true
 eitri-diag.workspace = true
+eitri-lower.workspace = true
+eitri-syntax.workspace = true
+eitri-vm.workspace = true
+
+[[bench]]
+name = "source_to_result"
+harness = false
 
 [lints]
 workspace = true

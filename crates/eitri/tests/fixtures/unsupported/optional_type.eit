@@ -1,3 +1,2 @@
-//! pending: T008
 fn f(x: ?i64) -> void {
 }

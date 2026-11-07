@@ -1,2 +1,1 @@
-//! pending: T008
 let f = (n: i64) => n

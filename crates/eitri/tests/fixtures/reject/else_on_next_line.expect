@@ -1,1 +1,1 @@
-error[E0102] 30..34: expected a statement, found `else`
+error[E0102] 12..16: expected a statement, found `else`

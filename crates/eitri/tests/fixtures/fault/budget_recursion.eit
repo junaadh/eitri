@@ -1,5 +1,4 @@
 //! budget: 10
-//! pending: T010
 fn spin(n: i64) -> i64 {
     return spin(n + 1)
 }

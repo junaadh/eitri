@@ -1,0 +1,42 @@
+import bench from "bench"
+// A small module in the shape of a setup script: definitions, then a few
+// top-level computations and one result for the host.
+fn clamp(value: i64, low: i64, high: i64) -> i64 {
+    if value < low {
+        return low
+    } else if value > high {
+        return high
+    }
+    return value
+}
+fn scale(value: i64, percent: i64) -> i64 {
+    return value * percent / 100
+}
+fn enabled(level: i64, threshold: i64) -> bool {
+    return level >= threshold && level != 0
+}
+fn pick(flag: bool, yes: i64, no: i64) -> i64 {
+    return if flag { yes } else { no }
+}
+let width = 120
+let height = 40
+let gutter = clamp(width / 30, 2, 6)
+let columns = width - gutter * 2
+let rows = height - 2
+let tab_width = 4
+let scroll_off = clamp(rows / 5, 3, 10)
+let font_size = scale(14, 110)
+let line_height = scale(font_size, 130)
+let level = 3
+let verbose = enabled(level, 2)
+let debug = enabled(level, 5)
+let timeout = pick(verbose, 500, 1000)
+let retries = pick(debug, 10, 3)
+var checksum = 0
+checksum += width + height
+checksum += gutter * 3 + columns
+checksum += rows * 7 - tab_width
+checksum += scroll_off + font_size + line_height
+checksum += timeout / retries
+checksum += pick(verbose && !debug, 1, 0)
+bench.emit(checksum)

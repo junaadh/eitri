@@ -118,6 +118,9 @@ pub struct Interner {
     /// slots of lower-numbered symbols, because symbols are inserted (and
     /// rehashed) in index order and removed only from the top.
     table: Vec<u32>,
+    /// Symbols below this index survive `reset`: the predefined ones, plus
+    /// any made permanent with `commit` (such as host module names).
+    base: usize,
 }
 
 impl Default for Interner {
@@ -134,11 +137,13 @@ impl Interner {
             bytes: String::with_capacity(1024),
             entries: IndexVec::with_capacity(Self::INITIAL_SLOTS / 2),
             table: vec![0; Self::INITIAL_SLOTS],
+            base: 0,
         };
         for (index, text) in PREDEFINED.iter().enumerate() {
             let symbol = interner.intern(text);
             debug_assert_eq!(symbol.index_usize(), index, "duplicate predefined `{text}`");
         }
+        interner.commit();
         interner
     }
 
@@ -199,14 +204,21 @@ impl Interner {
         self.entries.is_empty()
     }
 
-    /// Forget every symbol added since construction, keeping allocations.
-    /// Predefined symbols remain.
+    /// Make every symbol interned so far permanent: later `reset`s keep
+    /// them. For spellings that outlive a compilation, such as the names in
+    /// registered host modules.
+    pub fn commit(&mut self) {
+        self.base = self.entries.len();
+    }
+
+    /// Forget every symbol added since the last `commit`, keeping
+    /// allocations. Predefined and committed symbols remain.
     pub fn reset(&mut self) {
-        let keep = PREDEFINED.len();
+        let keep = self.base;
         let added = self.entries.len() - keep;
         if added > self.table.len() / 8 {
-            // Many removals: clearing and reinserting the few predefined
-            // symbols is cheaper than probing for each removed one.
+            // Many removals: clearing and reinserting the kept symbols is
+            // cheaper than probing for each removed one.
             self.table.fill(0);
             self.entries.truncate(Symbol::from_u32(keep as u32));
             self.bytes.truncate(self.end_of(keep));
@@ -253,14 +265,22 @@ impl Interner {
         let mask = self.table.len() - 1;
         let tag = (hash >> 32) as u32;
         let mut slot = hash as usize & mask;
+        let text = text.as_bytes();
+        let bytes = self.bytes.as_bytes();
+        let entries = self.entries.as_slice();
         loop {
             let Some(index) = self.table[slot].checked_sub(1) else {
                 return Err(slot);
             };
-            let symbol = Symbol::from_u32(index);
-            let entry = self.entries[symbol];
-            if entry.tag == tag && self.resolve(symbol) == text {
-                return Ok(symbol);
+            let entry = entries[index as usize];
+            // The tag rejects almost every mismatch, so the byte comparison
+            // nearly always confirms a hit. Bytes, not `str`: equal bytes are
+            // equal spellings, and slicing bytes skips UTF-8 boundary checks.
+            if entry.tag == tag
+                && entry.len as usize == text.len()
+                && same_bytes(&bytes[entry.start as usize..][..text.len()], text)
+            {
+                return Ok(Symbol::from_u32(index));
             }
             slot = (slot + 1) & mask;
         }
@@ -285,6 +305,27 @@ impl Interner {
             }
             self.table[slot] = symbol.as_u32() + 1;
         }
+    }
+}
+
+/// Equality of two equal-length byte strings without a call to `memcmp`.
+///
+/// Spellings are short, where a library call costs more than the compare.
+/// Two overlapping loads cover a whole range of lengths: for 8 to 16 bytes,
+/// the first and last 8 bytes together cover every byte; likewise 4-byte
+/// loads for 4 to 7 bytes, and three byte loads for 1 to 3.
+#[inline(always)]
+fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    debug_assert_eq!(a.len(), b.len());
+    let n = b.len();
+    let word = |s: &[u8], at: usize| u64::from_le_bytes(s[at..at + 8].try_into().unwrap());
+    let half = |s: &[u8], at: usize| u32::from_le_bytes(s[at..at + 4].try_into().unwrap());
+    match n {
+        0 => true,
+        1..=3 => a[0] == b[0] && a[n / 2] == b[n / 2] && a[n - 1] == b[n - 1],
+        4..=7 => half(a, 0) == half(b, 0) && half(a, n - 4) == half(b, n - 4),
+        8..=16 => word(a, 0) == word(b, 0) && word(a, n - 8) == word(b, n - 8),
+        _ => a == b,
     }
 }
 
@@ -363,6 +404,36 @@ mod tests {
             retained,
             "steady state must not grow"
         );
+    }
+
+    #[test]
+    fn same_bytes_agrees_with_slice_equality() {
+        // Every length up to 40, with a single differing byte at every position.
+        for n in 0..40usize {
+            let a: Vec<u8> = (0..n as u8).map(|i| i.wrapping_mul(37) ^ 0x5a).collect();
+            assert!(same_bytes(&a, &a.clone()));
+            for at in 0..n {
+                let mut b = a.clone();
+                b[at] ^= 1;
+                assert!(!same_bytes(&a, &b), "length {n}, difference at {at}");
+            }
+        }
+    }
+
+    #[test]
+    fn committed_symbols_survive_reset() {
+        let mut interner = Interner::new();
+        let emit = interner.intern("emit");
+        interner.commit();
+        for count in [5, 3000] {
+            for i in 0..count {
+                interner.intern(&format!("local{i}"));
+            }
+            interner.reset();
+            assert_eq!(interner.get("emit"), Some(emit));
+            assert_eq!(interner.get("local0"), None);
+            assert_eq!(interner.get("while"), Some(kw::WHILE));
+        }
     }
 
     #[test]

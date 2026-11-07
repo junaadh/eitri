@@ -1,5 +1,4 @@
 //! host: test
-//! pending: T010
 import test from "test"
 test.emit(add(2, 3))
 test.emit(fact(20))

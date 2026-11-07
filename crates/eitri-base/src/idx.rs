@@ -188,6 +188,10 @@ impl<I: Idx, T> IndexVec<I, T> {
         self.raw.is_empty()
     }
 
+    pub fn reserve(&mut self, additional: usize) {
+        self.raw.reserve(additional);
+    }
+
     /// Allocated slots, for retained-memory accounting.
     #[inline]
     pub fn capacity(&self) -> usize {
@@ -237,6 +241,19 @@ impl<I: Idx, T> IndexVec<I, T> {
     /// Drop everything, keeping the allocation for the next compilation.
     pub fn clear(&mut self) {
         self.raw.clear();
+    }
+
+    /// Set the length to `len`, filling new slots with `value`: a side table
+    /// sized to another vector in one step.
+    ///
+    /// # Panics
+    /// If `len` exceeds the id space.
+    pub fn resize(&mut self, len: usize, value: T)
+    where
+        T: Clone,
+    {
+        assert!(len <= MAX_INDEX as usize + 1, "index overflow");
+        self.raw.resize(len, value);
     }
 
     /// Grow with `fill` so that `id` is valid, for side tables keyed by ids

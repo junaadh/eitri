@@ -1,0 +1,8 @@
+# No reference counting anywhere in the codebase: ownership is explicit,
+# shared state is borrowed from the caller's context (AGENTS.md).
+disallowed-types = [
+    { path = "std::rc::Rc", reason = "no reference counting: own it or borrow it from the context" },
+    { path = "std::rc::Weak", reason = "no reference counting: own it or borrow it from the context" },
+    { path = "std::sync::Arc", reason = "no reference counting: own it or borrow it from the context" },
+    { path = "std::sync::Weak", reason = "no reference counting: own it or borrow it from the context" },
+]

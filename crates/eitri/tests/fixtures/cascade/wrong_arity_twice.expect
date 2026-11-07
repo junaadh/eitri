@@ -1,0 +1,2 @@
+error[E0304] 59..65: `add` takes 2 arguments, found 1
+error[E0304] 78..90: `add` takes 2 arguments, found 3

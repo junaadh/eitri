@@ -9,12 +9,14 @@
 //! The crate has no global state: sources are registered in a caller-owned
 //! [`Files`] and the renderer's line cache lives in the renderer.
 
+mod codes;
 mod diagnostic;
 mod files;
 mod render;
 mod width;
 
-pub use diagnostic::{Code, Diagnostic, Diagnostics, Label, LabelStyle, Note, NoteKind, Severity};
+pub use codes::Code;
+pub use diagnostic::{Diagnostic, Diagnostics, Label, LabelStyle, Note, NoteKind, Severity};
 pub use eitri_base::{SourceId, Span};
 pub use files::{File, Files, Location};
 pub use render::{Chars, DisplayStyle, RenderOptions, Renderer, Styles};

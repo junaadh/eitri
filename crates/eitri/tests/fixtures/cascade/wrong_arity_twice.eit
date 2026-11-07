@@ -1,0 +1,5 @@
+fn add(a: i64, b: i64) -> i64 {
+    return a + b
+}
+let r = add(1)
+let s = r + add(1, 2, 3)

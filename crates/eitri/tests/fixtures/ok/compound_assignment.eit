@@ -1,5 +1,4 @@
 //! host: test
-//! pending: T010
 import test from "test"
 var x = 20
 x += 5

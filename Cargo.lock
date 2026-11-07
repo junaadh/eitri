@@ -7,7 +7,12 @@ name = "eitri"
 version = "0.0.0"
 dependencies = [
  "eitri-base",
+ "eitri-bytecode",
+ "eitri-check",
  "eitri-diag",
+ "eitri-lower",
+ "eitri-syntax",
+ "eitri-vm",
 ]
 
 [[package]]
@@ -15,8 +20,51 @@ name = "eitri-base"
 version = "0.0.0"
 
 [[package]]
+name = "eitri-bytecode"
+version = "0.0.0"
+dependencies = [
+ "eitri-base",
+]
+
+[[package]]
+name = "eitri-check"
+version = "0.0.0"
+dependencies = [
+ "eitri-base",
+ "eitri-diag",
+ "eitri-syntax",
+]
+
+[[package]]
 name = "eitri-diag"
 version = "0.0.0"
 dependencies = [
  "eitri-base",
+]
+
+[[package]]
+name = "eitri-lower"
+version = "0.0.0"
+dependencies = [
+ "eitri-base",
+ "eitri-bytecode",
+ "eitri-check",
+ "eitri-diag",
+ "eitri-syntax",
+]
+
+[[package]]
+name = "eitri-syntax"
+version = "0.0.0"
+dependencies = [
+ "eitri-base",
+ "eitri-diag",
+]
+
+[[package]]
+name = "eitri-vm"
+version = "0.0.0"
+dependencies = [
+ "eitri-base",
+ "eitri-bytecode",
 ]

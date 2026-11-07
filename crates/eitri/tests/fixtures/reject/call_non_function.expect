@@ -1,1 +1,1 @@
-error[E0304] 36..39: `x` is not a function
+error[E0304] 18..21: `x` is not a function

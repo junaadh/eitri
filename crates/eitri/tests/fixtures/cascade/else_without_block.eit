@@ -1,0 +1,2 @@
+let v = if true { 1 } else
+let w = 2

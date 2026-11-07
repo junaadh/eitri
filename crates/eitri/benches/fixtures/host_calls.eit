@@ -1,0 +1,8 @@
+import bench from "bench"
+var total = 0
+var i = 0
+while i < 1000 {
+    total += bench.id(i)
+    i += 1
+}
+bench.emit(total)

@@ -1,1 +1,1 @@
-error[E0201] 26..27: unknown name `y`
+error[E0201] 8..9: unknown name `y`

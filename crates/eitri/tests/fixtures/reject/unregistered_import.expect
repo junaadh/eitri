@@ -1,1 +1,1 @@
-error[E0205] 35..41: unresolved import `test`
+error[E0205] 17..23: unresolved import `test`

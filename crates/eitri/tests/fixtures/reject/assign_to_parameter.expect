@@ -1,1 +1,1 @@
-error[E0303] 45..46: cannot assign to `n`: it is not a `var` binding
+error[E0303] 27..28: cannot assign to `n`: it is not a `var` binding

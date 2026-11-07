@@ -1,1 +1,1 @@
-error[E0203] 22..25: `i64` is a type name and cannot be used as a name
+error[E0203] 4..7: `i64` is a type name and cannot be used as a name

@@ -1,5 +1,4 @@
 //! depth: 3
-//! pending: T010
 fn down(n: i64) -> i64 {
     return down(n + 1) + 1
 }

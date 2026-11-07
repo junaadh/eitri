@@ -1,1 +1,1 @@
-error[E0101] 28..44: unterminated block comment
+error[E0101] 10..26: unterminated block comment

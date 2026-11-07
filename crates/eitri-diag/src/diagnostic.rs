@@ -4,6 +4,8 @@ use std::fmt;
 
 use eitri_base::{SourceId, Span};
 
+use crate::codes::Code;
+
 /// How serious a report is. A fault is a runtime failure with a trace;
 /// warnings and errors come from checking, before anything runs; a bug is a
 /// broken internal invariant (an internal compiler or VM error), reported
@@ -30,27 +32,6 @@ impl Severity {
 impl fmt::Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-
-/// A stable diagnostic code, displayed as `E` and four digits (`E0301`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Code(u16);
-
-impl Code {
-    pub const fn new(number: u16) -> Self {
-        assert!(number <= 9999, "codes have four digits");
-        Self(number)
-    }
-
-    pub const fn number(self) -> u16 {
-        self.0
-    }
-}
-
-impl fmt::Display for Code {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "E{:04}", self.0)
     }
 }
 

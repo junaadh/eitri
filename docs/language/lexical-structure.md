@@ -214,7 +214,8 @@ The lexer emits a `NEWLINE` token at a line break only when **both** hold:
    try  try?  await  spawn
    ```
 
-Consecutive newlines count as one.
+Consecutive newlines count as one. A line break inside a block comment
+counts as a line break, so `a /* … ⏎ … */ b` is two statements.
 
 ### Consequences
 

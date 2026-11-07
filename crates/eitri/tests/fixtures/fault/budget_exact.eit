@@ -1,6 +1,5 @@
 //! host: test
 //! budget: 3
-//! pending: T010
 import test from "test"
 var i = 0
 while i < 3 {

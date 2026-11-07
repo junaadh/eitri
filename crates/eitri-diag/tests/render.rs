@@ -18,7 +18,7 @@ fn single_primary_label() {
     let mut files = Files::new();
     let id = files.add("init.eit", text);
     let d = Diagnostic::error(
-        Code::new(301),
+        Code::TypeMismatch,
         "type mismatch: expected `i64`, found `bool`",
     )
     .with_label(Label::primary(id, span_of(text, "true")).with_message("expected `i64`"));
@@ -39,7 +39,7 @@ fn primary_and_secondary_on_one_line_with_notes() {
     let text = "let x: i64 = true\n";
     let mut files = Files::new();
     let id = files.add("init.eit", text);
-    let d = Diagnostic::error(Code::new(301), "type mismatch")
+    let d = Diagnostic::error(Code::TypeMismatch, "type mismatch")
         .with_label(Label::primary(id, span_of(text, "true")).with_message("found `bool`"))
         .with_label(
             Label::secondary(id, span_of(text, "i64")).with_message("expected because of this"),
@@ -69,7 +69,7 @@ fn several_stacked_messages() {
     let text = "f(a, b, c)\n";
     let mut files = Files::new();
     let id = files.add("m.eit", text);
-    let d = Diagnostic::error(Code::new(304), "bad call")
+    let d = Diagnostic::error(Code::ArgumentCount, "bad call")
         .with_label(Label::secondary(id, span_of(text, "a")).with_message("one"))
         .with_label(Label::secondary(id, span_of(text, "b")).with_message("two"))
         .with_label(Label::primary(id, span_of(text, "f(a, b, c)")).with_message("whole"));
@@ -95,7 +95,7 @@ fn lines_far_apart_are_elided_and_near_lines_are_shown() {
     let mut files = Files::new();
     let id = files.add("dup.eit", text);
     let second = text.rfind("fn f").unwrap() as u32 + 3;
-    let d = Diagnostic::error(Code::new(202), "duplicate function `f`")
+    let d = Diagnostic::error(Code::DuplicateName, "duplicate function `f`")
         .with_label(Label::primary(id, Span::new(second, second + 1)).with_message("redefined"))
         .with_label(Label::secondary(id, Span::new(3, 4)).with_message("first defined here"))
         .with_label(Label::secondary(id, span_of(text, "1")));
@@ -121,7 +121,7 @@ fn gap_of_one_line_is_printed() {
     let text = "a\nb\nc\n";
     let mut files = Files::new();
     let id = files.add("g.eit", text);
-    let d = Diagnostic::error(Code::new(1), "gap")
+    let d = Diagnostic::error(Code::Unsupported, "gap")
         .with_label(Label::primary(id, Span::new(0, 1)))
         .with_label(Label::secondary(id, Span::new(4, 5)));
     assert_eq!(
@@ -145,7 +145,7 @@ fn multi_line_span_draws_a_bracket() {
     let mut files = Files::new();
     let id = files.add("if.eit", text);
     let start = text.find("if").unwrap() as u32;
-    let d = Diagnostic::error(Code::new(401), "branches differ").with_label(
+    let d = Diagnostic::error(Code::IfWithoutElse, "branches differ").with_label(
         Label::primary(id, Span::new(start, text.len() as u32 - 1)).with_message("this `if`"),
     );
     assert_eq!(
@@ -170,7 +170,7 @@ fn wide_and_zero_width_characters_align() {
     let text = "\"ދިވެހި\" + 💥 + x\n";
     let mut files = Files::new();
     let id = files.add("u.eit", text);
-    let d = Diagnostic::error(Code::new(201), "unknown name `x`")
+    let d = Diagnostic::error(Code::UnknownName, "unknown name `x`")
         .with_label(Label::primary(id, span_of(text, "x")))
         .with_label(Label::secondary(id, span_of(text, "💥")));
     // Six Thaana letters with three zero-width vowel signs take 3 columns.
@@ -191,7 +191,7 @@ fn tabs_expand_consistently() {
     let text = "\tlet y = z\n";
     let mut files = Files::new();
     let id = files.add("t.eit", text);
-    let d = Diagnostic::error(Code::new(201), "unknown name `z`")
+    let d = Diagnostic::error(Code::UnknownName, "unknown name `z`")
         .with_label(Label::primary(id, span_of(text, "z")));
     assert_eq!(
         render(&files, &d),
@@ -210,7 +210,7 @@ fn empty_span_at_end_of_input() {
     let text = "f(1";
     let mut files = Files::new();
     let id = files.add("eof.eit", text);
-    let d = Diagnostic::error(Code::new(102), "expected `)`, found end of input")
+    let d = Diagnostic::error(Code::Syntax, "expected `)`, found end of input")
         .with_label(Label::primary(id, Span::empty(3)).with_message("expected `)`"));
     assert_eq!(
         render(&files, &d),
@@ -229,7 +229,7 @@ fn labels_in_other_files_get_their_own_section() {
     let mut files = Files::new();
     let main = files.add("init.eit", "import ui from \"ui\"\nui.open(1)\n");
     let decl = files.add("ui.eit", "pub fn open() -> void\n");
-    let d = Diagnostic::error(Code::new(304), "`open` takes 0 arguments, found 1")
+    let d = Diagnostic::error(Code::ArgumentCount, "`open` takes 0 arguments, found 1")
         .with_label(Label::secondary(decl, Span::new(7, 11)).with_message("declared here"))
         .with_label(Label::primary(main, Span::new(20, 30)));
     assert_eq!(
@@ -277,7 +277,7 @@ fault: integer overflow
 #[test]
 fn no_labels_and_unknown_sources() {
     let files = Files::new();
-    let d = Diagnostic::error(Code::new(205), "unresolved import `x`")
+    let d = Diagnostic::error(Code::UnresolvedImport, "unresolved import `x`")
         .with_label(Label::primary(
             eitri_diag::SourceId::from_u32(9),
             Span::new(0, 1),
@@ -295,7 +295,7 @@ fn bad_spans_are_clamped() {
     let mut files = Files::new();
     let id = files.add("c.eit", text);
     // Starts inside the emoji and ends past the input.
-    let d = Diagnostic::error(Code::new(101), "clamped")
+    let d = Diagnostic::error(Code::Lexical, "clamped")
         .with_label(Label::primary(id, Span::new(2, 99)));
     assert_eq!(
         render(&files, &d),
@@ -308,7 +308,7 @@ fn colors_are_opt_in() {
     let text = "x\n";
     let mut files = Files::new();
     let id = files.add("c.eit", text);
-    let d = Diagnostic::error(Code::new(201), "unknown name `x`")
+    let d = Diagnostic::error(Code::UnknownName, "unknown name `x`")
         .with_label(Label::primary(id, Span::new(0, 1)));
     let options = RenderOptions {
         color: true,
@@ -341,8 +341,8 @@ fn locations_count_characters() {
 #[test]
 fn diagnostics_cap_counts_overflow() {
     let mut all = Diagnostics::new(2);
-    for i in 0..5 {
-        all.push(Diagnostic::error(Code::new(i), "e"));
+    for _ in 0..5 {
+        all.push(Diagnostic::error(Code::Lexical, "e"));
     }
     assert_eq!(all.len(), 2);
     assert_eq!(all.dropped(), 3);
@@ -360,7 +360,7 @@ fn pick() -> (Files<'static>, Diagnostic) {
     let other = files.add("ui.eit", "pub fn open() -> void\n");
     let if_start = PICK.find("if ready").unwrap() as u32;
     let if_end = PICK.find("    }\n    return").unwrap() as u32 + 5;
-    let d = Diagnostic::error(Code::new(301), "`if` branches have different types")
+    let d = Diagnostic::error(Code::TypeMismatch, "`if` branches have different types")
         .with_label(
             Label::primary(id, span_of(PICK, "false")).with_message("expected `i64`, found `bool`"),
         )
@@ -509,7 +509,7 @@ fn context_lines_around_labels() {
     let text = "a\nb\nc\nd\ne\n";
     let mut files = Files::new();
     let id = files.add("ctx.eit", text);
-    let d = Diagnostic::warning(Code::new(9), "unused")
+    let d = Diagnostic::warning(Code::Limit, "unused")
         .with_label(Label::primary(id, span_of(text, "c")));
     let options = RenderOptions {
         before_label_lines: 1,
@@ -519,7 +519,7 @@ fn context_lines_around_labels() {
     assert_eq!(
         Renderer::new(&files, options).render(&d),
         "\
-warning[E0009]: unused
+warning[E0002]: unused
   ╭─ ctx.eit:3:1
   │
 2 │ b
