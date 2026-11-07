@@ -3,6 +3,7 @@
 mod context;
 
 pub use context::{Compiled, Context, FaultReport, RunError, TraceFrame};
+pub use eitri_bytecode::text::PrintOptions;
 /// The shared diagnostic model and renderer, re-exported so hosts need no
 /// separate dependency.
 pub use eitri_diag as diag;

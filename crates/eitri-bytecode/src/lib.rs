@@ -8,6 +8,7 @@ mod encoding;
 mod function;
 pub mod oracle;
 pub mod spec;
+pub mod text;
 mod verify;
 
 pub use asm::{AsmError, Assembler, Label, imm_complement};

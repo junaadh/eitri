@@ -1,7 +1,8 @@
 # Implementation tasks
 
-Status: T001–T008 and T046 are complete; T009 and T010 are implemented
-with open completion checks (below); T012, T045, and T047 are in progress. Source
+Status: T001–T008, T045, and T046 are complete; T009 and T010 are
+implemented with open completion checks (below); T012 and T047 are in
+progress. Source
 now runs end to end: lex, parse, check, lower, verify (debug builds), and
 interpret.
 Unchecked boxes describe work still to do. This is the executable work breakdown for the
@@ -442,7 +443,7 @@ concurrent implementation.
 
 ### T045 — Build the test and fixture infrastructure
 
-- [ ] Depends on: T001.
+- [x] Depends on: T001.
 - Refs: [Performance: method](implementation/performance.md#method).
 - Define one fixture format: source files, the host bindings it may use,
   and the expected outcome (result value, structured diagnostics, fault with
@@ -460,7 +461,19 @@ concurrent implementation.
   module, and an expectation format for effects, `ok`, diagnostics, and
   faults with traces, validated even while pending. Execution adapters
   landed with T010; the program-level oracle adapter (T009) runs every
-  compiling fixture. Remaining: disassembly snapshots.
+  compiling fixture.
+- Complete 2026-11-07: disassembly snapshots are golden `.eits` listings
+  of the five benchmark workloads (`crates/eitri/tests/eits/`), updated
+  only by `EITRI_BLESS=1 cargo test -p eitri --test eits golden`. `.eits`
+  ([Bytecode: text form](implementation/bytecode.md#text-form-eits)) is
+  printed and parsed by `eitri_bytecode::text`; every compiling fixture,
+  benchmark workload, encoding-limit program, and differential case prints
+  and assembles back to the same text, the same words (annotated listing),
+  and the same behavior on both interpreters (30,000 differential cases
+  locally). A third fuzz target mutates `.eits` text (300,000 cases each in
+  debug and release); its first run found a slot past `%r65535` that
+  overflowed the assembler's frame count in debug builds, now rejected
+  (`E0901`) and saturated in the assembler.
 
 ### T046 — Pin the toolchain and set the `unsafe` policy
 
@@ -659,6 +672,12 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: commands reproduce the report; supported features and limitations
   are documented; results state whether targets were achieved. Stage 1 can
   complete even if the performance hypothesis needs revision.
+- Progress 2026-11-07: the CLI exposes each stage: `run` and `check`
+  (`.eit` or `.eits`), `asm [--annotate] [-o]`, `verify`, and
+  `dump tokens|ast`, with `--host <path>=<file>` to register declaration
+  files. `Context::assemble`, `Context::disassemble`, and
+  `Context::dump_tokens|dump_ast` back them; the CLI does only file and
+  process I/O.
 
 ### T048 — Track performance across targets
 

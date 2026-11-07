@@ -138,7 +138,12 @@ fn corpus() -> Vec<Vec<u8>> {
 /// Edits of a corpus entry: half the time one edit of a program that
 /// compiles, so many mutants still run and are compared; otherwise one to
 /// four edits of any entry.
-fn mutate_source(rng: &mut Rng, corpus: &[Vec<u8>], compiling: &[usize]) -> Vec<u8> {
+fn mutate_source(
+    rng: &mut Rng,
+    corpus: &[Vec<u8>],
+    compiling: &[usize],
+    dictionary: &[&str],
+) -> Vec<u8> {
     let (mut data, edits) = if rng.below(2) == 0 {
         (corpus[compiling[rng.below(compiling.len())]].clone(), 1)
     } else {
@@ -169,7 +174,7 @@ fn mutate_source(rng: &mut Rng, corpus: &[Vec<u8>], compiling: &[usize]) -> Vec<
                 data.extend_from_slice(&other[from..]);
             }
             _ => {
-                let token = DICTIONARY[rng.below(DICTIONARY.len())].as_bytes();
+                let token = dictionary[rng.below(dictionary.len())].as_bytes();
                 data.splice(at..at, token.iter().copied());
             }
         }
@@ -223,7 +228,7 @@ fn mutated_sources() {
         .collect();
     let cases = cases();
     let compiled = drive(cases, |seed| {
-        let data = mutate_source(&mut Rng(seed), &corpus, &compiling);
+        let data = mutate_source(&mut Rng(seed), &corpus, &compiling, DICTIONARY);
         let report = || format!("seed {seed}, input {:?}", String::from_utf8_lossy(&data));
         match panic::catch_unwind(AssertUnwindSafe(|| fuzz::source(&data))) {
             Ok(compiled) => compiled,
@@ -234,6 +239,90 @@ fn mutated_sources() {
         }
     });
     eprintln!("{cases} mutated sources, {compiled} compiled and agreed");
+}
+
+/// `.eits` tokens worth inserting: directives, mnemonics, slots at the
+/// `WIDE` boundary, labels, names, and literals at the load-form edges.
+const ASSEMBLY: &[&str] = &[
+    "define",
+    "declare",
+    "frame(",
+    ")",
+    "(",
+    "{",
+    "}",
+    ",",
+    ":",
+    "=",
+    "\n",
+    "%r0",
+    "%r1",
+    "%r255",
+    "%r256",
+    "%r65535",
+    "%r65536",
+    "%r70000",
+    "%r4294967295",
+    "label %bb0",
+    "label %bb1",
+    "%bb9",
+    "bb1:",
+    "@<module>",
+    "@f0",
+    "@test.emit",
+    "@test.reenter",
+    "@\"",
+    "i64",
+    "bool",
+    "void",
+    "true",
+    "ldi",
+    "ldk",
+    "ldk_x",
+    "mov",
+    "add.chk.s",
+    "div.s",
+    "cbi.lt",
+    "cbi.gt",
+    "cb.le",
+    "tb.true",
+    "j",
+    "j_x",
+    "wide",
+    "ret",
+    "call.script",
+    "call.host",
+    "32767",
+    "32768",
+    "-129",
+    "127",
+    "9223372036854775807",
+    ";",
+];
+
+#[test]
+fn mutated_assembly() {
+    // The printed text of every program the corpus compiles.
+    let texts: Vec<Vec<u8>> = corpus()
+        .iter()
+        .filter_map(|data| fuzz::print(std::str::from_utf8(data).ok()?))
+        .map(String::into_bytes)
+        .collect();
+    assert!(texts.len() > 30, "the corpus compiles");
+    let all: Vec<usize> = (0..texts.len()).collect();
+    let cases = cases();
+    let assembled = drive(cases, |seed| {
+        let data = mutate_source(&mut Rng(seed), &texts, &all, ASSEMBLY);
+        let report = || format!("seed {seed}, input {:?}", String::from_utf8_lossy(&data));
+        match panic::catch_unwind(AssertUnwindSafe(|| fuzz::assembly(&data))) {
+            Ok(assembled) => assembled,
+            Err(payload) => {
+                eprintln!("{}", report());
+                panic::resume_unwind(payload)
+            }
+        }
+    });
+    eprintln!("{cases} mutated assembly texts, {assembled} assembled, verified, and agreed");
 }
 
 #[test]

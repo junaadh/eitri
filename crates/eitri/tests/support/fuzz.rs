@@ -73,6 +73,38 @@ pub fn source(data: &[u8]) -> bool {
     }
 }
 
+/// `.eits` text: assembling never panics, and code that assembles (and so
+/// verifies) runs on both interpreters with equal outcomes. Returns
+/// whether it assembled.
+pub fn assembly(data: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(data) else {
+        return false;
+    };
+    let mut context = super::eits::context();
+    context.set_budget(LIMITS.budget);
+    context.set_depth(LIMITS.depth);
+    let Ok(compiled) = context.assemble(text) else {
+        return false;
+    };
+    let mut outcomes = [false, true].map(|threaded| {
+        context.set_threaded(threaded);
+        context.execute(&compiled, &mut Echo)
+    });
+    let [portable, threaded] = &mut outcomes;
+    assert_eq!(
+        portable, threaded,
+        "the interpreters disagree on assembled code"
+    );
+    true
+}
+
+/// The `.eits` text of `source`, if it compiles.
+pub fn print(source: &str) -> Option<String> {
+    let mut context = super::eits::context();
+    let compiled = context.compile(source).ok()?;
+    Some(context.disassemble(&compiled, eitri::PrintOptions::default()))
+}
+
 /// A compiled program and the host signatures it was verified against.
 pub struct Compiled {
     pub program: Program,

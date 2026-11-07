@@ -91,6 +91,8 @@ fn check(seed: u64, source: &str, setup: &Setup) -> Result<String, String> {
             "seed {seed}: the generator produced a rejected program\n{outcome}{source}"
         ));
     }
+    support::eits::round_trip(source)
+        .map_err(|failure| format!("seed {seed}: {failure}\n{source}"))?;
     Ok(outcome)
 }
 

@@ -73,6 +73,11 @@ codes! {
         IfWithoutElse = 401: "`if` used as a value without `else`, or a branch without a value",
         MissingReturn = 402: "Missing `return` in a function with a result",
     }
+    "bytecode assembly" {
+        AsmSyntax = 901: "Malformed `.eits` assembly text",
+        AsmMismatch = 902: "`.eits` that contradicts its program: an unknown or duplicate name, a mismatched type, slot, frame size, or encoding, or an unregistered host function",
+        AsmRejected = 903: "Bytecode the verifier rejects",
+    }
 }
 
 impl fmt::Display for Code {

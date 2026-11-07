@@ -1,0 +1,23 @@
+; host_calls.eit
+
+declare void @bench.emit(i64)
+declare i64 @bench.id(i64)
+
+define void @<module>() frame(4) {
+bb0:
+    %r0 = ldi i64 0
+    %r1 = ldi i64 0
+bb1:
+    %r2 = ldi i64 1000
+    cb.le %r2, %r1, label %bb3
+bb2:
+    %r2 = mov %r1
+    %r3 = call.host i64 @bench.id(i64 %r2)
+    %r0 = add.chk.s %r0, %r3
+    %r1 = addi.chk.s %r1, 1
+    j label %bb1
+bb3:
+    %r2 = mov %r0
+    call.host void @bench.emit(i64 %r2)
+    ret
+}

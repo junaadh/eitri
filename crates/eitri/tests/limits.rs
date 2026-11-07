@@ -18,7 +18,13 @@ fn run(source: &str) -> String {
         test_host: true,
         ..Setup::default()
     };
-    support::outcome(source, &setup).unwrap_or_else(|disagreement| panic!("{disagreement}"))
+    let outcome =
+        support::outcome(source, &setup).unwrap_or_else(|disagreement| panic!("{disagreement}"));
+    // The long encodings must survive `.eits` too.
+    if let Err(failure) = support::eits::round_trip(source) {
+        panic!("{failure}");
+    }
+    outcome
 }
 
 fn effects(values: impl IntoIterator<Item = i64>) -> String {

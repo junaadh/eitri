@@ -2,6 +2,7 @@
 //! syntax tree, and the parser (T008).
 
 pub mod ast;
+pub mod dump;
 mod lexer;
 mod parser;
 mod token;

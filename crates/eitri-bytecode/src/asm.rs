@@ -119,7 +119,8 @@ impl Assembler {
     }
 
     fn uses(&mut self, slot: u32) {
-        self.frame = self.frame.max(slot + 1);
+        // Saturating: an out-of-range slot is rejected when it is encoded.
+        self.frame = self.frame.max(slot.saturating_add(1));
     }
 
     /// Emit an instruction that is not a branch, call, or literal load.
@@ -453,7 +454,7 @@ fn short_role(branch: Branch) -> Role {
     }
 }
 
-fn compare_op(cond: Cond) -> Op {
+pub(crate) fn compare_op(cond: Cond) -> Op {
     match cond {
         Cond::Eq => Op::CbEq,
         Cond::Ne => Op::CbNe,
@@ -480,7 +481,7 @@ pub fn imm_complement(cond: Cond, imm: i64) -> Option<(Cond, i64)> {
     (fits(imm) && fits(other)).then_some((complement, other))
 }
 
-fn compare_imm_op(cond: Cond) -> Op {
+pub(crate) fn compare_imm_op(cond: Cond) -> Op {
     match cond {
         Cond::Eq => Op::CbiEq,
         Cond::Ne => Op::CbiNe,
@@ -490,7 +491,7 @@ fn compare_imm_op(cond: Cond) -> Op {
     }
 }
 
-fn test_op(test: Test) -> Op {
+pub(crate) fn test_op(test: Test) -> Op {
     match test {
         Test::True => Op::TbTrue,
         Test::False => Op::TbFalse,

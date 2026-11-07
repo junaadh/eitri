@@ -79,6 +79,45 @@ fault: integer overflow
 Exit codes: `0` success, `1` compile error, `2` usage or I/O error, `3`
 runtime fault.
 
+Every stage is exposed as a subcommand:
+
+| Command | Does |
+|---|---|
+| `eitri run <file.eit\|file.eits>` | Compile (or assemble) and run; `eitri <file>` is the same |
+| `eitri check <file.eit\|file.eits>` | Compile (or assemble and verify) without running |
+| `eitri asm [--annotate] [-o <out>] <file.eit>` | Print the compiled bytecode as `.eits` |
+| `eitri verify <file.eits>` | Assemble and verify hand-written bytecode |
+| `eitri dump tokens\|ast <file.eit>` | Print the token stream or the syntax tree |
+
+`--host <path>=<file>` registers a host module from a declaration file, so
+scripts that import one can be compiled and inspected (`run` implements no
+host functions, so calling one faults).
+
+`.eits` is the text form of bytecode, and it reads like LLVM IR over Eitri's
+actual register machine (`%rN` are frame slots, not SSA values):
+
+```llvm
+define i64 @fib(i64 %r1) frame(6) {
+bb0:
+    cbi.gt %r1, 1, label %bb2
+bb1:
+    %r0 = mov %r1
+    ret
+bb2:
+    %r2 = subi.chk.s %r1, 1
+    %r3 = call.script i64 @fib(i64 %r2)
+    %r4 = subi.chk.s %r1, 2
+    %r5 = call.script i64 @fib(i64 %r4)
+    %r0 = add.chk.s %r3, %r5
+    ret
+}
+```
+
+It is also an input: `asm` output assembles back to the same words, and
+hand-written `.eits` is verified before anything runs. `--annotate` adds
+each instruction's PC, words, call site, and source span. The format is in
+[Bytecode: text form](docs/implementation/bytecode.md#text-form-eits).
+
 ### Embedding
 
 The host declares what scripts may call, then answers those calls by index.
@@ -246,6 +285,15 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo test --locked -p eitri --test fixtures
 cargo test --locked -p eitri --test differential
+cargo test --locked -p eitri --test eits
+```
+
+The golden `.eits` listings of the benchmark workloads
+(`crates/eitri/tests/eits/`) change only through an explicit, reviewed
+update:
+
+```sh
+EITRI_BLESS=1 cargo test --locked -p eitri --test eits golden
 ```
 
 Stress the differential test with more random programs, or rerun one case
@@ -258,8 +306,10 @@ EITRI_DIFF_SEED=1234 cargo test --locked -p eitri --test differential -- --nocap
 
 The default suite also runs `limits` (programs large enough for `WIDE`,
 `J_X`, and `LDK_X`, and the locals limit), `lifecycle` (a warm context's
-heap stays constant over repeated runs; a dropped one leaves nothing), and
-`fuzz` (seeded mutations of the corpus through the compiler and of compiled
+heap stays constant over repeated runs; a dropped one leaves nothing),
+`eits` (every compiling program prints as `.eits` and assembles back to the
+same words and behavior), and `fuzz` (seeded mutations of the corpus
+through the compiler, of `.eits` text through the assembler, and of compiled
 code through the verifier and both interpreters). Stress the fuzzer with:
 
 ```sh

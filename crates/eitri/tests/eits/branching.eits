@@ -1,0 +1,76 @@
+; branching.eit
+
+declare void @bench.emit(i64)
+
+define void @<module>() frame(4) {
+bb0:
+    %r0 = ldi i64 0
+    %r1 = ldi i64 0
+bb1:
+    %r2 = ldi i64 1000
+    cb.le %r2, %r1, label %bb14
+bb2:
+    %r3 = mov %r1
+    %r2 = call.script i64 @classify(i64 %r3)
+    cbi.lt %r2, 3, label %bb4
+bb3:
+    %r3 = ldi i64 2
+    %r3 = rem.s %r1, %r3
+    cbi.eq %r3, 0, label %bb6
+bb4:
+    cbi.ne %r2, 1, label %bb7
+bb5:
+    %r3 = ldi i64 500
+    cb.le %r1, %r3, label %bb7
+bb6:
+    %r0 = add.chk.s %r0, %r2
+    j label %bb13
+bb7:
+    cbi.eq %r2, 2, label %bb9
+bb8:
+    %r0 = subi.chk.s %r0, 1
+    j label %bb13
+bb9:
+    cbi.gt %r1, 99, label %bb11
+bb10:
+    %r3 = ldi i64 7
+    j label %bb12
+bb11:
+    %r3 = ldi i64 5
+bb12:
+    %r0 = add.chk.s %r0, %r3
+bb13:
+    %r1 = addi.chk.s %r1, 1
+    j label %bb1
+bb14:
+    %r2 = mov %r0
+    call.host void @bench.emit(i64 %r2)
+    ret
+}
+
+define i64 @classify(i64 %r1) frame(3) {
+bb0:
+    %r2 = ldi i64 15
+    %r2 = rem.s %r1, %r2
+    cbi.ne %r2, 0, label %bb2
+bb1:
+    %r0 = ldi i64 4
+    ret
+bb2:
+    %r2 = ldi i64 5
+    %r2 = rem.s %r1, %r2
+    cbi.ne %r2, 0, label %bb4
+bb3:
+    %r0 = ldi i64 3
+    ret
+bb4:
+    %r2 = ldi i64 3
+    %r2 = rem.s %r1, %r2
+    cbi.ne %r2, 0, label %bb6
+bb5:
+    %r0 = ldi i64 2
+    ret
+bb6:
+    %r0 = ldi i64 1
+    ret
+}

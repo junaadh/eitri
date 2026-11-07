@@ -1,7 +1,8 @@
-use eitri_base::{Interner, SourceId, Span};
-use eitri_bytecode::Callees;
+use eitri_base::{IndexVec, Interner, SourceId, Span};
+use eitri_bytecode::text::{self, HostDecl, PrintOptions};
+use eitri_bytecode::{CallTarget, Callees, FunctionId};
 use eitri_check::{CheckScratch, HostFnId, Hosts, Input};
-use eitri_diag::{Diagnostic, Diagnostics, Label};
+use eitri_diag::{Code, Diagnostic, Diagnostics, Label};
 use eitri_lower::{LowerScratch, Program};
 use eitri_syntax::{LexScratch, ModuleKind, ParseScratch};
 use eitri_vm::{Fault, Host, Limits, Location, VmScratch};
@@ -247,6 +248,166 @@ impl Context {
         )
         .map(drop)
         .map_err(|fault| report(program, fault, &self.hosts, &self.interner))
+    }
+}
+
+impl Context {
+    /// Assemble `.eits` text ([`Context::disassemble`]'s output, or written
+    /// by hand) into code this context can execute. Host functions are
+    /// resolved by qualified name against the registered host modules, and
+    /// every function is verified: the text is untrusted. Diagnostics
+    /// refer to `text` as [`Context::SOURCE`], and so do faults' traces.
+    pub fn assemble(&mut self, text: &str) -> Result<Compiled, Vec<Diagnostic>> {
+        let parsed = text::parse(text).map_err(|error| {
+            let code = if error.mismatch {
+                Code::AsmMismatch
+            } else {
+                Code::AsmSyntax
+            };
+            vec![
+                Diagnostic::error(code, error.message)
+                    .with_label(Label::primary(Self::SOURCE, error.span)),
+            ]
+        })?;
+        let mismatch = |span: Span, message: String| {
+            vec![
+                Diagnostic::error(Code::AsmMismatch, message)
+                    .with_label(Label::primary(Self::SOURCE, span)),
+            ]
+        };
+        // Each declared host function, as a registry index.
+        let registered = eitri_lower::host_signatures(&self.hosts);
+        let mut indices = Vec::with_capacity(parsed.hosts.len());
+        for (decl, &span) in parsed.hosts.iter().zip(&parsed.host_spans) {
+            let index = decl
+                .name
+                .rsplit_once('.')
+                .and_then(|(module, name)| self.host_index(module, name));
+            let Some(index) = index else {
+                return Err(mismatch(
+                    span,
+                    format!("host function `{}` is not registered", decl.name),
+                ));
+            };
+            if registered[index as usize] != decl.signature {
+                return Err(mismatch(
+                    span,
+                    format!(
+                        "`{}` is declared with a signature other than the registered one",
+                        decl.name
+                    ),
+                ));
+            }
+            indices.push(index);
+        }
+        let mut functions: IndexVec<FunctionId, _> = IndexVec::from_raw(parsed.functions);
+        for function in functions.as_mut_slice() {
+            for site in function.sites.iter_mut() {
+                if let CallTarget::Host(index) = &mut site.target {
+                    *index = indices[*index as usize];
+                }
+            }
+        }
+        let entry = FunctionId::from_u32(0);
+        let entry_ok = functions.get(entry).is_some_and(|f| {
+            &*f.name == text::MODULE
+                && f.signature.params.is_empty()
+                && f.signature.results.is_empty()
+        });
+        if !entry_ok {
+            let span = parsed.function_spans.first().copied().unwrap_or_default();
+            return Err(mismatch(
+                span,
+                format!(
+                    "the first function must be `define void @{}()`, the top-level code",
+                    text::MODULE
+                ),
+            ));
+        }
+        let program = Program { functions, entry };
+        let signatures = program.signatures();
+        let callees = Callees {
+            functions: &signatures,
+            hosts: &registered,
+        };
+        for f in program.functions.iter() {
+            if let Err(error) = eitri_bytecode::verify(f, &callees) {
+                let mut diagnostic = Diagnostic::error(
+                    Code::AsmRejected,
+                    format!("`{}` is rejected by the verifier: {error}", f.name),
+                );
+                if let Some(span) = f.span_at(error.pc) {
+                    diagnostic = diagnostic.with_label(Label::primary(Self::SOURCE, span));
+                }
+                return Err(vec![diagnostic]);
+            }
+        }
+        Ok(Compiled { program })
+    }
+
+    /// `compiled` as `.eits` text, with host functions named by this
+    /// context's registry. [`Context::assemble`] turns it back into the
+    /// same code.
+    pub fn disassemble(&self, compiled: &Compiled, options: PrintOptions) -> String {
+        let signatures = eitri_lower::host_signatures(&self.hosts);
+        let hosts: Vec<HostDecl> = signatures
+            .into_iter()
+            .enumerate()
+            .map(|(index, signature)| {
+                let host = self.hosts.function(HostFnId::from_u32(index as u32));
+                let module = &self.hosts.module(host.module).path;
+                HostDecl {
+                    name: format!("{module}.{}", self.interner.resolve(host.name)),
+                    signature,
+                }
+            })
+            .collect();
+        text::print(compiled.program.functions.as_slice(), &hosts, options)
+    }
+
+    /// The tokens of `source`, one per line: byte range, kind, and text.
+    pub fn dump_tokens(&mut self, source: &str) -> Result<String, Vec<Diagnostic>> {
+        self.interner.reset();
+        let mut diagnostics = Diagnostics::new(DIAGNOSTIC_LIMIT);
+        let tokens = eitri_syntax::lex(
+            source,
+            Self::SOURCE,
+            &mut self.interner,
+            &mut diagnostics,
+            &mut self.scratch.lex,
+        );
+        if diagnostics.has_errors() {
+            return Err(diagnostics.into_vec());
+        }
+        Ok(eitri_syntax::dump::tokens(source, tokens))
+    }
+
+    /// The syntax tree of `source`, indented, with byte ranges.
+    pub fn dump_ast(&mut self, source: &str) -> Result<String, Vec<Diagnostic>> {
+        self.interner.reset();
+        let mut diagnostics = Diagnostics::new(DIAGNOSTIC_LIMIT);
+        let tokens = eitri_syntax::lex(
+            source,
+            Self::SOURCE,
+            &mut self.interner,
+            &mut diagnostics,
+            &mut self.scratch.lex,
+        );
+        if diagnostics.has_errors() {
+            return Err(diagnostics.into_vec());
+        }
+        let ast = eitri_syntax::parse(
+            source,
+            Self::SOURCE,
+            tokens,
+            ModuleKind::Script,
+            &mut diagnostics,
+            &mut self.scratch.parse,
+        );
+        if diagnostics.has_errors() {
+            return Err(diagnostics.into_vec());
+        }
+        Ok(eitri_syntax::dump::ast(source, tokens, ast))
     }
 }
 

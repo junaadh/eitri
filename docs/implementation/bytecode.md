@@ -579,6 +579,76 @@ Each condition is one word and one dispatch. Lua 5.4 also uses one dispatch
 per condition, because its compare handler performs the following jump
 itself, but it spends two words on each: the compare and the jump.
 
+## Text form (`.eits`)
+
+`.eits` is the text form of bytecode: what `eitri asm` prints and what
+`Context::assemble` (`eitri run|check|verify` on a `.eits` file) accepts.
+It describes the assembler's logical instructions, not words: the
+assembler chooses `WIDE` prefixes, the literal load form, and short or far
+branches, exactly as it does for compiled code. Printing compiled code and
+assembling the text therefore gives the same words, a property the test
+suite checks for every program it compiles (`crates/eitri/tests/eits.rs`).
+The parser and printer are `eitri_bytecode::text`.
+
+```llvm
+; calls.eit
+
+declare void @bench.emit(i64)
+
+define void @<module>() frame(2) {
+bb0:
+    %r1 = ldi i64 15
+    %r0 = call.script i64 @fib(i64 %r1)
+    call.host void @bench.emit(i64 %r0)
+    ret
+}
+```
+
+**Lexical.** `;` starts a comment to the end of the line. Newlines are
+not significant. `%rN` is frame slot `N` (at most `%r65535`); `%name` is a
+label; `@name` is a function, where names may contain dots
+(`@bench.emit`), the entry function is `@<module>`, and any other name is
+written quoted (`@"name"`). Integers are decimal, optionally negative.
+
+**Declarations.** `declare <ret> @module.name(<types>)` names a host
+function by its qualified name and signature; assembling resolves it
+against the registered host modules and requires the same signature.
+`define <ret> @name(<type> %rN, …) frame(N) { … }` defines a function: its
+result type (`i64`, `bool`, or `void`), its parameters in their slots
+(results come first, so a function with a result has its parameters from
+`%r1`), and its frame size, which must equal the size the assembled code
+needs. Functions are numbered in definition order; the first must be
+`define void @<module>()`, the top-level code. Calls may refer to functions
+defined later.
+
+**Instructions.** A label is `name:` before an instruction. Each opcode's
+mnemonic is its specification name in lower case. Types appear only where
+the bytecode records them: literal loads, calls, and signatures. The forms:
+
+| Form | Example | Notes |
+|---|---|---|
+| Literal load | `%r1 = ldi i64 15`, `%r2 = ldi bool true`, `%r3 = ldk i64 100000` | The mnemonic must be the form the assembler chooses: `ldi` for 16-bit values, then `ldk` or `ldk_x` by constant-pool index |
+| Plain | `%r0 = add.chk.s %r3, %r5`, `%r2 = subi.chk.s %r1, 1`, `%r0 = mov %r1` | Operands follow the opcode's roles: slots as `%rN`, immediates as integers. A destination is written `%rN =` |
+| Branch | `cb.lt %r1, %r2, label %bb3`, `cbi.gt %r1, 1, label %bb3`, `tb.true %r1, label %bb3` | Falls through when not taken. A far branch is still written once: the assembler emits its complement over a `J_X` |
+| Jump | `j label %bb3` | `J` or `J_X` by distance; `j_x` and `wide` are never written |
+| Call | `%r3 = call.script i64 @fib(i64 %r2)`, `call.host void @bench.emit(i64 %r0)` | Arguments must be consecutive slots; a callee with a result needs a destination, and one without must not have one |
+| Return | `ret` | Results are in the first slots of the frame |
+
+The printer names blocks `bb0`, `bb1`, … in PC order, starting a block at
+the entry, at every branch target, and after every branch and return. Input
+may name labels freely, except like slots (`r3`).
+
+**Annotated printing** (`eitri asm --annotate`) adds a comment to each
+instruction: its PC, its words in hex (both instructions of a far branch),
+its call-site index, and its source span. Comments are ignored on input.
+
+**Errors** are `E0901` for malformed text and `E0902` for text that
+contradicts its program (an unknown or duplicate name, a mismatched type,
+slot, frame size, or literal form, or an unregistered host function);
+assembled code the verifier rejects is `E0903`. Every function is verified,
+since the text is untrusted. Spans in assembled code refer to the `.eits`
+text, so faults are reported at its lines.
+
 ## Verification and shared metadata
 
 The operation specification records each family's encoding, dispatch and

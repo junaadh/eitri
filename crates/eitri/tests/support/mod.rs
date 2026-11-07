@@ -5,6 +5,7 @@
 // Each test target uses a different part of this module.
 #![allow(dead_code)]
 
+pub mod eits;
 pub mod fuzz;
 pub mod oracle;
 

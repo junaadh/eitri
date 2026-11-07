@@ -1,0 +1,124 @@
+; module.eit
+
+declare void @bench.emit(i64)
+
+define void @<module>() frame(19) {
+bb0:
+    %r0 = ldi i64 120
+    %r1 = ldi i64 40
+    %r6 = ldi i64 30
+    %r3 = div.s %r0, %r6
+    %r4 = ldi i64 2
+    %r5 = ldi i64 6
+    %r2 = call.script i64 @clamp(i64 %r3, i64 %r4, i64 %r5)
+    %r4 = muli.chk.s %r2, 2
+    %r3 = sub.chk.s %r0, %r4
+    %r4 = subi.chk.s %r1, 2
+    %r5 = ldi i64 4
+    %r10 = ldi i64 5
+    %r7 = div.s %r4, %r10
+    %r8 = ldi i64 3
+    %r9 = ldi i64 10
+    %r6 = call.script i64 @clamp(i64 %r7, i64 %r8, i64 %r9)
+    %r8 = ldi i64 14
+    %r9 = ldi i64 110
+    %r7 = call.script i64 @scale(i64 %r8, i64 %r9)
+    %r9 = mov %r7
+    %r10 = ldi i64 130
+    %r8 = call.script i64 @scale(i64 %r9, i64 %r10)
+    %r9 = ldi i64 3
+    %r11 = mov %r9
+    %r12 = ldi i64 2
+    %r10 = call.script bool @enabled(i64 %r11, i64 %r12)
+    %r12 = mov %r9
+    %r13 = ldi i64 5
+    %r11 = call.script bool @enabled(i64 %r12, i64 %r13)
+    %r13 = mov %r10
+    %r14 = ldi i64 500
+    %r15 = ldi i64 1000
+    %r12 = call.script i64 @pick(bool %r13, i64 %r14, i64 %r15)
+    %r14 = mov %r11
+    %r15 = ldi i64 10
+    %r16 = ldi i64 3
+    %r13 = call.script i64 @pick(bool %r14, i64 %r15, i64 %r16)
+    %r14 = ldi i64 0
+    %r15 = add.chk.s %r0, %r1
+    %r14 = add.chk.s %r14, %r15
+    %r15 = muli.chk.s %r2, 3
+    %r16 = add.chk.s %r15, %r3
+    %r14 = add.chk.s %r14, %r16
+    %r15 = muli.chk.s %r4, 7
+    %r16 = sub.chk.s %r15, %r5
+    %r14 = add.chk.s %r14, %r16
+    %r15 = add.chk.s %r6, %r7
+    %r16 = add.chk.s %r15, %r8
+    %r14 = add.chk.s %r14, %r16
+    %r15 = div.s %r12, %r13
+    %r14 = add.chk.s %r14, %r15
+    tb.false %r10, label %bb3
+bb1:
+    tb.true %r11, label %bb3
+bb2:
+    %r15 = ldi bool true
+    j label %bb4
+bb3:
+    %r15 = ldi bool false
+bb4:
+    %r16 = ldi i64 1
+    %r17 = ldi i64 0
+    %r18 = call.script i64 @pick(bool %r15, i64 %r16, i64 %r17)
+    %r14 = add.chk.s %r14, %r18
+    %r15 = mov %r14
+    call.host void @bench.emit(i64 %r15)
+    ret
+}
+
+define i64 @clamp(i64 %r1, i64 %r2, i64 %r3) frame(4) {
+bb0:
+    cb.le %r2, %r1, label %bb2
+bb1:
+    %r0 = mov %r2
+    ret
+bb2:
+    cb.le %r1, %r3, label %bb4
+bb3:
+    %r0 = mov %r3
+    ret
+bb4:
+    %r0 = mov %r1
+    ret
+}
+
+define i64 @scale(i64 %r1, i64 %r2) frame(5) {
+bb0:
+    %r3 = mul.chk.s %r1, %r2
+    %r4 = ldi i64 100
+    %r0 = div.s %r3, %r4
+    ret
+}
+
+define bool @enabled(i64 %r1, i64 %r2) frame(3) {
+bb0:
+    cb.lt %r1, %r2, label %bb3
+bb1:
+    cbi.eq %r1, 0, label %bb3
+bb2:
+    %r0 = ldi bool true
+    j label %bb4
+bb3:
+    %r0 = ldi bool false
+bb4:
+    ret
+}
+
+define i64 @pick(bool %r1, i64 %r2, i64 %r3) frame(4) {
+bb0:
+    tb.false %r1, label %bb2
+bb1:
+    %r0 = mov %r2
+    j label %bb3
+bb2:
+    %r0 = mov %r3
+bb3:
+    ret
+}

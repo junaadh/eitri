@@ -1,0 +1,26 @@
+; calls.eit
+
+declare void @bench.emit(i64)
+
+define void @<module>() frame(2) {
+bb0:
+    %r1 = ldi i64 15
+    %r0 = call.script i64 @fib(i64 %r1)
+    call.host void @bench.emit(i64 %r0)
+    ret
+}
+
+define i64 @fib(i64 %r1) frame(6) {
+bb0:
+    cbi.gt %r1, 1, label %bb2
+bb1:
+    %r0 = mov %r1
+    ret
+bb2:
+    %r2 = subi.chk.s %r1, 1
+    %r3 = call.script i64 @fib(i64 %r2)
+    %r4 = subi.chk.s %r1, 2
+    %r5 = call.script i64 @fib(i64 %r4)
+    %r0 = add.chk.s %r3, %r5
+    ret
+}

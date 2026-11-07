@@ -251,6 +251,9 @@ memory (checked by T012).
 | `E0304` | Wrong number of arguments, or calling something that is not a function |
 | `E0401` | `if` used as a value without `else`, or a branch without a value |
 | `E0402` | Missing `return` in a function with a result |
+| `E0901` | Malformed `.eits` assembly text |
+| `E0902` | `.eits` that contradicts its program: an unknown or duplicate name, a mismatched type, slot, frame size, or encoding, or an unregistered host function |
+| `E0903` | Bytecode the verifier rejects |
 
 `E0204` is reserved for the initialization-order diagnostic in
 [Compiler: diagnostics](compiler.md#diagnostics). The single source of
