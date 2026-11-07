@@ -437,3 +437,47 @@ fn calls_are_checked_against_signatures() {
         ErrorKind::NoCallee
     );
 }
+
+/// Found by the bytecode fuzzer (`crates/eitri/tests/fuzz.rs`): the
+/// threaded handlers trust that a call's opcode matches its site's target,
+/// and the typed pass seeds the parameters into the frame, so both must be
+/// rejected rather than reach a panic.
+#[test]
+fn call_kinds_and_frame_sizes_are_checked() {
+    let host_emit = CallSite {
+        target: CallTarget::Host(0),
+        args: SlotRange { first: 0, count: 1 },
+        result: SlotRange { first: 0, count: 0 },
+    };
+    let mut asm = Assembler::new();
+    asm.call(host_emit, S).unwrap();
+    asm.ret(S).unwrap();
+    let f = asm.finish("f", sig(&[I64], &[])).unwrap();
+    check(&f).unwrap();
+    for (op, site) in [
+        (Op::CallScript, host_emit),
+        (
+            Op::CallHost,
+            CallSite {
+                target: CallTarget::Script(FunctionId::from_u32(0)),
+                ..host_emit
+            },
+        ),
+    ] {
+        let mut wrong = f.clone();
+        let mut code = wrong.code.to_vec();
+        code[0] = (code[0] & !0xff) | op as u32;
+        wrong.code = code.into_boxed_slice();
+        wrong.sites = vec![site].into_boxed_slice();
+        assert_eq!(kind(&wrong), ErrorKind::CallKind, "{op:?}");
+    }
+
+    // One slot short of the result and parameter.
+    let mut asm = Assembler::new();
+    asm.emit(Op::Mov, Operands::abc(0, 1, 0), S).unwrap();
+    asm.ret(S).unwrap();
+    let mut small = asm.finish("f", sig(&[I64], &[I64])).unwrap();
+    check(&small).unwrap();
+    small.frame_size = 1;
+    assert_eq!(kind(&small), ErrorKind::FrameTooSmall);
+}

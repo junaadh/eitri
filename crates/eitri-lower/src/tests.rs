@@ -123,3 +123,33 @@ fn statements_after_a_return_are_not_emitted() {
         "0000  LDI          r0, #1\n0001  RET\n"
     );
 }
+
+/// The shapes `crates/eitri/tests/limits.rs` executes do reach the long
+/// encodings, so those tests keep covering them.
+#[test]
+fn large_functions_use_the_long_forms() {
+    let mut wide = "import test from \"test\"\n".to_owned();
+    for i in 0..300 {
+        wide += &format!("let v{i} = {i}\n");
+    }
+    wide += "test.emit(v299 * v298 - v257)\n";
+    assert!(listing(&compile(&wide), 0).contains("WIDE "));
+
+    // A comparison, a `bool` test past its 16-bit reach, and a loop exit.
+    let body = |count: usize| "    x = x &+ 1000\n".repeat(count);
+    let far = compile(&format!(
+        "import test from \"test\"\nvar x = 0\nif x == 0 {{\n{}}}\nif test.check(true) {{\n{}}}\nwhile x < 3 {{\n{}}}\n",
+        body(400),
+        body(20_000),
+        body(400),
+    ));
+    let far = listing(&far, 0);
+    assert_eq!(far.matches("J_X").count(), 3);
+    assert!(far.contains("TB.TRUE") && far.contains("CBI."));
+
+    let mut constants = "var x = 0\n".to_owned();
+    for i in 0..70_000 {
+        constants += &format!("x = {}\n", 1_000_000 + i);
+    }
+    assert!(listing(&compile(&constants), 0).contains("LDK_X"));
+}

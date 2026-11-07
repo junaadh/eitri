@@ -43,6 +43,10 @@ pub enum ErrorKind {
     NoSite(u32),
     NoCallee,
     CallShape,
+    /// `CALL.SCRIPT` at a host site, or `CALL.HOST` at a script site.
+    CallKind,
+    /// The frame cannot hold the signature's results and parameters.
+    FrameTooSmall,
     /// A branch to a word that does not start an instruction.
     BadTarget(i64),
     FallsOffEnd,
@@ -71,6 +75,10 @@ impl fmt::Display for VerifyError {
             ErrorKind::NoSite(i) => write!(f, "no call site {i}"),
             ErrorKind::NoCallee => write!(f, "the call target does not exist"),
             ErrorKind::CallShape => write!(f, "the call window does not match the callee or frame"),
+            ErrorKind::CallKind => write!(f, "the call opcode does not match its target"),
+            ErrorKind::FrameTooSmall => {
+                write!(f, "the frame is smaller than the results and parameters")
+            }
             ErrorKind::BadTarget(t) => {
                 write!(f, "branch to {t}, which does not start an instruction")
             }
@@ -151,6 +159,10 @@ fn branch_target(insn: &Insn) -> Option<i64> {
 
 fn structure(function: &Function, callees: &Callees<'_>) -> Result<Vec<Insn>, VerifyError> {
     let code = &function.code;
+    let signature = &function.signature;
+    if (function.frame_size as usize) < signature.results.len() + signature.params.len() {
+        return Err(error(0, ErrorKind::FrameTooSmall));
+    }
     let mut insns = Vec::new();
     let mut starts = vec![0u64; code.len().div_ceil(64)];
     let mut pc = 0usize;
@@ -169,7 +181,7 @@ fn structure(function: &Function, callees: &Callees<'_>) -> Result<Vec<Insn>, Ve
                 return Err(error(at, ErrorKind::NoConstant(value as u32)));
             }
             if matches!(role, Role::Site16) {
-                check_site(function, callees, at, value as u32)?;
+                check_site(function, callees, at, decoded.op, value as u32)?;
             }
         }
         if info.format.ext_role() == Role::Const32
@@ -216,12 +228,21 @@ fn check_site(
     function: &Function,
     callees: &Callees<'_>,
     pc: u32,
+    op: Op,
     index: u32,
 ) -> Result<(), VerifyError> {
     let site = function
         .sites
         .get(index as usize)
         .ok_or_else(|| error(pc, ErrorKind::NoSite(index)))?;
+    // Handlers are specialized by opcode and trust the target's kind.
+    let kind_matches = match site.target {
+        CallTarget::Script(_) => op == Op::CallScript,
+        CallTarget::Host(_) => op == Op::CallHost,
+    };
+    if !kind_matches {
+        return Err(error(pc, ErrorKind::CallKind));
+    }
     let signature = callee(callees, site.target).ok_or_else(|| error(pc, ErrorKind::NoCallee))?;
     // A host borrows both windows at once, so they must be disjoint.
     let disjoint = matches!(site.target, CallTarget::Script(_)) || !site.args.overlaps(site.result);

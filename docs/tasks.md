@@ -1,7 +1,7 @@
 # Implementation tasks
 
 Status: T001–T008 and T046 are complete; T009 and T010 are implemented
-with open completion checks (below); T045 and T047 are in progress. Source
+with open completion checks (below); T012, T045, and T047 are in progress. Source
 now runs end to end: lex, parse, check, lower, verify (debug builds), and
 interpret.
 Unchecked boxes describe work still to do. This is the executable work breakdown for the
@@ -305,9 +305,18 @@ concurrent implementation.
   chains lower iteratively (100,000-operator chains tested). `while` is
   top-tested with the budget-polling back edge spanned at `while`.
   Unreachable statements after `return` are not emitted. Every fixture
-  lowers to code the verifier accepts; 5 unit tests. Open: the
-  program-level oracle comparison (the T004 oracle is per operation), and
-  a retained simple lowering mode.
+  lowers to code the verifier accepts; 5 unit tests. Open: a retained
+  simple lowering mode.
+- Program-level oracle 2026-11-07: `crates/eitri/tests/support/oracle.rs`
+  evaluates the checked syntax tree directly (no slots or bytecode), with
+  arithmetic and comparisons from the T004 oracle and budget/depth rules
+  from the first-slice chapter. Every fixture that compiles (33 of the 114
+  in the corpus) and every differential case (T012) must produce the same
+  effects, result, and fault trace on it as on both interpreters. Mutation
+  checks: polling a loop before its body, debiting a call before its
+  arguments, and `>=` as `>` are each detected. The last was missed by
+  the corpus alone; `ok/comparison_boundaries` now covers equal, adjacent,
+  extreme, and immediate-range operands for every comparison.
 
 ### T010 — Connect typed host calls and the runner
 
@@ -368,6 +377,52 @@ concurrent implementation.
   with the oracle, loops/recursion return control on budget exhaustion, and
   repeated runs show no unbounded retained artifact growth. Record the
   baseline even if it misses the latency target.
+- In progress 2026-11-07: `crates/eitri/tests/differential.rs` generates
+  seeded programs of the first slice, well typed by construction (up to
+  four functions with acyclic calls, `let`/`var`, every assignment
+  operator, `if` statements and values with `else if`, counted `while`
+  loops, every operator, host calls, literals at the 8-bit, 16-bit, and
+  `i64` boundaries, and a small random budget in 30% of cases), and
+  requires both interpreters and the program-level oracle to agree. 300
+  cases by default; 100,000 cases agree locally (debug build, so the
+  verifier also checks every lowered program): 49,164 completed, 39,382
+  overflow, 7,675 division-by-zero, and 3,779 budget faults, with 465,485
+  host effects compared. Not generated: call depth faults (calls are
+  acyclic; fixtures cover them).
+- Encoding limits 2026-11-07: `crates/eitri/tests/limits.rs` runs, on both
+  interpreters and the oracle, 300-local functions (`WIDE` operands), far
+  forward branches from comparisons (past 127 words), `bool` tests (past
+  32,767 words), and a loop exit (each a complement over `J_X`), and
+  70,000 distinct constants (`LDK_X`); a lowering test confirms the same
+  shapes emit those forms. 65,535 module locals run and 65,536 are
+  `E0002`, as the chapter specifies. Loops test at the top, so no
+  backward conditional branch exists to widen; a back edge is a 24-bit
+  `J`. The `E0002` diagnostic for `<module>` has an empty span (0..0).
+- Lifecycle 2026-11-07: `crates/eitri/tests/lifecycle.rs` counts live heap
+  bytes with an allocator installed in that test binary only. Over the
+  119-source corpus (fixtures and benchmark workloads, all outcomes), a
+  warm context retains exactly the same bytes across 20 further passes
+  (423,525 B with the `match` loop, 554,597 B threaded, at 10,000-step
+  budgets), and creating, using, and dropping a context returns live
+  bytes to the baseline exactly, under both interpreters.
+- Fuzz entry points 2026-11-07: `crates/eitri/tests/support/fuzz.rs` has
+  `source(bytes)` (never panics; rejections report an error and no `bug:`,
+  with valid ranges; accepted programs agree across both interpreters and
+  the oracle) and `bytecode(functions, hosts)` (verifying never panics;
+  verified code runs on both interpreters without panicking and with equal
+  outcomes). `crates/eitri/tests/fuzz.rs` drives them with seeded
+  mutations of the corpus, without external crates. The first large run
+  found two verifier gaps, now fixed with regression tests in
+  `eitri-bytecode`: a call whose opcode did not match its site's target
+  kind verified, and reached `unreachable!` in the threaded handlers (a
+  panic, not undefined behavior); and a frame smaller than its signature
+  panicked the verifier. After the fix, 1,000,000 cases per target pass in
+  debug and in release (80,738 mutated sources compiled and agreed; 56,074
+  mutated programs verified and ran). Not yet run under Miri or a
+  coverage-guided fuzzer.
+- Every "done when" check above now has recorded evidence (the baseline
+  is the T011 record). T012 stays open until its dependency T010 closes
+  (nested host reentry), when the gate is rerun with reentry cases.
 
 ### T045 — Build the test and fixture infrastructure
 
@@ -387,8 +442,9 @@ concurrent implementation.
   Snapshots are edited explicitly. Updated with T002: recursive discovery,
   `host`/`budget`/`depth`/`pending` directives, the harness `test` host
   module, and an expectation format for effects, `ok`, diagnostics, and
-  faults with traces, validated even while pending. Remaining: execution
-  adapters (T010), disassembly snapshots, and the T004 oracle/tier adapters.
+  faults with traces, validated even while pending. Execution adapters
+  landed with T010; the program-level oracle adapter (T009) runs every
+  compiling fixture. Remaining: disassembly snapshots.
 
 ### T046 — Pin the toolchain and set the `unsafe` policy
 

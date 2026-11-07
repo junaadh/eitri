@@ -236,6 +236,25 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo test --locked -p eitri --test fixtures
+cargo test --locked -p eitri --test differential
+```
+
+Stress the differential test with more random programs, or rerun one case
+and print its source:
+
+```sh
+EITRI_DIFF_CASES=100000 cargo test --locked -p eitri --test differential -- --nocapture
+EITRI_DIFF_SEED=1234 cargo test --locked -p eitri --test differential -- --nocapture
+```
+
+The default suite also runs `limits` (programs large enough for `WIDE`,
+`J_X`, and `LDK_X`, and the locals limit), `lifecycle` (a warm context's
+heap stays constant over repeated runs; a dropped one leaves nothing), and
+`fuzz` (seeded mutations of the corpus through the compiler and of compiled
+code through the verifier and both interpreters). Stress the fuzzer with:
+
+```sh
+EITRI_FUZZ_CASES=1000000 cargo test --locked --release -p eitri --test fuzz -- --nocapture
 ```
 
 There is no hosted CI: these commands are the checks, run locally before each
@@ -246,9 +265,17 @@ there (so far: AArch64 macOS on M5 and M2; x86-64 is still owed).
 
 [`crates/eitri/tests/fixtures.rs`](crates/eitri/tests/fixtures.rs) discovers
 every `.eit` file under `crates/eitri/tests/fixtures/` with a matching
-`.expect` file and runs it on **both** interpreters, which must agree exactly.
-Missing or orphan expectations, unknown entries, and an empty corpus fail the
-test.
+`.expect` file and runs it on **both** interpreters and on the program-level
+oracle ([`tests/support/oracle.rs`](crates/eitri/tests/support/oracle.rs)), a
+tree-walking evaluator over the checked syntax tree written from the
+first-slice chapter, sharing only the frontend with the compiler. All three
+must agree exactly. Missing or orphan expectations, unknown entries, and an
+empty corpus fail the test.
+
+[`crates/eitri/tests/differential.rs`](crates/eitri/tests/differential.rs)
+compares the same three on seeded random programs that are well typed by
+construction, with literals at the immediate and `i64` boundaries and random
+small budgets. Each case is reproducible from its seed.
 
 | Group | Contents |
 |---|---|

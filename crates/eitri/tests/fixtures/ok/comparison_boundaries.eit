@@ -1,0 +1,48 @@
+//! host: test
+import test from "test"
+// Each comparison at equal, adjacent, and extreme operands: as a value,
+// as a branch condition, and against literals that fit an immediate.
+fn all(a: i64, b: i64) -> void {
+    test.check(a < b)
+    test.check(a <= b)
+    test.check(a > b)
+    test.check(a >= b)
+    test.check(a == b)
+    test.check(a != b)
+}
+fn branches(a: i64, b: i64) -> i64 {
+    var bits = 0
+    if a < b { bits += 1 }
+    if a <= b { bits += 2 }
+    if a > b { bits += 4 }
+    if a >= b { bits += 8 }
+    if a == b { bits += 16 }
+    if a != b { bits += 32 }
+    return bits
+}
+fn literals(a: i64) -> i64 {
+    var bits = 0
+    if a < 127 { bits += 1 }
+    if a <= 127 { bits += 2 }
+    if a > -128 { bits += 4 }
+    if a >= -128 { bits += 8 }
+    if a == 127 { bits += 16 }
+    if a != -128 { bits += 32 }
+    return bits
+}
+let min = -9_223_372_036_854_775_808
+let max = 9_223_372_036_854_775_807
+all(5, 5)
+all(min, max)
+all(max, min)
+test.emit(branches(5, 5))
+test.emit(branches(4, 5))
+test.emit(branches(6, 5))
+test.emit(branches(min, max))
+test.emit(branches(max, max))
+test.emit(literals(127))
+test.emit(literals(128))
+test.emit(literals(-128))
+test.emit(literals(-129))
+test.emit(literals(min))
+test.emit(literals(max))

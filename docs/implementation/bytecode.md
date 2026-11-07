@@ -588,6 +588,10 @@ the opcode manifest, handler expansions, decoder, disassembler, and
 structural verification from it. Typed checking additionally establishes
 slot initialization, canonical integer form, operand types, compatible
 control-flow joins, signature/layout correctness, and valid root maps.
+Signature/layout correctness includes a frame large enough for the
+function's own results and parameters, and call sites whose opcode matches
+the target's kind (`CALL.SCRIPT` or `CALL.HOST`: handlers are specialized
+by it) and whose windows match the callee and fit the frame.
 Merely checking indexes and opcodes does not make untagged execution safe.
 
 Compiler-produced code can rely on those established invariants rather than

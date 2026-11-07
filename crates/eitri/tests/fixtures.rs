@@ -1,10 +1,14 @@
 //! Fixture corpus runner. The format is documented in the root README.
 
+mod support;
+
 use std::{
     fs,
     path::{Path, PathBuf},
     thread,
 };
+
+use support::Setup;
 
 /// Header directives, written as leading `//! key: value` comment lines.
 #[derive(Default)]
@@ -112,116 +116,6 @@ fn validate_expectation(source: &str, expected: &str) -> Result<(), String> {
     }
 }
 
-/// The harness host module `test`, as documented in the root README.
-const TEST_MODULE: &str = "\
-pub fn emit(value: i64) -> void
-pub fn check(value: bool) -> bool
-pub fn id(value: i64) -> i64
-pub fn fail() -> void
-";
-
-/// The `test` module's behavior. Effects are recorded in call order.
-struct TestHost {
-    emit: u32,
-    check: u32,
-    id: u32,
-    fail: u32,
-    effects: String,
-}
-
-impl eitri::Host for TestHost {
-    fn call(&mut self, index: u32, args: &[u64], results: &mut [u64]) -> Result<(), String> {
-        if index == self.emit {
-            self.effects += &format!("effect: test.emit({})\n", args[0] as i64);
-        } else if index == self.check {
-            self.effects += &format!("effect: test.check({})\n", args[0] != 0);
-            results[0] = args[0];
-        } else if index == self.id {
-            self.effects += &format!("effect: test.id({})\n", args[0] as i64);
-            results[0] = args[0];
-        } else if index == self.fail {
-            return Err("requested by fixture".into());
-        } else {
-            unreachable!("unknown host function {index}");
-        }
-        Ok(())
-    }
-}
-
-/// Render the actual outcome in the expectation format. The oracle and
-/// later tiers run the same corpus through their own adapters.
-fn run_interpreter(source: &str, directives: &Directives) -> String {
-    let outcome = run_with(source, directives, false);
-    // The experimental threaded interpreter must give the same outcome.
-    assert_eq!(
-        run_with(source, directives, true),
-        outcome,
-        "threaded interpreter disagrees"
-    );
-    outcome
-}
-
-fn run_with(source: &str, directives: &Directives, threaded: bool) -> String {
-    let mut context = eitri::Context::new();
-    context.set_threaded(threaded);
-    for host in &directives.hosts {
-        assert_eq!(host, "test");
-        context
-            .register_host_module("test", TEST_MODULE)
-            .expect("the harness module declares cleanly");
-    }
-    if let Some(budget) = directives.budget {
-        context.set_budget(budget);
-    }
-    if let Some(depth) = directives.depth {
-        context.set_depth(depth);
-    }
-    let index = |name| context.host_index("test", name).unwrap_or(u32::MAX);
-    let mut host = TestHost {
-        emit: index("emit"),
-        check: index("check"),
-        id: index("id"),
-        fail: index("fail"),
-        effects: String::new(),
-    };
-    match context.run(source, &mut host) {
-        Ok(()) => host.effects + "ok\n",
-        Err(eitri::RunError::Fault(report)) => {
-            let mut out = host.effects;
-            out += &format!("fault: {}\n", report.message);
-            for frame in &report.trace {
-                out += &match frame.span {
-                    Some(span) => format!("  at {} {}..{}\n", frame.function, span.start, span.end),
-                    None => format!("  at {}\n", frame.function),
-                };
-            }
-            out
-        }
-        Err(eitri::RunError::Compile(diagnostics)) => {
-            assert!(host.effects.is_empty(), "a rejected program has no effects");
-            assert!(!diagnostics.is_empty(), "a rejection reports a cause");
-            let mut out = String::new();
-            for diagnostic in &diagnostics {
-                let Some(label) = diagnostic.primary() else {
-                    // A `bug:` from the debug-build verifier has no label.
-                    return format!("{}: {}\n", diagnostic.severity, diagnostic.message);
-                };
-                assert_eq!(label.source, eitri::Context::SOURCE);
-                let span = label.span.range();
-                assert!(source.is_char_boundary(span.start));
-                assert!(source.is_char_boundary(span.end));
-                assert!(span.start <= span.end);
-                let code = diagnostic.code.expect("compile diagnostics have codes");
-                out += &format!(
-                    "error[{code}] {}..{}: {}\n",
-                    span.start, span.end, diagnostic.message
-                );
-            }
-            out
-        }
-    }
-}
-
 enum Status {
     Passed,
     Pending,
@@ -233,7 +127,12 @@ fn run_fixture(path: &Path) -> Result<Status, String> {
         .map_err(|error| format!("missing expectation: {error}"))?;
     let directives = parse_directives(&source)?;
     validate_expectation(&source, &expected)?;
-    let actual = run_interpreter(&source, &directives);
+    let setup = Setup {
+        test_host: !directives.hosts.is_empty(),
+        budget: directives.budget,
+        depth: directives.depth,
+    };
+    let actual = support::outcome(&source, &setup)?;
 
     if let Some(task) = &directives.pending {
         // Until its task lands, a pending fixture must still be rejected: it
