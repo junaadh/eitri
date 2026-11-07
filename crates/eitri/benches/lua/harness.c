@@ -15,6 +15,12 @@
 #include <string.h>
 #include <time.h>
 
+/* The baseline is Lua 5.4. A Homebrew alias can point `lua@5.4` at a newer
+ * Lua, so refuse to build against anything else rather than measure it. */
+#if LUA_VERSION_NUM != 504
+#error "the T011 baseline needs Lua 5.4 headers; see run.sh"
+#endif
+
 static long long emitted;
 static int has_emitted;
 

@@ -1110,6 +1110,37 @@ out-of-frame check changes unverified code's failure from a panic to a
 trap, which needs a decision before promotion. Compile time is now the
 larger part of the small module's latency (6.3 of 6.5 µs).
 
+### Second machine: Apple M2 (MacBook Air) — 2026-11-07
+
+**Method.** Commit `f4573b1` on an Apple M2 MacBook Air, macOS 27.2, the
+same pinned `nightly-2026-11-05`; `cargo bench -p eitri --bench
+source_to_result` with the threaded interpreter, again with
+`EITRI_THREADED=0`, then `crates/eitri/benches/lua/run.sh` (Lua 5.4.9,
+static, Apple clang 21 `-O2`), one after another, 20,001 samples per
+cell. A first Lua run measured Lua 5.5.0 by mistake: that machine's
+`opt/lua@5.4` was a stale Homebrew alias for `lua` 5.5. After installing
+`lua@5.4` it was rerun; the harness now refuses to build against headers
+other than 5.4.
+
+**Results (reused runtime, p50 of compile + first execution).**
+
+| Workload | Eitri threaded | Eitri `match` | Lua 5.4.9 | Lua ÷ threaded |
+|---|---|---|---|---|
+| module | 8.2 µs | 8.3 µs | 12.2 µs | 1.49× |
+| arithmetic | 15.0 µs | 30.1 µs | 26.2 µs | 1.75× |
+| branching | 36.7 µs | 56.9 µs | 52.5 µs | 1.43× |
+| calls | 21.5 µs | 30.6 µs | 24.1 µs | 1.12× |
+| host calls | 8.9 µs | 17.1 µs | 21.0 µs | 2.36× |
+
+**Reading.** The threaded interpreter's advantage over the `match` loop
+is larger on the M2 than on the M5: execution 2.2× faster on arithmetic
+and 2.1× on host calls (M5: about 1.3×), so the `match` loop is slower
+than Lua on the M2 for every loop workload while the threaded one is
+faster on all of them. Script calls are the narrowest margin (execution
+19.9 µs against Lua's 21.9). Compile time scales with the slower core
+(module 8.0 µs; M5 5.7 µs) and stays 1.3–1.5× ahead of Lua's. Still
+AArch64 only.
+
 ### Compile path, first pass: lowering — 2026-11-07
 
 **Question.** Lowering and artifact construction were the largest compile
