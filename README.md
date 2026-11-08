@@ -309,9 +309,11 @@ to run compiled code more than once. Budgets and depth are set with
 `set_budget` and `set_depth`.
 
 A host function can call back into the running script:
-`cx.function("on_key")` finds a script function (look it up once and keep
-it), and `cx.call(self, f, &args, &mut results)` runs it on top of the
-current call, spending the same budget and depth. A fault in it comes back
+`cx.function("on_key")` finds a script function for the current call, and
+`cx.call(self, f, &args, &mut results)` runs it on top of that call,
+spending the same budget and depth. The handle lives only as long as the
+host call that found it, so it can never outlive its program or reach
+another program's function; keeping one in the host does not compile. A fault in it comes back
 as an `Err`; return it with `?` to stop the outer run with the whole trace.
 Because `cx.call` borrows the context mutably, the borrow checker rejects
 holding an argument or result view across it.
@@ -336,14 +338,15 @@ tier included).
 | Workload | Eitri | Lua 5.4 | |
 |---|---:|---:|---|
 | `module`: a 40-line setup script | **5.8 µs** | 9.1 µs | 🟢 1.58× faster |
-| `arithmetic`: 1,000 checked-math iterations | **9.8 µs** | 17.0 µs | 🟢 1.73× faster |
-| `branching`: `else if` chains, `&&`/`\|\|` | **20.0 µs** | 37.1 µs | 🟢 1.86× faster |
-| `calls`: recursive `fib(15)`, 1,973 calls | **12.9 µs** | 15.8 µs | 🟢 1.22× faster |
-| `host_calls`: 1,000 calls into Rust | **6.3 µs** | 11.7 µs | 🟢 1.86× faster |
+| `arithmetic`: 1,000 checked-math iterations | **9.9 µs** | 17.1 µs | 🟢 1.73× faster |
+| `branching`: `else if` chains, `&&`/`\|\|` | **21.0 µs** | 36.9 µs | 🟢 1.76× faster |
+| `calls`: recursive `fib(15)`, 1,973 calls | **12.8 µs** | 16.0 µs | 🟢 1.25× faster |
+| `host_calls`: 1,000 calls into Rust | **6.3 µs** | 12.5 µs | 🟢 2.00× faster |
 
-`host_calls` gave up a little since `f4573b1` (1.95×): every host call now
-carries a context that lets the host call back into the script (about 0.5
-ns per call; see the [ledger](docs/implementation/vm-research.md)).
+Every host call carries a context that lets the host call back into the
+script, which costs about 0.5 ns per call (see the
+[ledger](docs/implementation/vm-research.md)); `branching` varies by about
+±1 µs between runs.
 
 ### Apple M2 (MacBook Air)
 
@@ -374,16 +377,16 @@ loaded chunk 10,000 times.
 
 | Workload | Eitri, tier 0 | Eitri, tier-up | Lua 5.4 | Eitri (tier-up) vs Lua |
 |---|---:|---:|---:|---|
-| `module` | **1.45 ms** (125 ns/run) | 1.57 ms (125 ns/run) | 1.97 ms (167 ns/run) | 🟢 1.26× faster |
-| `arithmetic` | 84.3 ms (8.4 µs/run) | **72.5 ms** (7.2 µs/run) | 149.5 ms (15.0 µs/run) | 🟢 2.06× faster |
-| `branching` | 178.8 ms (18.1 µs/run) | **159.5 ms** (15.8 µs/run) | 348.4 ms (35.3 µs/run) | 🟢 2.18× faster |
-| `calls` | **122.3 ms** (12.1 µs/run) | 122.9 ms (12.2 µs/run) | 148.1 ms (14.7 µs/run) | 🟢 1.21× faster |
-| `host_calls` | 55.3 ms (5.5 µs/run) | **48.4 ms** (4.8 µs/run) | 112.1 ms (10.7 µs/run) | 🟢 2.32× faster |
+| `module` | **1.40 ms** (125 ns/run) | 1.49 ms (125 ns/run) | 1.98 ms (167 ns/run) | 🟢 1.33× faster |
+| `arithmetic` | 84.4 ms (8.4 µs/run) | **72.8 ms** (7.2 µs/run) | 150.7 ms (15.0 µs/run) | 🟢 2.07× faster |
+| `branching` | 171.5 ms (17.0 µs/run) | **159.1 ms** (15.8 µs/run) | 328.8 ms (33.6 µs/run) | 🟢 2.07× faster |
+| `calls` | **118.0 ms** (11.7 µs/run) | 118.9 ms (11.8 µs/run) | 148.5 ms (14.6 µs/run) | 🟢 1.25× faster |
+| `host_calls` | 55.6 ms (5.5 µs/run) | **48.4 ms** (4.8 µs/run) | 114.1 ms (11.3 µs/run) | 🟢 2.36× faster |
 
 Tier-up pays where there are loops: `arithmetic`, `branching`, and
-`host_calls` finish 12–16% sooner, the optimization repaid after 4–8 runs.
+`host_calls` finish 7–14% sooner, the optimization repaid after 4–8 runs.
 It finds nothing to improve in `calls` and the straight-line `module`, so
-there it only costs its one optimization (`module` finished 8% later); a
+there it only costs its one optimization (`module` finished 6% later); a
 host can skip it when the optimizer reports no changes. First runs never
 pay for any of this: tier 0 compiles exactly as before.
 

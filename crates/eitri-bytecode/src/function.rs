@@ -75,7 +75,7 @@ pub struct CallSite {
 
 /// One assembled function. Immutable once built; execution state lives
 /// elsewhere.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
     /// For traces: the function's name, or `<module>`.
     pub name: Box<str>,

@@ -113,6 +113,18 @@ fn loop_invariant_literals_move_before_the_loop() {
     assert!(load < compare && compare < back, "{text}");
 }
 
+/// Found by an audit: a frame already using every encodable slot left
+/// hoisting nowhere to put the literal, and it allocated `%r65536`.
+#[test]
+fn literals_stay_when_no_slot_is_left() {
+    let text = module(
+        "    %r65535 = ldi i64 7\n    %r0 = ldi i64 0\ntop:\n    %r1 = ldi i64 1000\n    cb.le %r1, %r0, label %done\n    %r0 = addi.chk.s %r0, 1\n    j label %top\ndone:",
+    );
+    let (out, report) = optimized(&text);
+    assert_eq!(report.hoisted_loads, 0, "{out}");
+    assert!(out.contains("frame(65536)"), "{out}");
+}
+
 #[test]
 fn literals_stay_in_the_loop_when_a_condition_fails() {
     let cases = [

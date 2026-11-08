@@ -199,11 +199,10 @@ impl Context {
         self.keep_ir = keep;
         let fresh = fresh.map_err(OptimizeError::Compile)?;
         let (old, new) = (&compiled.program.functions, &fresh.program.functions);
-        let same = old.len() == new.len()
-            && old
-                .iter()
-                .zip(new.iter())
-                .all(|(a, b)| a.code == b.code && a.consts == b.consts && a.sites == b.sites);
+        // Everything the code carries: words, constants, sites, signatures,
+        // literal types, frame sizes, and spans. Code alone can coincide:
+        // `return 1` and `return true` have the same words.
+        let same = old.as_slice() == new.as_slice();
         if !same {
             return Err(OptimizeError::SourceMismatch);
         }

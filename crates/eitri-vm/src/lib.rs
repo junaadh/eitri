@@ -39,6 +39,8 @@
 )]
 #![allow(incomplete_features, internal_features)]
 
+use std::marker::PhantomData;
+
 use eitri_base::IndexVec;
 use eitri_bytecode::{CallTarget, Function, FunctionId, Op, SlotRange, ValueType};
 
@@ -124,9 +126,32 @@ impl From<Fault> for HostError {
     }
 }
 
-/// A script function a host may reenter, from [`Call::function`].
+/// A script function a host may reenter, from [`Call::function`], valid
+/// only during the host call that found it: `'call` is that call, and
+/// [`Host::call`] receives a fresh one each time, so a host cannot keep a
+/// handle past its call, where the program could be dropped or replaced
+/// and the handle could name another program's function.
+///
+/// Looking it up again on each call is a search by name over the
+/// program's functions. Keeping it does not compile:
+///
+/// ```compile_fail
+/// use eitri_vm::{Call, Host, HostError, ScriptFn};
+/// struct Caching<'a> {
+///     callback: Option<ScriptFn<'a>>,
+/// }
+/// impl<'a> Host for Caching<'a> {
+///     fn call(&mut self, cx: &mut Call<'_, '_>, _: u32) -> Result<(), HostError> {
+///         self.callback = cx.function("callback");
+///         Ok(())
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ScriptFn(FunctionId);
+pub struct ScriptFn<'call> {
+    id: FunctionId,
+    call: PhantomData<&'call ()>,
+}
 
 /// Nested runs active at once. Each costs Rust stack (a host frame and an
 /// interpreter entry), so their nesting is limited separately from script
@@ -199,7 +224,7 @@ pub struct Call<'c, 'a> {
     results: SlotRange,
 }
 
-impl Call<'_, '_> {
+impl<'c> Call<'c, '_> {
     #[inline]
     pub fn args(&self) -> &[u64] {
         &self.machine.slots[self.args.slots_usize()]
@@ -220,14 +245,17 @@ impl Call<'_, '_> {
         self.results()[index] = value;
     }
 
-    /// The script function named `name`, if the program has one. A linear
-    /// search: look a function up once and keep it.
-    pub fn function(&self, name: &str) -> Option<ScriptFn> {
+    /// The script function named `name`, if the program has one, for this
+    /// call ([`ScriptFn`]). A search by name over the program's functions.
+    pub fn function(&self, name: &str) -> Option<ScriptFn<'c>> {
         let m = &*self.machine;
         m.functions
             .iter_enumerated()
             .find(|&(id, f)| id != m.entry && &*f.name == name)
-            .map(|(id, _)| ScriptFn(id))
+            .map(|(id, _)| ScriptFn {
+                id,
+                call: PhantomData,
+            })
     }
 
     /// Run script function `function` with `args`, writing `results`. The
@@ -238,12 +266,12 @@ impl Call<'_, '_> {
     pub fn call(
         &mut self,
         host: &mut dyn Host,
-        function: ScriptFn,
+        function: ScriptFn<'_>,
         args: &[u64],
         results: &mut [u64],
     ) -> Result<(), Fault> {
         let m = &mut *self.machine;
-        let callee = &m.functions[function.0];
+        let callee = &m.functions[function.id];
         let signature = &callee.signature;
         let mismatch = args.len() != signature.params.len()
             || results.len() != signature.results.len()
@@ -285,9 +313,9 @@ impl Call<'_, '_> {
         let floor = m.frames.len();
         m.nesting += 1;
         let outcome = if m.threaded {
-            threaded::nested(m, host, function.0, base, floor)
+            threaded::nested(m, host, function.id, base, floor)
         } else {
-            execute(m, host, function.0, base, floor)
+            execute(m, host, function.id, base, floor)
         };
         m.nesting -= 1;
         m.frames.truncate(floor - 1);

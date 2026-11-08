@@ -351,6 +351,25 @@ concurrent implementation.
   ([ledger](implementation/vm-research.md#host-reentry-the-call-context--2026-11-07)).
   Every "done when" check now passes; T010 stays open only on its
   dependency T009 (the retained simple lowering mode).
+- Audit fixes 2026-11-08: a cached `ScriptFn` used with another program
+  called that program's function at the same position. A first fix tied it
+  to its program's function-table address plus a name hash; a second audit
+  showed that identity reused after the program was dropped (99 of 100
+  trials). `ScriptFn<'call>` is now valid only during the host call that
+  found it (`Host::call` gets a fresh lifetime each time), so a host
+  cannot keep one; a `compile_fail` doctest shows it, and
+  `tests/reentry.rs` checks each program reenters its own `callback`.
+  Hosts look a function up by name on each call; retained callbacks come
+  with the embedding API (T024). `Context::optimize` compared only words,
+  constants, and sites, so `return 1` was accepted as the source of
+  `return true`; it now compares whole functions (signatures, literal
+  types, frames, spans). Literal hoisting searched its hoisted literals and
+  preheader entries linearly (quadratic: 1.8 ms at 1,000 statements, 38.9
+  ms at 8,000); a map and one merge make it linear (0.23 ms and 1.86 ms).
+  The verifier kept a frame state per instruction: 1,000 instructions
+  naming `%r65535` peaked at 65.9 MB; it keeps one per basic block now,
+  396 KB (`tests/verify_memory.rs`). Memory is O(blocks × frame); the same
+  300,000 mutated programs verify as before.
 
 ### T011 — Establish the first performance harness
 
@@ -914,6 +933,9 @@ data. These tasks do not authorize replacing the correctness baseline first.
   `branching` −8%, break-even after 4–7 runs; `calls` and `module` gain
   little or nothing
   ([ledger](implementation/vm-research.md#hot-tier-re-optimizing-bytecode-from-recorded-eits--2026-11-08)).
+  Audit fix 2026-11-08: hoisting allocated `%r65536` in a frame already
+  using every encodable slot; it now keeps the load when no slot is left
+  (`opt_tests::literals_stay_when_no_slot_is_left`).
   Open: reports of executed moves and `WIDE` frequency, and more passes.
 
 ### T038 — Optimize literal construction and execution metadata

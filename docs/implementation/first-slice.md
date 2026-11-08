@@ -213,7 +213,10 @@ All limits belong to the caller's context and apply per run.
   64 fit a default 2 MiB thread in every build.) Arguments that do not
   match the function's signature, including a `bool` other than 0 or 1,
   fault with ``host error: reentrant call to `f` does not match its
-  signature``. A fault in the nested run stops only the nested run and is
+  signature``. A host names the function through a handle valid only
+  during its own call (the Rust API's lifetimes enforce it), so it can
+  only ever reenter the program it was called from. A fault in the nested
+  run stops only the nested run and is
   returned to the host, which may handle it or propagate it to stop the
   outer run; its trace starts at the nested run's own frames.
 - **Compilation limits.** Nesting deeper than 256 levels of blocks or

@@ -257,36 +257,65 @@ fn check_site(
     Ok(())
 }
 
+/// The typed pass: a forward dataflow over basic blocks. A state (one
+/// [`Slot`] per frame slot) is kept only at each block's entry and carried
+/// through the block, so memory is O(blocks × frame) rather than
+/// O(instructions × frame): a function naming a high slot costs one frame
+/// per block, not one per instruction.
 fn types(function: &Function, callees: &Callees<'_>, insns: &[Insn]) -> Result<(), VerifyError> {
     let frame = function.frame_size as usize;
-    // Instruction index by PC, for successors.
+    let successors = |insn: &Insn| {
+        let info = insn.decoded.op.info();
+        let fallthrough =
+            (!info.effects.contains(END)).then(|| insn.pc as usize + insn.decoded.words as usize);
+        [fallthrough, branch_target(insn).map(|t| t as usize)]
+    };
+    // Blocks start at the entry, at branch targets, and after a branch or
+    // an instruction that ends execution.
+    let mut leader = vec![false; insns.len()];
     let mut index_of = vec![u32::MAX; function.code.len()];
     for (i, insn) in insns.iter().enumerate() {
         index_of[insn.pc as usize] = i as u32;
+    }
+    leader[0] = true;
+    for (i, insn) in insns.iter().enumerate() {
+        let info = insn.decoded.op.info();
+        if let Some(target) = branch_target(insn) {
+            leader[index_of[target as usize] as usize] = true;
+        }
+        if (info.effects.contains(BRANCH) || info.effects.contains(END)) && i + 1 < insns.len() {
+            leader[i + 1] = true;
+        }
+    }
+    let mut block_of = vec![0u32; insns.len()];
+    let mut starts = Vec::new();
+    for (i, &is_leader) in leader.iter().enumerate() {
+        if is_leader {
+            starts.push(i);
+        }
+        block_of[i] = starts.len() as u32 - 1;
     }
     let mut entry = vec![Slot::Uninit; frame];
     let base = function.signature.param_base() as usize;
     for (i, &ty) in function.signature.params.iter().enumerate() {
         entry[base + i] = Slot::Ty(ty);
     }
-    let mut states: Vec<Option<Vec<Slot>>> = vec![None; insns.len()];
+    let mut states: Vec<Option<Vec<Slot>>> = vec![None; starts.len()];
     states[0] = Some(entry);
     let mut work = vec![0usize];
-    let mut queued = vec![false; insns.len()];
+    let mut queued = vec![false; starts.len()];
     queued[0] = true;
-    while let Some(i) = work.pop() {
-        queued[i] = false;
-        let mut state = states[i].clone().expect("queued states exist");
-        let insn = &insns[i];
-        transfer(function, callees, insn, &mut state)?;
-        let info = insn.decoded.op.info();
-        let mut successors = [None, None];
-        if !info.effects.contains(END) {
-            successors[0] = Some(insn.pc as usize + insn.decoded.words as usize);
+    let mut state = Vec::with_capacity(frame);
+    while let Some(b) = work.pop() {
+        queued[b] = false;
+        state.clear();
+        state.extend_from_slice(states[b].as_ref().expect("queued states exist"));
+        let end = starts.get(b + 1).copied().unwrap_or(insns.len());
+        for insn in &insns[starts[b]..end] {
+            transfer(function, callees, insn, &mut state)?;
         }
-        successors[1] = branch_target(insn).map(|t| t as usize);
-        for next in successors.into_iter().flatten() {
-            let j = index_of[next] as usize;
+        for next in successors(&insns[end - 1]).into_iter().flatten() {
+            let j = block_of[index_of[next] as usize] as usize;
             let changed = match &mut states[j] {
                 Some(existing) => {
                     let mut changed = false;

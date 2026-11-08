@@ -16,7 +16,9 @@
 //! "live" past that, which only forgoes a rewrite. Every pass is linear in
 //! the instructions it rewrites plus the loops' sizes.
 
-use crate::encoding::Operands;
+use eitri_base::FxHashMap;
+
+use crate::encoding::{MAX_SLOT, Operands};
 use crate::function::{Function, SlotRange, ValueType};
 use crate::ir::{Body, Branch, Insn, Item};
 use crate::spec::{Op, Role};
@@ -372,7 +374,8 @@ fn hoist_literals(body: &mut Body, live: &Liveness, frame: u32) -> u32 {
         if entered_from_outside {
             continue;
         }
-        let mut hoisted: Vec<(u64, ValueType, u32)> = Vec::new();
+        // This loop's hoisted literals, by value and type.
+        let mut hoisted: FxHashMap<(u64, ValueType), u32> = FxHashMap::default();
         for p in header..j {
             let Insn::Load { dst, value, ty } = items[p].insn else {
                 continue;
@@ -386,12 +389,14 @@ fn hoist_literals(body: &mut Body, live: &Liveness, frame: u32) -> u32 {
             if !used_once {
                 continue;
             }
-            let slot = match hoisted.iter().find(|&&(v, t, _)| v == value && t == ty) {
-                Some(&(_, _, slot)) => slot,
+            let slot = match hoisted.get(&(value, ty)) {
+                Some(&slot) => slot,
+                // No encodable slot left above the frame: keep the load.
+                None if next_slot as i64 > MAX_SLOT => continue,
                 None => {
                     let slot = next_slot;
                     next_slot += 1;
-                    hoisted.push((value, ty, slot));
+                    hoisted.insert((value, ty), slot);
                     preheader.push((header, slot, value, ty, items[p].span));
                     slot
                 }
@@ -404,9 +409,12 @@ fn hoist_literals(body: &mut Body, live: &Liveness, frame: u32) -> u32 {
     for (at, from, to) in rewrite {
         replace_reads(&mut body.items[at].insn, from, to);
     }
+    // One merge: preheader loads in insertion order, each before its loop.
+    preheader.sort_by_key(|h| h.0);
+    let mut pending = preheader.iter().peekable();
     let mut out = Vec::with_capacity(body.items.len() + preheader.len());
     for (i, item) in std::mem::take(&mut body.items).into_iter().enumerate() {
-        for &(_, slot, value, ty, span) in preheader.iter().filter(|h| h.0 == i) {
+        while let Some(&(_, slot, value, ty, span)) = pending.next_if(|h| h.0 == i) {
             out.push(Item::new(
                 Insn::Load {
                     dst: slot,
