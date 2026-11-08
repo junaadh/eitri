@@ -46,7 +46,12 @@ again:
     assert_eq!(parsed.hosts[0].name, "t.emit");
     assert_eq!(&*parsed.functions[1].consts, &[1_000_000]);
     // Printing gives the canonical form, which parses to the same code.
-    let printed = print(&parsed.functions, &parsed.hosts, PrintOptions::default());
+    let printed = print(
+        &parsed.functions,
+        &parsed.bodies,
+        &parsed.hosts,
+        PrintOptions::default(),
+    );
     let again = parse(&printed).unwrap();
     for (a, b) in parsed.functions.iter().zip(&again.functions) {
         assert_eq!(a.code, b.code);
@@ -56,7 +61,12 @@ again:
         assert_eq!(a.frame_size, b.frame_size);
     }
     assert_eq!(
-        print(&again.functions, &again.hosts, PrintOptions::default()),
+        print(
+            &again.functions,
+            &again.bodies,
+            &again.hosts,
+            PrintOptions::default()
+        ),
         printed
     );
 }

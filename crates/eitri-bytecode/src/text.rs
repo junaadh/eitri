@@ -21,7 +21,7 @@ pub use parse::{Parsed, TextError, parse};
 pub use print::{PrintOptions, print};
 
 use crate::function::{Signature, ValueType};
-use crate::spec::{Cond, Op, Test};
+use crate::spec::Op;
 
 /// A host function as the text names it: its qualified name, such as
 /// `bench.emit`, and its signature. A call site's host index selects one.
@@ -44,29 +44,6 @@ fn type_name(ty: Option<ValueType>) -> &'static str {
 
 fn mnemonic(op: Op) -> String {
     op.info().name.to_ascii_lowercase()
-}
-
-/// The logical branch a far form (the complement over a `J_X`) encodes:
-/// every complement is its own inverse.
-fn uncomplement(op: Op, a: i64, b: i64) -> Option<(Op, i64, i64)> {
-    use crate::asm::{compare_imm_op, compare_op, imm_complement, test_op};
-    use crate::spec::Sem;
-    Some(match op.info().sem {
-        Sem::Branch { cond, imm: false } => {
-            let (cond, swap): (Cond, bool) = cond.complement()?;
-            let (a, b) = if swap { (b, a) } else { (a, b) };
-            (compare_op(cond), a, b)
-        }
-        Sem::Branch { cond, imm: true } => {
-            let (cond, imm) = imm_complement(cond, b)?;
-            (compare_imm_op(cond), a, imm)
-        }
-        Sem::TestBranch(test) => {
-            let test: Test = test.complement();
-            (test_op(test), a, b)
-        }
-        _ => return None,
-    })
 }
 
 #[cfg(test)]

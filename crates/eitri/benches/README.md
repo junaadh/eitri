@@ -11,6 +11,12 @@ cargo bench -p eitri --bench source_to_result [samples]
 crates/eitri/benches/lua/run.sh [samples]   # needs Lua 5.4 (brew install lua@5.4)
 ```
 
+The Eitri harness also prints a hot-tier table (what `Context::optimize`
+costs, what it saves per later run, and the break-even run count) and both
+harnesses print a long-running table: each workload compiled once and
+executed 10,000 times, with Eitri at tier 0 and with tier-up at the default
+threshold.
+
 Each workload ends with one host call carrying its result (`bench.emit` in
 Eitri, `emit` in Lua), which both harnesses check on every run against the
 answer listed in the harness. Raw samples are written to

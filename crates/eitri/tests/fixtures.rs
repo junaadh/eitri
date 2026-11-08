@@ -157,6 +157,8 @@ fn discover(directory: &Path, sources: &mut Vec<PathBuf>) {
         match path.extension().and_then(|extension| extension.to_str()) {
             _ if path.is_dir() => discover(&path, sources),
             Some("eit") => sources.push(path),
+            // Host declarations, found by `eitri` and the harness alike.
+            Some("eith") => {}
             Some("expect") => assert!(
                 path.with_extension("eit").is_file(),
                 "orphan expectation: {}",

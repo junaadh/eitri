@@ -1,0 +1,2 @@
+pub fn emit(value: i64) -> void
+pub fn id(value: i64) -> i64

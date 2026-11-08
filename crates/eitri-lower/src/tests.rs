@@ -51,7 +51,7 @@ fn compile(text: &str) -> Program {
     };
     let checked = check(&input, &mut diagnostics, &mut check_scratch);
     assert!(!diagnostics.has_errors(), "{text}");
-    let program = lower(&input, checked, &mut lower_scratch).unwrap();
+    let program = lower(&input, checked, &mut lower_scratch, false).unwrap();
     let signatures = program.signatures();
     let hosts = host_signatures(&hosts);
     let callees = Callees {

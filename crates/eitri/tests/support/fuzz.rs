@@ -73,9 +73,9 @@ pub fn source(data: &[u8]) -> bool {
     }
 }
 
-/// `.eits` text: assembling never panics, and code that assembles (and so
-/// verifies) runs on both interpreters with equal outcomes. Returns
-/// whether it assembled.
+/// `.eits` text: assembling never panics; code that assembles (and so
+/// verifies) runs on both interpreters with equal outcomes, and so does the
+/// same code after the optimizer. Returns whether it assembled.
 pub fn assembly(data: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(data) else {
         return false;
@@ -83,18 +83,26 @@ pub fn assembly(data: &[u8]) -> bool {
     let mut context = super::eits::context();
     context.set_budget(LIMITS.budget);
     context.set_depth(LIMITS.depth);
-    let Ok(compiled) = context.assemble(text) else {
+    let Ok(mut compiled) = context.assemble(text) else {
         return false;
     };
-    let mut outcomes = [false, true].map(|threaded| {
-        context.set_threaded(threaded);
-        context.execute(&compiled, &mut Echo)
-    });
-    let [portable, threaded] = &mut outcomes;
+    let run = |context: &mut eitri::Context, compiled: &eitri::Compiled| {
+        [false, true].map(|threaded| {
+            context.set_threaded(threaded);
+            context.execute(compiled, &mut Echo)
+        })
+    };
+    let before = run(&mut context, &compiled);
     assert_eq!(
-        portable, threaded,
+        before[0], before[1],
         "the interpreters disagree on assembled code"
     );
+    // The hot tier on arbitrary control flow: same outcome, traces included.
+    context
+        .optimize_kept(&mut compiled)
+        .expect("assembled code keeps its logical instructions");
+    let after = run(&mut context, &compiled);
+    assert_eq!(before, after, "optimized code behaves differently\n{text}");
     true
 }
 
@@ -102,7 +110,11 @@ pub fn assembly(data: &[u8]) -> bool {
 pub fn print(source: &str) -> Option<String> {
     let mut context = super::eits::context();
     let compiled = context.compile(source).ok()?;
-    Some(context.disassemble(&compiled, eitri::PrintOptions::default()))
+    Some(super::eits::listing(
+        &context,
+        &compiled,
+        eitri::PrintOptions::default(),
+    ))
 }
 
 /// A compiled program and the host signatures it was verified against.
@@ -144,7 +156,7 @@ pub fn compile(text: &str) -> Option<Compiled> {
     if diagnostics.has_errors() {
         return None;
     }
-    let program = eitri_lower::lower(&input, checked, &mut lower).ok()?;
+    let program = eitri_lower::lower(&input, checked, &mut lower, false).ok()?;
     Some(Compiled {
         program,
         hosts: eitri_lower::host_signatures(&hosts),

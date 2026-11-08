@@ -7,18 +7,23 @@
 use eitri_base::{FxHashMap, Idx, Span};
 
 use super::{HostDecl, MODULE, mnemonic};
-use crate::asm::{AsmError, Assembler, Label};
+use crate::asm::{Assembler, imm_complement};
+use crate::encoding::{EncodeError, encode};
 use crate::encoding::{MAX_SLOT, Operands};
 use crate::function::{
     CallSite, CallTarget, Function, FunctionId, Signature, SlotRange, ValueType,
 };
+use crate::ir::{self, Branch, Insn, Item};
 use crate::spec::{OPS, Op, Role, Sem};
 
-/// Functions in definition order and the host functions they declare.
-/// Host call sites index `hosts`; spans are byte ranges of the text.
+/// Functions in definition order, their logical instructions, and the host
+/// functions they declare. Host call sites index `hosts`; spans are byte
+/// ranges of the text.
 #[derive(Debug)]
 pub struct Parsed {
     pub functions: Vec<Function>,
+    /// Each function's body as assembled ([`ir`]), positions filled in.
+    pub bodies: Vec<ir::Body>,
     pub hosts: Vec<HostDecl>,
     /// The span of each function's name in its `define`.
     pub function_spans: Vec<Span>,
@@ -63,7 +68,9 @@ pub fn parse(text: &str) -> Result<Parsed> {
     };
     let headers = parser.headers()?;
     let mut functions = Vec::new();
-    let mut asm = Assembler::new();
+    let mut bodies = Vec::new();
+    let mut asm = Assembler::recording();
+    let mut words = Vec::new();
     let mnemonics: FxHashMap<String, Op> = (0..OPS.len())
         .filter_map(|byte| Op::from_byte(byte as u8))
         .map(|op| (mnemonic(op), op))
@@ -72,17 +79,21 @@ pub fn parse(text: &str) -> Result<Parsed> {
         parser.at = define.body;
         let mut body = Body {
             parser: &mut parser,
-            asm: &mut asm,
+            words: &mut words,
             headers: &headers,
             mnemonics: &mnemonics,
+            items: Vec::new(),
             labels: FxHashMap::default(),
             constants: FxHashMap::default(),
         };
-        functions.push(body.function(define)?);
+        let (function, assembled) = body.function(define, &mut asm)?;
+        functions.push(function);
+        bodies.push(assembled);
     }
     let (hosts, host_spans) = headers.hosts.into_iter().unzip();
     Ok(Parsed {
         functions,
+        bodies,
         hosts,
         function_spans: headers.defines.iter().map(|d| d.name_span).collect(),
         host_spans,
@@ -451,19 +462,26 @@ impl<'a> Parser<'_, 'a> {
 
 struct Body<'p, 't, 'a> {
     parser: &'p mut Parser<'t, 'a>,
-    asm: &'p mut Assembler,
+    /// Scratch for checking that a plain instruction encodes.
+    words: &'p mut Vec<u32>,
     headers: &'p Headers<'a>,
     mnemonics: &'p FxHashMap<String, Op>,
-    /// Each label: the assembler's label, where it was bound, and its first
-    /// use.
-    labels: FxHashMap<&'a str, (Label, Option<Span>, Span)>,
+    /// The logical instructions so far.
+    items: Vec<Item>,
+    /// Each label: its number, where it was defined, and its first use.
+    labels: FxHashMap<&'a str, (u32, Option<Span>, Span)>,
     /// Each distinct constant's pool index, in the assembler's order of
     /// first appearance, to know which load form it will choose.
     constants: FxHashMap<u64, usize>,
 }
 
 impl<'a> Body<'_, '_, 'a> {
-    fn function(&mut self, define: &Define<'a>) -> Result<Function> {
+    /// Parse the body, check it, and assemble it.
+    fn function(
+        &mut self,
+        define: &Define<'a>,
+        asm: &mut Assembler<true>,
+    ) -> Result<(Function, ir::Body)> {
         let base = define.signature.param_base();
         for (i, &(slot, span)) in define.params.iter().enumerate() {
             if slot != base + i as u32 {
@@ -484,9 +502,13 @@ impl<'a> Body<'_, '_, 'a> {
                 return Err(mismatch(used, format!("label `%{name}` is never defined")));
             }
         }
-        let function = self
-            .asm
-            .finish(define.name, define.signature.clone())
+        let body = ir::Body {
+            items: std::mem::take(&mut self.items),
+            labels: self.labels.len() as u32,
+        };
+        // Each instruction was checked as it was parsed; what remains are
+        // whole-function limits (code size, constants, call sites).
+        let (function, assembled) = ir::assemble(&body, define.name, define.signature.clone(), asm)
             .map_err(|error| mismatch(define.frame.1, format!("cannot assemble: {error:?}")))?;
         if function.frame_size != define.frame.0 {
             return Err(mismatch(
@@ -497,22 +519,20 @@ impl<'a> Body<'_, '_, 'a> {
                 ),
             ));
         }
-        Ok(function)
+        Ok((function, assembled))
     }
 
-    fn label(&mut self, name: &'a str, span: Span) -> Label {
-        match self.labels.get(name) {
-            Some(&(label, _, _)) => label,
-            None => {
-                let label = self.asm.label();
-                self.labels.insert(name, (label, None, span));
-                label
-            }
-        }
+    fn label(&mut self, name: &'a str, span: Span) -> u32 {
+        let next = self.labels.len() as u32;
+        self.labels.entry(name).or_insert((next, None, span)).0
+    }
+
+    fn push(&mut self, insn: Insn, span: Span) {
+        self.items.push(Item::new(insn, span));
     }
 
     /// `label %name`.
-    fn target(&mut self) -> Result<Label> {
+    fn target(&mut self) -> Result<u32> {
         self.parser.keyword("label")?;
         match self.parser.peek().tok {
             Tok::Local(name) => {
@@ -546,9 +566,7 @@ impl<'a> Body<'_, '_, 'a> {
                 ));
             }
             entry.1 = Some(first.span);
-            self.asm
-                .bind(label)
-                .map_err(|e| mismatch(first.span, format!("{e:?}")))?;
+            self.push(Insn::Label(label), Span::default());
             return Ok(());
         }
         let dest = match first.tok {
@@ -590,7 +608,14 @@ impl<'a> Body<'_, '_, 'a> {
                 )
             })
         };
-        let encode = |e: AsmError| mismatch(word_span, format!("cannot encode `{name}`: {e:?}"));
+        let unencodable =
+            |e: EncodeError| mismatch(word_span, format!("cannot encode `{name}`: {e:?}"));
+        let no_long_form = || {
+            mismatch(
+                word_span,
+                format!("`{name}` with these operands has no far form, so it cannot be assembled"),
+            )
+        };
         match info.sem {
             Sem::LoadImm | Sem::LoadConst => {
                 let dst = need_dest(dest)?;
@@ -627,19 +652,22 @@ impl<'a> Body<'_, '_, 'a> {
                     ));
                 }
                 let span = self.span_from(start);
-                self.asm.load(dst, value, ty, span).map_err(encode)
+                self.push(Insn::Load { dst, value, ty }, span);
+                Ok(())
             }
             Sem::Call(_) => self.call(op, dest, start, word_span),
             Sem::Return => {
                 no_dest(dest)?;
                 let span = self.span_from(start);
-                self.asm.ret(span).map_err(encode)
+                self.push(Insn::Ret, span);
+                Ok(())
             }
             Sem::Jump if op == Op::J => {
                 no_dest(dest)?;
-                let label = self.target()?;
+                let target = self.target()?;
                 let span = self.span_from(start);
-                self.asm.jump(label, span);
+                let branch = Branch::Jump;
+                self.push(Insn::Branch { branch, target }, span);
                 Ok(())
             }
             Sem::Branch { cond, imm: false } => {
@@ -648,9 +676,14 @@ impl<'a> Body<'_, '_, 'a> {
                 self.parser.punct(b',')?;
                 let (b, _) = self.parser.slot()?;
                 self.parser.punct(b',')?;
-                let label = self.target()?;
+                let target = self.target()?;
+                if cond.complement().is_none() {
+                    return Err(no_long_form());
+                }
                 let span = self.span_from(start);
-                self.asm.branch_if(cond, a, b, label, span).map_err(encode)
+                let branch = Branch::Compare { cond, a, b };
+                self.push(Insn::Branch { branch, target }, span);
+                Ok(())
             }
             Sem::Branch { cond, imm: true } => {
                 no_dest(dest)?;
@@ -660,19 +693,23 @@ impl<'a> Body<'_, '_, 'a> {
                 let imm =
                     i64::try_from(imm).map_err(|_| mismatch(imm_span, "immediate out of range"))?;
                 self.parser.punct(b',')?;
-                let label = self.target()?;
+                let target = self.target()?;
+                if imm_complement(cond, imm).is_none() {
+                    return Err(no_long_form());
+                }
                 let span = self.span_from(start);
-                self.asm
-                    .branch_imm(cond, a, imm, label, span)
-                    .map_err(encode)
+                let branch = Branch::CompareImm { cond, a, imm };
+                self.push(Insn::Branch { branch, target }, span);
+                Ok(())
             }
             Sem::TestBranch(test) => {
                 no_dest(dest)?;
                 let (a, _) = self.parser.slot()?;
                 self.parser.punct(b',')?;
-                let label = self.target()?;
+                let target = self.target()?;
                 let span = self.span_from(start);
-                self.asm.branch_test(test, a, label, span);
+                let branch = Branch::Test { test, a };
+                self.push(Insn::Branch { branch, target }, span);
                 Ok(())
             }
             Sem::Jump | Sem::Wide => Err(syntax(
@@ -728,10 +765,12 @@ impl<'a> Body<'_, '_, 'a> {
                     };
                 }
                 let [a, b, c, ext] = values;
+                let operands = Operands { a, b, c, ext };
+                self.words.clear();
+                encode(op, operands, self.words).map_err(unencodable)?;
                 let span = self.span_from(start);
-                self.asm
-                    .emit(op, Operands { a, b, c, ext }, span)
-                    .map_err(encode)
+                self.push(Insn::Plain { op, operands }, span);
+                Ok(())
             }
         }
     }
@@ -818,9 +857,8 @@ impl<'a> Body<'_, '_, 'a> {
             result,
         };
         let span = self.span_from(start);
-        self.asm
-            .call(site, span)
-            .map_err(|e| mismatch(word_span, format!("cannot encode the call: {e:?}")))
+        self.push(Insn::Call(site), span);
+        Ok(())
     }
 
     /// From `start` to the end of the last token consumed.

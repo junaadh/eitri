@@ -6,6 +6,11 @@
  * separately). The script reports its result through `emit`, checked
  * every run. Garbage collection runs as Lua schedules it and is included.
  *
+ * Then a long-running process per workload, as in the Eitri harness: load
+ * once and run the loaded chunk LONG_RUNS times in one state; the total
+ * includes loading, and steady execution is the median of the last 90% of
+ * runs. Medians of LONG_REPEATS processes.
+ *
  * Run: `crates/eitri/benches/lua/run.sh [samples]` */
 
 #include <lauxlib.h>
@@ -87,6 +92,40 @@ static void fmt(char *buf, unsigned long long v) {
         snprintf(buf, 32, "%llu ns", v);
 }
 
+#define LONG_RUNS 10000
+#define LONG_REPEATS 5
+
+/* One long-running process; writes its total and steady execution. */
+static void long_run(const char *source, size_t len, const char *name, long long answer,
+                     unsigned long long *total, unsigned long long *steady) {
+    static unsigned long long times[LONG_RUNS];
+    lua_State *L = initialized();
+    unsigned long long start = now();
+    if (luaL_loadbuffer(L, source, len, name) != LUA_OK) {
+        fprintf(stderr, "%s: %s\n", name, lua_tostring(L, -1));
+        exit(1);
+    }
+    for (size_t i = 0; i < LONG_RUNS; i++) {
+        has_emitted = 0;
+        lua_pushvalue(L, -1);
+        unsigned long long t0 = now();
+        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            fprintf(stderr, "%s: %s\n", name, lua_tostring(L, -1));
+            exit(1);
+        }
+        times[i] = now() - t0;
+        if (!has_emitted || emitted != answer) {
+            fprintf(stderr, "%s: wrong answer %lld, expected %lld\n", name, emitted, answer);
+            exit(1);
+        }
+    }
+    *total = now() - start;
+    lua_close(L);
+    unsigned long long s[3];
+    stats(times + LONG_RUNS / 10, LONG_RUNS - LONG_RUNS / 10, s);
+    *steady = s[0];
+}
+
 static const struct {
     const char *name;
     long long answer;
@@ -164,5 +203,29 @@ int main(int argc, char **argv) {
         free(source);
     }
     if (csv) fclose(csv);
+
+    printf("\n| workload | %d runs: total / execute p50 |\n|---|---|\n", LONG_RUNS);
+    for (size_t w = 0; w < sizeof WORKLOADS / sizeof *WORKLOADS; w++) {
+        const char *name = WORKLOADS[w].name;
+        char path[1024];
+        snprintf(path, sizeof path, "%s/%s.lua", dir, name);
+        FILE *f = fopen(path, "rb");
+        if (!f) { perror(path); return 1; }
+        fseek(f, 0, SEEK_END);
+        size_t len = (size_t)ftell(f);
+        fseek(f, 0, SEEK_SET);
+        char *source = malloc(len);
+        if (fread(source, 1, len, f) != len) { perror(path); return 1; }
+        fclose(f);
+        unsigned long long totals[LONG_REPEATS], steadies[LONG_REPEATS], t[3], st[3];
+        for (int r = 0; r < LONG_REPEATS; r++)
+            long_run(source, len, name, WORKLOADS[w].answer, &totals[r], &steadies[r]);
+        stats(totals, LONG_REPEATS, t);
+        stats(steadies, LONG_REPEATS, st);
+        char b0[32], b1[32];
+        fmt(b0, t[0]); fmt(b1, st[0]);
+        printf("| %s | %s / %s |\n", name, b0, b1);
+        free(source);
+    }
     return 0;
 }

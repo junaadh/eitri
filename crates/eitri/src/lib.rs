@@ -2,7 +2,10 @@
 
 mod context;
 
-pub use context::{Compiled, Context, FaultReport, RunError, TraceFrame};
+pub use context::{
+    Compiled, Context, DEFAULT_TIER_THRESHOLD, FaultReport, OptimizeError, RunError, TraceFrame,
+};
+pub use eitri_bytecode::opt::Report as OptimizeReport;
 pub use eitri_bytecode::text::PrintOptions;
 /// The shared diagnostic model and renderer, re-exported so hosts need no
 /// separate dependency.

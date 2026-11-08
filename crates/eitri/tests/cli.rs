@@ -199,7 +199,8 @@ fn dump_prints_tokens_and_the_tree() {
     let ast = cli().args(["dump", "ast", &source]).output().unwrap();
     assert_eq!(ast.status.code(), Some(0));
     let ast = String::from_utf8(ast.stdout).unwrap();
-    assert!(ast.contains("let ") || ast.contains("var "), "{ast}");
+    assert!(ast.starts_with("ModuleDecl <line:1:1"), "{ast}");
+    assert!(ast.contains("─VarDecl <"), "{ast}");
 
     // A syntax error is reported like any compile error.
     let broken = cli()
@@ -234,4 +235,28 @@ fn unreadable_source_reports_io_failure() {
             .unwrap()
             .starts_with(&format!("{path}: error[IO]: "))
     );
+}
+
+#[test]
+fn declaration_files_next_to_the_script_are_found() {
+    // `benches/fixtures/bench.eith` sits beside the workload; the fixtures'
+    // `test.eith` sits one directory above `ok/`.
+    let workload = concat!(env!("CARGO_MANIFEST_DIR"), "/benches/fixtures/calls.eit");
+    let printed = cli().args(["asm", workload]).output().unwrap();
+    assert_eq!(
+        printed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&printed.stderr)
+    );
+    assert!(
+        String::from_utf8(printed.stdout)
+            .unwrap()
+            .contains("declare void @bench.emit(i64)")
+    );
+    let checked = cli()
+        .args(["check", &fixture("ok/reentry.eit")])
+        .output()
+        .unwrap();
+    assert_eq!(checked.status.code(), Some(0));
 }

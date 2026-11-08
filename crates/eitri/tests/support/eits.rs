@@ -6,14 +6,22 @@ use eitri::{Context, PrintOptions};
 
 use super::{TEST_MODULE, TestHost};
 
-const BENCH_MODULE: &str = "pub fn emit(value: i64) -> void\npub fn id(value: i64) -> i64\n";
+const BENCH_MODULE: &str = include_str!("../../benches/fixtures/bench.eith");
 
 pub fn context() -> Context {
     let mut context = Context::new();
+    context.set_keep_ir(true);
     context.register_host_module("test", TEST_MODULE).unwrap();
     context.register_host_module("bench", BENCH_MODULE).unwrap();
     context.set_budget(100_000);
     context
+}
+
+/// The `.eits` of `compiled`, which kept its logical instructions.
+pub fn listing(context: &Context, compiled: &eitri::Compiled, options: PrintOptions) -> String {
+    context
+        .disassemble(compiled, options)
+        .expect("compiled or assembled with its logical instructions kept")
 }
 
 /// The annotated listing without its source spans.
@@ -71,19 +79,19 @@ pub fn round_trip(source: &str) -> Result<bool, String> {
     };
     let plain = PrintOptions::default();
     let annotated = PrintOptions { annotate: true };
-    let text = context.disassemble(&compiled, plain);
+    let text = listing(&context, &compiled, plain);
     let assembled = context
         .assemble(&text)
         .map_err(|d| format!("the printed text does not assemble: {d:?}\n{text}"))?;
-    let again = context.disassemble(&assembled, plain);
+    let again = listing(&context, &assembled, plain);
     if again != text {
         return Err(format!(
             "the text changed\n--- printed\n{text}--- reprinted\n{again}"
         ));
     }
     let (before, after) = (
-        words(&context.disassemble(&compiled, annotated)),
-        words(&context.disassemble(&assembled, annotated)),
+        words(&listing(&context, &compiled, annotated)),
+        words(&listing(&context, &assembled, annotated)),
     );
     if before != after {
         return Err(format!(

@@ -901,6 +901,20 @@ data. These tasks do not authorize replacing the correctness baseline first.
   coalescing, and short-operand slot placement against simple lowering (E2/E3).
 - Done when: differential semantics pass and reports include compilation time,
   executed moves, `WIDE` frequency, frame size, allocations, and first result.
+- Progress 2026-11-08: optimizations needing analysis run in a hot tier,
+  not in first-run lowering. `Context::optimize` re-lowers hot code with
+  its logical instructions recorded (a compile-time instantiation of the
+  assembler, so first runs are unchanged: compile within noise of
+  `bf5b64c`), runs `eitri_bytecode::opt` (argument-copy coalescing,
+  loop-invariant literals; liveness bounded by `ANALYSIS_LIMIT` and
+  `SCAN_LIMIT`), re-assembles, and verifies. Every fixture, limits program,
+  random program, and mutated `.eits` runs at both tiers with identical
+  outcomes; unit tests cover each pass's conditions, and removing any one
+  fails them. Steady-state execution: `arithmetic` −15%, `host_calls` −14%,
+  `branching` −8%, break-even after 4–7 runs; `calls` and `module` gain
+  little or nothing
+  ([ledger](implementation/vm-research.md#hot-tier-re-optimizing-bytecode-from-recorded-eits--2026-11-08)).
+  Open: reports of executed moves and `WIDE` frequency, and more passes.
 
 ### T038 — Optimize literal construction and execution metadata
 

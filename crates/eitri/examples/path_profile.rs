@@ -11,7 +11,7 @@ use eitri_lower::LowerScratch;
 use eitri_syntax::{LexScratch, ModuleKind, ParseScratch};
 use eitri_vm::{Limits, VmScratch};
 
-const DECLARATIONS: &str = "pub fn emit(value: i64) -> void\npub fn id(value: i64) -> i64\n";
+const DECLARATIONS: &str = include_str!("../benches/fixtures/bench.eith");
 
 struct Output(Option<i64>);
 impl Host for Output {
@@ -127,7 +127,7 @@ fn main() {
         let checked = eitri_check::check(&input, &mut diagnostics, &mut check);
         let t3 = Instant::now();
         assert!(diagnostics.is_empty());
-        let program = eitri_lower::lower(&input, checked, &mut lower).unwrap();
+        let program = eitri_lower::lower(&input, checked, &mut lower, false).unwrap();
         let t4 = Instant::now();
         // Validate each fresh artifact outside the timed compiler phases.
         eitri_vm::run(
@@ -144,7 +144,7 @@ fn main() {
             while start.elapsed() < Duration::from_secs(amount) {
                 for _ in 0..256 {
                     drop(black_box(
-                        eitri_lower::lower(black_box(&input), checked, &mut lower).unwrap(),
+                        eitri_lower::lower(black_box(&input), checked, &mut lower, false).unwrap(),
                     ));
                 }
                 runs += 256;

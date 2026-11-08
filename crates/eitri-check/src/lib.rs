@@ -3,6 +3,7 @@
 //! imports against.
 
 pub(crate) mod check;
+pub mod dump;
 mod host;
 mod ty;
 

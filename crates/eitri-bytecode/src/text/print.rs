@@ -1,14 +1,17 @@
-//! Printing functions as `.eits`.
+//! Printing functions as `.eits`, from the logical instructions recorded
+//! when they were assembled ([`crate::ir`]).
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
-use super::{HostDecl, MODULE, mnemonic, type_name, uncomplement};
 use eitri_base::Idx;
 
-use crate::encoding::{Decoded, decode};
-use crate::function::{CallTarget, Function, ValueType};
-use crate::spec::{Op, Role, Sem};
+use super::{HostDecl, MODULE, mnemonic, type_name};
+use crate::asm::{compare_imm_op, compare_op, test_op};
+use crate::encoding::decode;
+use crate::function::{CallSite, CallTarget, Function, ValueType};
+use crate::ir::{Body, Branch, Insn, Item};
+use crate::spec::Role;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PrintOptions {
@@ -18,8 +21,16 @@ pub struct PrintOptions {
 }
 
 /// Print a program: `declare` for each host function its calls use, then
-/// `define` for each function, in order. `hosts` is indexed by host index.
-pub fn print(functions: &[Function], hosts: &[HostDecl], options: PrintOptions) -> String {
+/// `define` for each function, in order. `bodies` are the functions'
+/// recorded logical instructions, one per function; `hosts` is indexed by
+/// host index.
+pub fn print(
+    functions: &[Function],
+    bodies: &[Body],
+    hosts: &[HostDecl],
+    options: PrintOptions,
+) -> String {
+    assert_eq!(functions.len(), bodies.len(), "one body per function");
     let mut out = String::new();
     let used: BTreeSet<u32> = functions
         .iter()
@@ -45,7 +56,7 @@ pub fn print(functions: &[Function], hosts: &[HostDecl], options: PrintOptions) 
             None => writeln!(out, "; host function {index} is not declared").unwrap(),
         }
     }
-    for function in functions {
+    for (function, body) in functions.iter().zip(bodies) {
         if !out.is_empty() {
             out.push('\n');
         }
@@ -56,7 +67,7 @@ pub fn print(functions: &[Function], hosts: &[HostDecl], options: PrintOptions) 
             hosts,
             options,
         }
-        .function();
+        .function(body);
     }
     out
 }
@@ -76,17 +87,6 @@ fn global(name: &str) -> String {
     }
 }
 
-/// One logical instruction: a decoded instruction, or a far branch (its
-/// complement and the `J_X` after it) folded back into one.
-struct Item {
-    pc: usize,
-    /// Words, both instructions of a far branch included.
-    words: usize,
-    decoded: Decoded,
-    /// For a branch: its target PC.
-    target: Option<usize>,
-}
-
 struct Printer<'a> {
     out: &'a mut String,
     function: &'a Function,
@@ -96,7 +96,7 @@ struct Printer<'a> {
 }
 
 impl Printer<'_> {
-    fn function(&mut self) {
+    fn function(&mut self, body: &Body) {
         let f = self.function;
         let ret = type_name(f.signature.results.first().copied());
         let base = f.signature.param_base();
@@ -115,38 +115,40 @@ impl Printer<'_> {
             f.frame_size
         )
         .unwrap();
-        let Some(items) = self.items() else {
-            // Not decodable: show the words rather than guess.
-            for (pc, word) in f.code.iter().enumerate() {
-                writeln!(self.out, "    ; {pc:04}  {word:#010x}").unwrap();
-            }
-            self.out.push_str("}\n");
-            return;
-        };
-        // Blocks start at the entry, at branch targets, and after branches
-        // and returns; they are numbered in PC order.
-        let mut leaders = BTreeSet::from([0usize]);
-        for (i, item) in items.iter().enumerate() {
-            if let Some(target) = item.target {
-                leaders.insert(target);
-            }
-            let info = item.decoded.op.info();
-            let ends = item.target.is_some() || matches!(info.sem, Sem::Return);
-            if ends && let Some(next) = items.get(i + 1) {
-                leaders.insert(next.pc);
+        // Blocks start at the entry, at labels, and after branches and
+        // returns; they are numbered in order. Labels at one point share
+        // their block's name.
+        let mut block_of_label = vec![0u32; body.labels as usize];
+        let mut starts = vec![None; body.items.len()];
+        let mut blocks = 0u32;
+        let mut pending: Option<u32> = None;
+        let mut leader = true;
+        for (i, item) in body.items.iter().enumerate() {
+            let mut open = || {
+                *pending.get_or_insert_with(|| {
+                    blocks += 1;
+                    blocks - 1
+                })
+            };
+            match item.insn {
+                Insn::Label(n) => block_of_label[n as usize] = open(),
+                insn => {
+                    if leader {
+                        open();
+                    }
+                    starts[i] = pending.take();
+                    leader = matches!(insn, Insn::Branch { .. } | Insn::Ret);
+                }
             }
         }
-        let label = |pc: usize| {
-            leaders
-                .iter()
-                .position(|&l| l == pc)
-                .map(|n| format!("bb{n}"))
-        };
-        for item in &items {
-            if let Some(name) = label(item.pc) {
-                writeln!(self.out, "{name}:").unwrap();
+        for (i, item) in body.items.iter().enumerate() {
+            if matches!(item.insn, Insn::Label(_)) {
+                continue;
             }
-            let text = self.instruction(item, &label);
+            if let Some(block) = starts[i] {
+                writeln!(self.out, "bb{block}:").unwrap();
+            }
+            let text = self.instruction(item, &block_of_label);
             if self.options.annotate {
                 let note = self.annotation(item);
                 writeln!(self.out, "    {text:<44}; {note}").unwrap();
@@ -157,137 +159,86 @@ impl Printer<'_> {
         self.out.push_str("}\n");
     }
 
-    /// Decode the code into logical instructions, or `None` if it does not
-    /// decode.
-    fn items(&self) -> Option<Vec<Item>> {
-        let code = &self.function.code;
-        let mut decoded = Vec::new();
-        let mut pc = 0;
-        while pc < code.len() {
-            let insn = decode(code, pc).ok()?;
-            decoded.push((pc, insn));
-            pc += insn.words as usize;
-        }
-        let mut items = Vec::with_capacity(decoded.len());
-        let mut i = 0;
-        while i < decoded.len() {
-            let (pc, insn) = decoded[i];
-            let end = pc + insn.words as usize;
-            let target = branch_target(&insn, end);
-            // A far branch: the complement skipping exactly the `J_X` after it.
-            if let (Some(skip), Some(&(jpc, jump))) = (target, decoded.get(i + 1))
-                && jump.op == Op::JX
-                && skip == jpc + jump.words as usize
-                && let Some((op, a, b)) = uncomplement(insn.op, insn.operands.a, insn.operands.b)
-            {
-                let mut logical = insn;
-                logical.op = op;
-                logical.operands.a = a;
-                logical.operands.b = b;
-                items.push(Item {
-                    pc,
-                    words: insn.words as usize + jump.words as usize,
-                    decoded: logical,
-                    target: branch_target(&jump, skip),
-                });
-                i += 2;
-                continue;
-            }
-            items.push(Item {
-                pc,
-                words: insn.words as usize,
-                decoded: insn,
-                target,
-            });
-            i += 1;
-        }
-        Some(items)
-    }
-
-    fn instruction(&self, item: &Item, label: &dyn Fn(usize) -> Option<String>) -> String {
-        let f = self.function;
-        let d = &item.decoded;
-        let op = d.op;
-        let info = op.info();
-        let to = || {
-            let target = item.target.expect("branches have targets");
-            match label(target) {
-                Some(name) => format!("label %{name}"),
-                None => format!("label %pc{target}"),
-            }
-        };
-        let name = mnemonic(op);
-        match info.sem {
-            Sem::LoadImm | Sem::LoadConst => {
-                let (value, index) = match op {
-                    Op::Ldi => (Some(d.operands.b as u64), 0),
-                    Op::Ldk => (f.consts.get(d.operands.b as usize).copied(), d.operands.b),
-                    _ => (
-                        f.consts.get(d.operands.ext as usize).copied(),
-                        d.operands.ext,
-                    ),
-                };
-                let Some(value) = value else {
-                    return format!("%r{} = {name} ; no constant k{index}", d.operands.a);
-                };
-                let ty = f.literal_type(item.pc as u32);
+    fn instruction(&self, item: &Item, block_of_label: &[u32]) -> String {
+        let to = |label: u32| format!("label %bb{}", block_of_label[label as usize]);
+        match item.insn {
+            Insn::Label(_) => unreachable!("labels print as block names"),
+            Insn::Load { dst, value, ty } => {
+                // The form the assembler chose, from the words.
+                let op = decode(&self.function.code, item.pc as usize).map(|d| d.op);
+                let name = op.map_or_else(|_| "ldi".to_owned(), mnemonic);
                 let value = match ty {
-                    Some(ValueType::Bool) if value <= 1 => (value == 1).to_string(),
+                    ValueType::Bool if value <= 1 => (value == 1).to_string(),
                     _ => (value as i64).to_string(),
                 };
-                let ty = ty.map_or("?", |ty| type_name(Some(ty)));
-                format!("%r{} = {name} {ty} {value}", d.operands.a)
+                format!("%r{dst} = {name} {} {value}", type_name(Some(ty)))
             }
-            Sem::Call(_) => self.call(&name, d.operands.b as usize),
-            Sem::Return => name,
-            Sem::Jump => format!("j {}", to()),
-            Sem::Branch { imm: false, .. } => {
-                format!("{name} %r{}, %r{}, {}", d.operands.a, d.operands.b, to())
-            }
-            Sem::Branch { imm: true, .. } => {
-                format!("{name} %r{}, {}, {}", d.operands.a, d.operands.b, to())
-            }
-            Sem::TestBranch(_) => format!("{name} %r{}, {}", d.operands.a, to()),
-            _ => {
-                let columns = [d.operands.a, d.operands.b, d.operands.c];
-                let mut operands = Vec::new();
-                let mut dest = None;
-                for (i, (&role, &value)) in info.roles.iter().zip(&columns).enumerate() {
-                    match role {
-                        Role::None => {}
-                        Role::Dst if i == 0 => dest = Some(value),
-                        role => operands.push(operand(role, value, item, label)),
-                    }
-                }
-                let ext = info.format.ext_role();
-                if ext != Role::None {
-                    operands.push(operand(ext, d.operands.ext, item, label));
-                }
-                let rest = if operands.is_empty() {
+            Insn::Plain { op, operands } => {
+                let info = op.info();
+                let name = mnemonic(op);
+                let columns = [operands.a, operands.b, operands.c, operands.ext];
+                let roles = [
+                    info.roles[0],
+                    info.roles[1],
+                    info.roles[2],
+                    info.format.ext_role(),
+                ];
+                let writes = roles[0] == Role::Dst;
+                let rest: Vec<String> = roles
+                    .iter()
+                    .zip(columns)
+                    .skip(usize::from(writes))
+                    .filter(|(role, _)| **role != Role::None)
+                    .map(|(&role, value)| match role {
+                        Role::Dst | Role::Src | Role::SrcDst => format!("%r{value}"),
+                        _ => value.to_string(),
+                    })
+                    .collect();
+                let text = if rest.is_empty() {
                     name
                 } else {
-                    format!("{name} {}", operands.join(", "))
+                    format!("{name} {}", rest.join(", "))
                 };
-                match dest {
-                    Some(slot) => format!("%r{slot} = {rest}"),
-                    None => rest,
+                if writes {
+                    format!("%r{} = {text}", operands.a)
+                } else {
+                    text
                 }
             }
+            Insn::Branch { branch, target } => match branch {
+                Branch::Compare { cond, a, b } => {
+                    format!(
+                        "{} %r{a}, %r{b}, {}",
+                        mnemonic(compare_op(cond)),
+                        to(target)
+                    )
+                }
+                Branch::CompareImm { cond, a, imm } => {
+                    format!(
+                        "{} %r{a}, {imm}, {}",
+                        mnemonic(compare_imm_op(cond)),
+                        to(target)
+                    )
+                }
+                Branch::Test { test, a } => {
+                    format!("{} %r{a}, {}", mnemonic(test_op(test)), to(target))
+                }
+                Branch::Jump => format!("j {}", to(target)),
+            },
+            Insn::Call(site) => self.call(site),
+            Insn::Ret => "ret".to_owned(),
         }
     }
 
-    fn call(&self, name: &str, index: usize) -> String {
-        let Some(site) = self.function.sites.get(index) else {
-            return format!("{name} ; no call site {index}");
-        };
-        let (callee, signature) = match site.target {
+    fn call(&self, site: CallSite) -> String {
+        let (name, callee, signature) = match site.target {
             CallTarget::Script(id) => match self.functions.get(id.index()) {
-                Some(f) => (global(&f.name), &f.signature),
-                None => return format!("{name} ; no function {}", id.index()),
+                Some(f) => ("call.script", global(&f.name), &f.signature),
+                None => return format!("call.script ; no function {}", id.index()),
             },
             CallTarget::Host(h) => match self.hosts.get(h as usize) {
-                Some(host) => (global(&host.name), &host.signature),
-                None => return format!("{name} ; no host function {h}"),
+                Some(host) => ("call.host", global(&host.name), &host.signature),
+                None => return format!("call.host ; no host function {h}"),
             },
         };
         let args: Vec<String> = signature
@@ -309,46 +260,20 @@ impl Printer<'_> {
 
     fn annotation(&self, item: &Item) -> String {
         let f = self.function;
-        let words: Vec<String> = f.code[item.pc..item.pc + item.words]
+        let (pc, words) = (item.pc as usize, item.words as usize);
+        let words: Vec<String> = f.code[pc..pc + words]
             .iter()
             .map(|word| format!("{word:08x}"))
             .collect();
-        let mut note = format!("{:04}  {}", item.pc, words.join(" "));
-        if matches!(item.decoded.op.info().sem, Sem::Call(_)) {
-            write!(note, "  site{}", item.decoded.operands.b).unwrap();
+        let mut note = format!("{pc:04}  {}", words.join(" "));
+        if let Insn::Call(_) = item.insn
+            && let Ok(decoded) = decode(&f.code, pc)
+        {
+            write!(note, "  site{}", decoded.operands.b).unwrap();
         }
-        if let Some(span) = f.span_at(item.pc as u32) {
+        if let Some(span) = f.span_at(item.pc) {
             write!(note, "  @{}..{}", span.start, span.end).unwrap();
         }
         note
-    }
-}
-
-fn branch_target(insn: &Decoded, end: usize) -> Option<usize> {
-    let info = insn.op.info();
-    let disp = info
-        .roles
-        .iter()
-        .zip([insn.operands.a, insn.operands.b, insn.operands.c])
-        .find(|(role, _)| role.is_displacement())
-        .map(|(_, value)| value)
-        .or_else(|| {
-            info.format
-                .ext_role()
-                .is_displacement()
-                .then_some(insn.operands.ext)
-        })?;
-    usize::try_from(end as i64 + disp).ok()
-}
-
-/// A plain instruction's operand in the role's text form.
-fn operand(role: Role, value: i64, item: &Item, label: &dyn Fn(usize) -> Option<String>) -> String {
-    match role {
-        Role::Dst | Role::Src | Role::SrcDst => format!("%r{value}"),
-        role if role.is_displacement() => match item.target.and_then(label) {
-            Some(name) => format!("label %{name}"),
-            None => format!("{value:+}"),
-        },
-        _ => value.to_string(),
     }
 }

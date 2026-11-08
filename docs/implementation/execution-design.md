@@ -379,6 +379,21 @@ Build optimized handlers, cold helpers, optional native stencils, and typed
 host descriptors when the runtime/host is built. That is useful AOT work even
 when submitted scripts remain fresh source. [D16]
 
+**Bytecode re-optimization (implemented).** Before any native tier, hot
+code can be re-optimized at the bytecode level. First runs lower straight
+to bytecode with no IR: the assembler records the logical instructions
+(`.eits` in memory) only in its recording instantiation, a compile-time
+choice. `Compiled` counts executions; past `Context::should_optimize`'s
+threshold the host calls `Context::optimize(&mut compiled, source)`, which
+lowers again with recording, checks the result is the same code, runs the
+passes of `eitri_bytecode::opt` over the IR, re-assembles, and verifies
+every function before replacing the code. Types are static, so nothing is
+speculative: no guards and no deoptimizer, and the verifier checks
+optimized code exactly as it checks compiled code. Passes preserve effects,
+faults, traces, and budget debits; the test suite runs every program at
+both tiers. Measurements are in the
+[research ledger](vm-research.md#hot-tier-re-optimizing-bytecode-from-recorded-eits--2026-11-08).
+
 Compare a small single-pass emitter with copy-and-patch for baseline native
 code. Neither requires a heavyweight optimizer in the runtime. The host may
 request native compilation of known hot callbacks; automatic tiering can use

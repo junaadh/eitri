@@ -16,6 +16,7 @@ use eitri_base::{FxHashMap, IndexVec, Span};
 
 use crate::encoding::{EncodeError, Operands, encode};
 use crate::function::{CallSite, CallTarget, Function, Signature, ValueType};
+use crate::ir::{self, Body, Insn};
 use crate::spec::{Cond, Op, Role, Sem, Test};
 
 eitri_base::newtype_index! {
@@ -80,8 +81,12 @@ enum Branch {
 }
 
 /// Builds one function. Reusable: `finish` leaves it empty.
+///
+/// `RECORD` also records the logical instructions as they are emitted
+/// ([`ir`]). It is a compile-time choice, so the assembler a first run
+/// compiles with carries no recording code at all.
 #[derive(Default)]
-pub struct Assembler {
+pub struct Assembler<const RECORD: bool = false> {
     insns: Vec<Kind>,
     spans: Vec<Span>,
     words: Vec<u32>,
@@ -97,11 +102,48 @@ pub struct Assembler {
     max_pos: Vec<u64>,
     short: Vec<bool>,
     final_pos: Vec<u32>,
+    /// The logical instructions emitted so far, when recording.
+    items: Vec<ir::Item>,
+    /// The last finished function's recorded body.
+    recorded: Option<Body>,
 }
 
 impl Assembler {
+    /// An assembler that records nothing: the one lowering uses for a
+    /// first run.
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+impl Assembler<true> {
+    /// An assembler that records each function's logical instructions, as
+    /// `.eits` in memory; [`Assembler::take_recorded`] returns them after
+    /// [`Assembler::finish`].
+    pub fn recording() -> Self {
+        Self::default()
+    }
+}
+
+impl<const RECORD: bool> Assembler<RECORD> {
+    /// The body recorded for the function last finished, with each
+    /// instruction's final position; `None` when not recording.
+    pub fn take_recorded(&mut self) -> Option<Body> {
+        self.recorded.take()
+    }
+
+    #[inline(always)]
+    fn note(&mut self, insn: Insn, span: Span) {
+        if RECORD {
+            self.record_item(insn, span);
+        }
+    }
+
+    /// Out of line: compiling for a first run never records.
+    #[cold]
+    #[inline(never)]
+    fn record_item(&mut self, insn: Insn, span: Span) {
+        self.items.push(ir::Item::new(insn, span));
     }
 
     pub fn label(&mut self) -> Label {
@@ -115,6 +157,7 @@ impl Assembler {
             return Err(AsmError::Rebound(label));
         }
         *slot = Some(self.insns.len() as u32);
+        self.note(Insn::Label(label.as_u32()), Span::default());
         Ok(())
     }
 
@@ -138,7 +181,9 @@ impl Assembler {
         ) {
             return Err(AsmError::NotPlain(op));
         }
-        self.plain(op, operands, span)
+        self.plain(op, operands, span)?;
+        self.note(Insn::Plain { op, operands }, span);
+        Ok(())
     }
 
     fn plain(&mut self, op: Op, operands: Operands, span: Span) -> Result<(), AsmError> {
@@ -186,6 +231,7 @@ impl Assembler {
             }
         }
         self.literals.push((at, ty));
+        self.note(Insn::Load { dst, value, ty }, span);
         Ok(())
     }
 
@@ -214,6 +260,7 @@ impl Assembler {
         self.uses(a);
         self.uses(b);
         self.branch(Branch::Compare { cond, a, b }, label, span);
+        self.note_branch(ir::Branch::Compare { cond, a, b }, label, span);
         Ok(())
     }
 
@@ -234,6 +281,7 @@ impl Assembler {
         }
         self.uses(a);
         self.branch(Branch::CompareImm { cond, a, imm }, label, span);
+        self.note_branch(ir::Branch::CompareImm { cond, a, imm }, label, span);
         Ok(())
     }
 
@@ -241,10 +289,18 @@ impl Assembler {
     pub fn branch_test(&mut self, test: Test, a: u32, label: Label, span: Span) {
         self.uses(a);
         self.branch(Branch::Test { test, a }, label, span);
+        self.note_branch(ir::Branch::Test { test, a }, label, span);
     }
 
     pub fn jump(&mut self, label: Label, span: Span) {
         self.branch(Branch::Jump, label, span);
+        self.note_branch(ir::Branch::Jump, label, span);
+    }
+
+    #[inline(always)]
+    fn note_branch(&mut self, branch: ir::Branch, label: Label, span: Span) {
+        let target = label.as_u32();
+        self.note(Insn::Branch { branch, target }, span);
     }
 
     fn branch(&mut self, branch: Branch, label: Label, span: Span) {
@@ -267,17 +323,28 @@ impl Assembler {
             CallTarget::Host(_) => Op::CallHost,
         };
         self.sites.push(site);
-        self.plain(op, Operands::abc(0, index as i64, 0), span)
+        self.plain(op, Operands::abc(0, index as i64, 0), span)?;
+        self.note(Insn::Call(site), span);
+        Ok(())
     }
 
     pub fn ret(&mut self, span: Span) -> Result<(), AsmError> {
-        self.plain(Op::Ret, Operands::default(), span)
+        self.plain(Op::Ret, Operands::default(), span)?;
+        self.note(Insn::Ret, span);
+        Ok(())
     }
 
     /// Lay out and encode everything emitted, and reset for the next
     /// function. The frame covers every slot named and the signature.
     pub fn finish(&mut self, name: &str, signature: Signature) -> Result<Function, AsmError> {
         let result = self.layout(name, signature);
+        if RECORD {
+            self.recorded = result.is_ok().then(|| Body {
+                items: std::mem::take(&mut self.items),
+                labels: self.labels.len() as u32,
+            });
+            self.items.clear();
+        }
         self.insns.clear();
         self.spans.clear();
         self.words.clear();
@@ -361,6 +428,15 @@ impl Assembler {
             };
         }
         final_pos.push(pos);
+        // Recorded instructions are the logical ones, in order, plus labels.
+        let mut logical = 0;
+        for item in self.items.iter_mut().filter(|_| RECORD) {
+            if !matches!(item.insn, Insn::Label(_)) {
+                item.pc = final_pos[logical];
+                item.words = final_pos[logical + 1] - final_pos[logical];
+                logical += 1;
+            }
+        }
 
         let mut code = Vec::with_capacity(pos as usize);
         let mut starts = vec![0u64; (pos as usize).div_ceil(64)];

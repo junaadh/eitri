@@ -83,20 +83,95 @@ Every stage is exposed as a subcommand:
 
 | Command | Does |
 |---|---|
-| `eitri run <file.eit\|file.eits>` | Compile (or assemble) and run; `eitri <file>` is the same |
+| `eitri run [--opt] <file.eit\|file.eits>` | Compile (or assemble) and run; `eitri <file>` is the same |
 | `eitri check <file.eit\|file.eits>` | Compile (or assemble and verify) without running |
-| `eitri asm [--annotate] [-o <out>] <file.eit>` | Print the compiled bytecode as `.eits` |
+| `eitri asm [--annotate] [--opt] [-o <out>] <file.eit>` | Print the compiled bytecode as `.eits` |
 | `eitri verify <file.eits>` | Assemble and verify hand-written bytecode |
-| `eitri dump tokens\|ast <file.eit>` | Print the token stream or the syntax tree |
+| `eitri dump tokens\|ast <file.eit>` | Print the token stream, or the checked syntax tree in the style of `clang -ast-dump` |
 
-`--host <path>=<file>` registers a host module from a declaration file, so
-scripts that import one can be compiled and inspected (`run` implements no
-host functions, so calling one faults).
+A script's host modules come from declaration files (bodiless `pub fn`s):
+`<path>.eith` in the script's directory or any directory above it is
+registered as the module `path`, and `--host <path>=<file>` names one
+explicitly. `run` implements no host functions, so calling one faults; the
+other commands only need the declarations. The benchmark workloads and the
+fixtures ship theirs (`bench.eith`, `test.eith`).
 
-`.eits` is the text form of bytecode, and it reads like LLVM IR over Eitri's
-actual register machine (`%rN` are frame slots, not SSA values):
+### Inspecting every stage
 
-```llvm
+Take `calls.eit`, one of the benchmark workloads:
+
+```eit
+import bench from "bench"
+fn fib(n: i64) -> i64 {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+bench.emit(fib(15))
+```
+
+`eitri dump ast` prints the checked syntax tree in the style of
+`clang -ast-dump`: each node's kind, its source range, and its type (in
+color on a terminal):
+
+```text
+$ eitri dump ast crates/eitri/benches/fixtures/calls.eit
+ModuleDecl <line:1:1, line:8:20>
+├─ImportDecl <line:1:1, col:25> col:8 bench "bench"
+├─FunctionDecl <line:2:1, line:7:1> line:2:4 fib 'i64 (i64)'
+│ ├─ParmVarDecl <col:8, col:13> col:8 n 'i64'
+│ └─CompoundStmt <col:23, line:7:1>
+│   ├─IfStmt <line:3:5, line:5:5>
+│   │ ├─BinaryOperator <line:3:8, col:12> 'bool' '<'
+│   │ │ ├─DeclRefExpr <col:8> 'i64' ParmVar 'n'
+│   │ │ └─IntegerLiteral <col:12> 'i64' 2
+│   │ └─CompoundStmt <col:14, line:5:5>
+│   │   └─ReturnStmt <line:4:9, col:16>
+│   │     └─DeclRefExpr <col:16> 'i64' ParmVar 'n'
+│   └─ReturnStmt <line:6:5, col:34>
+│     └─BinaryOperator <col:12, col:34> 'i64' '+'
+│       ├─CallExpr <col:12, col:21> 'i64'
+│       │ ├─DeclRefExpr <col:12, col:14> 'i64 (i64)' Function 'fib'
+│       │ └─BinaryOperator <col:16, col:20> 'i64' '-'
+│       │   ├─DeclRefExpr <col:16> 'i64' ParmVar 'n'
+│       │   └─IntegerLiteral <col:20> 'i64' 1
+│       └─CallExpr <col:25, col:34> 'i64'
+│         ├─DeclRefExpr <col:25, col:27> 'i64 (i64)' Function 'fib'
+│         └─BinaryOperator <col:29, col:33> 'i64' '-'
+│           ├─DeclRefExpr <col:29> 'i64' ParmVar 'n'
+│           └─IntegerLiteral <col:33> 'i64' 2
+└─CallExpr <line:8:1, col:19> 'void'
+  ├─MemberExpr <col:1, col:10> 'void (i64)' .emit
+  │ └─DeclRefExpr <col:1, col:5> Module 'bench'
+  └─CallExpr <col:12, col:18> 'i64'
+    ├─DeclRefExpr <col:12, col:14> 'i64 (i64)' Function 'fib'
+    └─IntegerLiteral <col:16, col:17> 'i64' 15
+```
+
+As in clang, a location prints its line only when it changes (`col:16`
+is on the line before it), and a declaration's range runs from its keyword.
+A program with type errors still dumps; what the checker could not type
+shows `'<error>'`.
+
+`eitri asm` prints the bytecode as `.eits`, the IR: it reads like LLVM IR
+over Eitri's actual register machine (`%rN` are frame slots, not SSA
+values; a branch falls through when it is not taken):
+
+```text
+$ eitri asm crates/eitri/benches/fixtures/calls.eit
+; calls.eit
+
+declare void @bench.emit(i64)
+
+define void @<module>() frame(2) {
+bb0:
+    %r1 = ldi i64 15
+    %r0 = call.script i64 @fib(i64 %r1)
+    call.host void @bench.emit(i64 %r0)
+    ret
+}
+
 define i64 @fib(i64 %r1) frame(6) {
 bb0:
     cbi.gt %r1, 1, label %bb2
@@ -113,10 +188,84 @@ bb2:
 }
 ```
 
-It is also an input: `asm` output assembles back to the same words, and
-hand-written `.eits` is verified before anything runs. `--annotate` adds
-each instruction's PC, words, call site, and source span. The format is in
+`n < 2` became one compare-and-branch against an immediate, taken past the
+base case (`n > 1`); `n - 1` became one checked subtract-immediate. With
+`--annotate`, each line also shows its PC, its encoded words, and the
+source range it came from:
+
+```text
+$ eitri asm --annotate crates/eitri/benches/fixtures/calls.eit
+...
+define i64 @fib(i64 %r1) frame(6) {
+bb0:
+    cbi.gt %r1, 1, label %bb2                   ; 0000  02010152  @57..62
+bb1:
+    %r0 = mov %r1                               ; 0001  00010000  @80..81
+    ret                                         ; 0002  000000a0  @73..79
+bb2:
+    %r2 = subi.chk.s %r1, 1                     ; 0003  01010226  @103..108
+...
+```
+
+`.eits` is also an input: `asm` output assembles back to the same words,
+and hand-written `.eits` is verified before anything runs (`eitri verify`,
+`eitri run`). The format is in
 [Bytecode: text form](docs/implementation/bytecode.md#text-form-eits).
+
+**The hot tier.** `--opt` shows what `Context::optimize` does to code that
+has run often enough. Here is the loop in `host_calls.eit`
+(`while i < 1000 { total += bench.id(i); i += 1 }`) as first compiled:
+
+```text
+$ eitri asm crates/eitri/benches/fixtures/host_calls.eit
+define void @<module>() frame(4) {
+bb0:
+    %r0 = ldi i64 0
+    %r1 = ldi i64 0
+bb1:
+    %r2 = ldi i64 1000
+    cb.le %r2, %r1, label %bb3
+bb2:
+    %r2 = mov %r1
+    %r3 = call.host i64 @bench.id(i64 %r2)
+    %r0 = add.chk.s %r0, %r3
+    %r1 = addi.chk.s %r1, 1
+    j label %bb1
+bb3:
+    %r2 = mov %r0
+    call.host void @bench.emit(i64 %r2)
+    ret
+}
+```
+
+and re-optimized:
+
+```text
+$ eitri asm --opt crates/eitri/benches/fixtures/host_calls.eit
+define void @<module>() frame(5) {
+bb0:
+    %r0 = ldi i64 0
+    %r1 = ldi i64 0
+    %r4 = ldi i64 1000
+bb1:
+    cb.le %r4, %r1, label %bb3
+bb2:
+    %r3 = call.host i64 @bench.id(i64 %r1)
+    %r0 = add.chk.s %r0, %r3
+    %r1 = addi.chk.s %r1, 1
+    j label %bb1
+bb3:
+    call.host void @bench.emit(i64 %r0)
+    ret
+}
+```
+
+The loop bound `1000` now loads once, before the loop, into a new slot, and
+the copies that only fed call arguments are gone: two fewer instructions on
+each of the 1,000 iterations. The result is verified again before it
+replaces the original, and the test suite runs every program at both tiers
+and requires identical effects, faults, and traces. First runs never pay
+for any of this.
 
 ### Embedding
 
@@ -176,20 +325,29 @@ both harnesses check the answer on every single run, so nothing can be
 optimized away.
 
 Medians of 20,001 individually timed runs in an already-created runtime,
-same commit (`f4573b1`), same pinned compiler, Lua 5.4.9 built statically
-with `-O2` and loaded with `luaL_loadbuffer` + `lua_pcall`.
+same pinned compiler, Lua 5.4.9 built statically with `-O2` and loaded with
+`luaL_loadbuffer` + `lua_pcall`.
 
 ### Apple M5 (MacBook Pro)
 
+Measured 2026-11-08 on the current tree (host reentry, `.eits`, and the hot
+tier included).
+
 | Workload | Eitri | Lua 5.4 | |
 |---|---:|---:|---|
-| `module`: a 40-line setup script | **5.7 µs** | 9.0 µs | 🟢 1.57× faster |
-| `arithmetic`: 1,000 checked-math iterations | **9.8 µs** | 17.1 µs | 🟢 1.74× faster |
-| `branching`: `else if` chains, `&&`/`\|\|` | **19.9 µs** | 36.0 µs | 🟢 1.81× faster |
-| `calls`: recursive `fib(15)`, 1,973 calls | **13.2 µs** | 16.0 µs | 🟢 1.21× faster |
-| `host_calls`: 1,000 calls into Rust | **5.8 µs** | 11.2 µs | 🟢 1.95× faster |
+| `module`: a 40-line setup script | **5.8 µs** | 9.1 µs | 🟢 1.58× faster |
+| `arithmetic`: 1,000 checked-math iterations | **9.8 µs** | 17.0 µs | 🟢 1.73× faster |
+| `branching`: `else if` chains, `&&`/`\|\|` | **20.0 µs** | 37.1 µs | 🟢 1.86× faster |
+| `calls`: recursive `fib(15)`, 1,973 calls | **12.9 µs** | 15.8 µs | 🟢 1.22× faster |
+| `host_calls`: 1,000 calls into Rust | **6.3 µs** | 11.7 µs | 🟢 1.86× faster |
+
+`host_calls` gave up a little since `f4573b1` (1.95×): every host call now
+carries a context that lets the host call back into the script (about 0.5
+ns per call; see the [ledger](docs/implementation/vm-research.md)).
 
 ### Apple M2 (MacBook Air)
+
+Measured at commit `f4573b1`.
 
 | Workload | Eitri | Lua 5.4 | |
 |---|---:|---:|---|
@@ -202,6 +360,32 @@ with `-O2` and loaded with `luaL_loadbuffer` + `lua_pcall`.
 And this is while doing *more* work than Lua: every `+`, `-`, and `*` is
 overflow-checked, and every call and backward branch draws from the
 execution budget.
+
+### Long-running processes
+
+A host that keeps one compiled script and runs it over and over (an editor
+hook on every keystroke) pays compilation once. Here each workload is
+compiled once and executed 10,000 times; the total includes compiling, and
+"per run" is the median of the last 9,000 runs. With **tier-up**, the host
+re-optimizes the program once it has run 100 times (`should_optimize`, then
+`optimize`), paying for the optimization inside the total. Medians of five
+processes, Apple M5, same build as above; Lua loads once and calls the
+loaded chunk 10,000 times.
+
+| Workload | Eitri, tier 0 | Eitri, tier-up | Lua 5.4 | Eitri (tier-up) vs Lua |
+|---|---:|---:|---:|---|
+| `module` | **1.45 ms** (125 ns/run) | 1.57 ms (125 ns/run) | 1.97 ms (167 ns/run) | 🟢 1.26× faster |
+| `arithmetic` | 84.3 ms (8.4 µs/run) | **72.5 ms** (7.2 µs/run) | 149.5 ms (15.0 µs/run) | 🟢 2.06× faster |
+| `branching` | 178.8 ms (18.1 µs/run) | **159.5 ms** (15.8 µs/run) | 348.4 ms (35.3 µs/run) | 🟢 2.18× faster |
+| `calls` | **122.3 ms** (12.1 µs/run) | 122.9 ms (12.2 µs/run) | 148.1 ms (14.7 µs/run) | 🟢 1.21× faster |
+| `host_calls` | 55.3 ms (5.5 µs/run) | **48.4 ms** (4.8 µs/run) | 112.1 ms (10.7 µs/run) | 🟢 2.32× faster |
+
+Tier-up pays where there are loops: `arithmetic`, `branching`, and
+`host_calls` finish 12–16% sooner, the optimization repaid after 4–8 runs.
+It finds nothing to improve in `calls` and the straight-line `module`, so
+there it only costs its one optimization (`module` finished 8% later); a
+host can skip it when the optimizer reports no changes. First runs never
+pay for any of this: tier 0 compiles exactly as before.
 
 ### Where the speed comes from
 
@@ -235,8 +419,8 @@ cargo bench -p eitri --bench source_to_result     # Eitri (EITRI_THREADED=0 for 
 crates/eitri/benches/lua/run.sh                   # Lua 5.4 (brew install lua@5.4)
 ```
 
-Both print medians and p99 tails, and write raw samples to
-`target/bench-results/`. The workloads live in
+Both print medians and p99 tails, the hot-tier and long-running tables,
+and write raw samples to `target/bench-results/`. The workloads live in
 [`crates/eitri/benches/fixtures/`](crates/eitri/benches/fixtures/).
 
 ## How it works
@@ -254,12 +438,12 @@ Each stage is a plain function that borrows reusable scratch memory from the
 |---|---|
 | [`eitri-base`](crates/eitri-base) | Typed index vectors, pooled lists, spans, and the context-owned string interner. No dependencies, no global state |
 | [`eitri-diag`](crates/eitri-diag) | Diagnostics for every layer: codes, labelled spans, and a renderer in the codespan-reporting style |
-| [`eitri-syntax`](crates/eitri-syntax) | The lexer and parser, producing a compact indexed syntax tree |
-| [`eitri-check`](crates/eitri-check) | Name resolution, type checking, and host module declarations |
-| [`eitri-bytecode`](crates/eitri-bytecode) | The typed bytecode: a machine-readable spec of 163 opcodes, encoder, assembler, verifier, disassembler, and a semantic oracle |
-| [`eitri-lower`](crates/eitri-lower) | Lowering of checked code to bytecode: slot allocation, direct compare-and-branch, immediate operands |
-| [`eitri-vm`](crates/eitri-vm) | The threaded interpreter, the portable `match`-loop reference, budgets, call depth, and faults with traces |
-| [`eitri`](crates/eitri) | The `Context`, the CLI, fixture tests, and benchmarks |
+| [`eitri-syntax`](crates/eitri-syntax) | The lexer and parser, producing a compact indexed syntax tree; the token dump |
+| [`eitri-check`](crates/eitri-check) | Name resolution, type checking, host module declarations, and the clang-style tree dump |
+| [`eitri-bytecode`](crates/eitri-bytecode) | The typed bytecode: a machine-readable spec of 163 opcodes, encoder, assembler, verifier, the `.eits` text form and its in-memory IR, the hot-tier optimizer, and a semantic oracle |
+| [`eitri-lower`](crates/eitri-lower) | Lowering of checked code to bytecode: slot allocation, direct compare-and-branch, immediate operands; records the IR only when asked |
+| [`eitri-vm`](crates/eitri-vm) | The threaded interpreter, the portable `match`-loop reference, budgets, call depth, host reentry, and faults with traces |
+| [`eitri`](crates/eitri) | The `Context` (compile, assemble, execute, optimize), the CLI, fixture tests, and benchmarks |
 
 A few house rules keep it honest:
 

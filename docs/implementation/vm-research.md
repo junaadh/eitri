@@ -1215,6 +1215,65 @@ host's result through memory; reentry itself is off the common path.
 Kept: reentry is required (T010), and 0.5 ns per host call is small against
 the sub-microsecond callback target. Revisit with the T024 embedding API.
 
+### Hot tier: re-optimizing bytecode from recorded `.eits` — 2026-11-08
+
+**Question.** Can long-running code be re-optimized at the `.eits` level
+without making the first run of fresh source pay for an IR?
+
+**Design.** The assembler records the logical instructions it is given
+(`ir::Body`, `.eits` in memory) only when it is the recording
+instantiation, `Assembler<true>`; lowering is generic over the same flag,
+so first-run lowering contains no recording code. `Compiled` counts its
+executions; past a threshold (`Context::should_optimize`, default 100) the
+host calls `Context::optimize(&mut compiled, source)`, which lowers the
+source again with recording, rejects it unless it reproduces the compiled
+code word for word, runs the passes in `eitri_bytecode::opt`, re-assembles,
+verifies every function, and replaces the code (an invalid result keeps the
+original; debug builds fail). `optimize_kept` does the same from kept IR
+(assembled `.eits`). Passes: argument-copy coalescing (a call fed only by
+`MOV`s of consecutive variables uses their slots) and loop-invariant
+literals (a literal used only by the next instruction, in a loop entered
+only at its top, loads once before the loop into a fresh slot). Analysis is
+block liveness over slots, bounded by `ANALYSIS_LIMIT` and `SCAN_LIMIT`.
+
+**Method.** Apple M5, macOS 27.0.1, pinned `nightly-2026-11-05`, release
+profile. Compile cost of recording support: `path_profile compile|lower`
+(batched over 3 s, aggregate ns/run) for `bf5b64c` and the change,
+alternated three times. Hot tier: the `source_to_result` hot-tier table,
+2,001 `optimize` samples (compiled fresh each time, untimed) and 20,001
+steady-state executions of one compiled program before and after, every
+result checked.
+
+**Results.** Recording with a runtime flag (off) cost `module` compile
++100–160 ns (2–3%) and lowering +80 ns; compiling the check out entirely
+left most of it, and even the baseline assembler with stub methods was +45
+ns in lowering, so it was layout and structure rather than the check. With
+the compile-time split, full compiles are within noise: `module`
+5,722–5,761 vs 5,722–5,801 ns, `host_calls` 735–736 vs 729–733 ns. Hot tier
+(execute p50, tier 0 → optimized; optimize p50; break-even runs):
+`arithmetic` 8,458 → 7,209 ns, 4.5 µs, 4; `branching` 17.3 → 16.0 µs,
+9.0 µs, 7; `host_calls` 5,583 → 4,792 ns, 2.5 µs, 4; `calls` 12.0 → 11.9
+µs, 3.3 µs, 78; `module` 125 → 125 ns, 16.0 µs, never. `optimize` includes
+compiling the source again and verifying.
+
+**Long-running processes (2026-11-08).** Each workload compiled once and
+executed 10,000 times in one context (total includes compiling and, with
+tier-up at the default threshold of 100 runs, optimizing), medians of five
+processes; Lua 5.4.9 loads once and calls the chunk 10,000 times. Totals,
+tier 0 / tier-up / Lua: `module` 1.45 / 1.57 / 1.97 ms, `arithmetic` 84.3 /
+72.5 / 149.5 ms, `branching` 178.8 / 159.5 / 348.4 ms, `calls` 122.3 /
+122.9 / 148.1 ms, `host_calls` 55.3 / 48.4 / 112.1 ms. Tier-up finishes
+12–16% sooner where there are loops; `module` (straight-line, no change
+found) finished 8% later, more than its 16 µs optimization alone accounts
+for, unexplained so far.
+
+**Reading.** Re-optimizing is worth it for loops after a handful of runs;
+straight-line setup code gains nothing and should not be re-optimized (the
+run count alone cannot tell; a report of zero changes can). Kept: the
+tiering, both passes, and the split. Next passes, from the golden
+listings: copies into a single-variable call argument when the variable is
+not consecutive, and repeated loads of the same literal outside loops.
+
 ### R31: Where compilers use arenas
 
 V8 allocates parser AST nodes in a `Zone` and frees the tree in one step

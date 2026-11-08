@@ -6,6 +6,8 @@ mod asm;
 mod disasm;
 mod encoding;
 mod function;
+pub mod ir;
+pub mod opt;
 pub mod oracle;
 pub mod spec;
 pub mod text;
@@ -22,3 +24,6 @@ pub use verify::{Callees, ErrorKind, VerifyError, verify};
 mod asm_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod opt_tests;

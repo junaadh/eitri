@@ -70,7 +70,8 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
-const BENCH_MODULE: &str = "pub fn emit(value: i64) -> void\npub fn id(value: i64) -> i64\n";
+/// The `bench` host module, as `eitri` finds it next to the workloads.
+const BENCH_MODULE: &str = include_str!("fixtures/bench.eith");
 
 /// The workloads and their answers (checked independently of Eitri).
 const WORKLOADS: &[(&str, i64)] = &[
@@ -162,6 +163,40 @@ fn ns(value: u64) -> String {
     } else {
         format!("{value} ns")
     }
+}
+
+/// Executions per long-running process, and processes per measurement.
+const LONG_RUNS: usize = 10_000;
+const LONG_REPEATS: usize = 5;
+
+/// One long-running process: compile `source` once and execute it
+/// [`LONG_RUNS`] times, checking every result; with `tier_up`, optimize it
+/// once the context says it is hot. Returns the process's total time and
+/// the median execution of its last 90% of runs.
+fn long_run(source: &str, answer: i64, tier_up: bool) -> (u64, u64) {
+    let (mut context, mut host) = initialized();
+    let mut times = Vec::with_capacity(LONG_RUNS);
+    let start = Instant::now();
+    let mut compiled = context
+        .compile(black_box(source))
+        .expect("workloads compile");
+    for _ in 0..LONG_RUNS {
+        host.emitted = None;
+        let t0 = Instant::now();
+        context
+            .execute(&compiled, &mut host)
+            .expect("workloads run");
+        times.push(t0.elapsed().as_nanos() as u64);
+        assert_eq!(host.emitted, Some(answer));
+        if tier_up && context.should_optimize(&compiled) {
+            context
+                .optimize(&mut compiled, source)
+                .expect("the workload's own source");
+        }
+    }
+    let total = start.elapsed().as_nanos() as u64;
+    assert_eq!(compiled.is_optimized(), tier_up);
+    (total, stats(&mut times[LONG_RUNS / 10..]).p50)
 }
 
 fn command(program: &str, args: &[&str]) -> String {
@@ -292,6 +327,95 @@ fn main() {
     );
     println!("|---|---|---|---|---|---|---|---|---|");
     print!("{footprints}");
+
+    // The hot tier: what `Context::optimize` costs, and what it saves on
+    // each later execution of the same compiled program (steady state, not
+    // first execution). Every run's result is checked.
+    println!(
+        "\n| workload | optimize p50 / p99 | execute p50 (tier 0) | execute p50 (optimized) | saved per run | break-even runs |"
+    );
+    println!("|---|---|---|---|---|---|");
+    let tier_samples = (samples / 10).max(201);
+    for &(name, answer) in WORKLOADS {
+        let path = root.join(format!("benches/fixtures/{name}.eit"));
+        let source = std::fs::read_to_string(&path).expect("workload source");
+        let (mut context, mut host) = initialized();
+        let mut optimize = Vec::with_capacity(tier_samples);
+        for _ in 0..tier_samples {
+            let mut compiled = context.compile(&source).expect("workloads compile");
+            let t0 = Instant::now();
+            context
+                .optimize(&mut compiled, black_box(&source))
+                .expect("the workload's own source");
+            optimize.push((t0.elapsed()).as_nanos() as u64);
+        }
+        let steady = |context: &mut Context, host: &mut BenchHost, compiled: &eitri::Compiled| {
+            let mut times = Vec::with_capacity(samples);
+            for _ in 0..samples {
+                host.emitted = None;
+                let t0 = Instant::now();
+                context.execute(compiled, host).expect("workloads run");
+                times.push(t0.elapsed().as_nanos() as u64);
+                assert_eq!(host.emitted, Some(answer));
+            }
+            stats(&mut times)
+        };
+        let mut compiled = context.compile(&source).expect("workloads compile");
+        let base = steady(&mut context, &mut host, &compiled);
+        context
+            .optimize(&mut compiled, &source)
+            .expect("the workload's own source");
+        let hot = steady(&mut context, &mut host, &compiled);
+        let cost = stats(&mut optimize);
+        let saved = base.p50 as i64 - hot.p50 as i64;
+        let break_even = if saved > 0 {
+            format!("{}", (cost.p50 as i64 + saved - 1) / saved)
+        } else {
+            "never".to_owned()
+        };
+        println!(
+            "| {name} | {} / {} | {} | {} | {saved} ns | {break_even} |",
+            ns(cost.p50),
+            ns(cost.p99),
+            ns(base.p50),
+            ns(hot.p50)
+        );
+    }
+
+    // A long-running host: compile once, then execute the same program
+    // LONG_RUNS times, as an editor runs a hook on every keystroke. With
+    // tier-up the host calls `optimize` once `should_optimize` says so. The
+    // process total includes compiling (and optimizing); steady execution
+    // is the median of the last 90% of runs. Medians of LONG_REPEATS.
+    println!(
+        "\n| workload | {LONG_RUNS} runs, tier 0: total / execute p50 | {LONG_RUNS} runs, tier-up: total / execute p50 | tier-up speedup (total) |"
+    );
+    println!("|---|---|---|---|");
+    for &(name, answer) in WORKLOADS {
+        let path = root.join(format!("benches/fixtures/{name}.eit"));
+        let source = std::fs::read_to_string(&path).expect("workload source");
+        let mut runs = [Vec::new(), Vec::new()];
+        for _ in 0..LONG_REPEATS {
+            for (tier_up, results) in runs.iter_mut().enumerate() {
+                results.push(long_run(&source, answer, tier_up == 1));
+            }
+        }
+        let summary = |results: &mut Vec<(u64, u64)>| {
+            let mut totals: Vec<u64> = results.iter().map(|r| r.0).collect();
+            let mut steady: Vec<u64> = results.iter().map(|r| r.1).collect();
+            (stats(&mut totals).p50, stats(&mut steady).p50)
+        };
+        let (base_total, base_steady) = summary(&mut runs[0]);
+        let (up_total, up_steady) = summary(&mut runs[1]);
+        println!(
+            "| {name} | {} / {} | {} / {} | {:.2}× |",
+            ns(base_total),
+            ns(base_steady),
+            ns(up_total),
+            ns(up_steady),
+            base_total as f64 / up_total as f64
+        );
+    }
 
     let out = root.join("../../target/bench-results");
     std::fs::create_dir_all(&out).expect("results directory");

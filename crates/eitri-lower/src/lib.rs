@@ -24,6 +24,7 @@
 //! Time and memory are linear in the module's syntax.
 
 use eitri_base::{Idx, IndexVec, Span};
+use eitri_bytecode::ir::Body;
 use eitri_bytecode::spec::{Cond, Test};
 use eitri_bytecode::{
     AsmError, Assembler, CallSite, CallTarget, Function, FunctionId, Label, Op, Operands,
@@ -42,12 +43,21 @@ pub const ENTRY: FunctionId = FunctionId::from_u32(0);
 pub struct Program {
     pub functions: IndexVec<FunctionId, Function>,
     pub entry: FunctionId,
+    /// Each function's logical instructions (`.eits` in memory), when
+    /// lowering was asked to keep them.
+    pub bodies: Option<IndexVec<FunctionId, Body>>,
 }
 
 impl Program {
     /// Every function's signature, for the verifier.
     pub fn signatures(&self) -> IndexVec<FunctionId, Signature> {
-        IndexVec::from_raw(self.functions.iter().map(|f| f.signature.clone()).collect())
+        Self::signatures_of(&self.functions)
+    }
+
+    pub fn signatures_of(
+        functions: &IndexVec<FunctionId, Function>,
+    ) -> IndexVec<FunctionId, Signature> {
+        IndexVec::from_raw(functions.iter().map(|f| f.signature.clone()).collect())
     }
 }
 
@@ -55,6 +65,9 @@ impl Program {
 #[derive(Default)]
 pub struct LowerScratch {
     asm: Assembler,
+    /// Used instead of `asm` when the IR is kept: a separate instantiation,
+    /// so first-run lowering contains no recording code.
+    recording: Assembler<true>,
     slots: IndexVec<BindingId, u32>,
     stack: Vec<ExprId>,
 }
@@ -96,38 +109,76 @@ pub fn host_signatures(hosts: &Hosts) -> Vec<Signature> {
 
 /// Lower a checked module. The only error is an implementation limit
 /// (`E0002`): a function needing more than 65,536 slots or too much code.
+/// With `keep_ir`, the assembler also records each function's logical
+/// instructions for printing or re-optimizing; a first run passes `false`.
 pub fn lower(
     input: &Input<'_>,
     checked: &Checked,
     scratch: &mut LowerScratch,
+    keep_ir: bool,
 ) -> Result<Program, Diagnostic> {
-    let ast = input.ast;
     scratch.slots.clear();
     scratch.slots.resize(checked.bindings.len(), u32::MAX);
     scratch.stack.clear();
-    let mut lowerer = Lowerer {
-        input,
-        checked,
-        asm: &mut scratch.asm,
-        slots: &mut scratch.slots,
-        stack: &mut scratch.stack,
-        top: 0,
-    };
+    if keep_ir {
+        let lowerer = Lowerer {
+            input,
+            checked,
+            asm: &mut scratch.recording,
+            slots: &mut scratch.slots,
+            stack: &mut scratch.stack,
+            top: 0,
+        };
+        lower_with(lowerer)
+    } else {
+        let lowerer = Lowerer {
+            input,
+            checked,
+            asm: &mut scratch.asm,
+            slots: &mut scratch.slots,
+            stack: &mut scratch.stack,
+            top: 0,
+        };
+        lower_with(lowerer)
+    }
+}
+
+/// Lower every function; with a recording assembler, keep each body.
+fn lower_with<const R: bool>(mut lowerer: Lowerer<'_, '_, R>) -> Result<Program, Diagnostic> {
+    let (input, ast) = (lowerer.input, lowerer.input.ast);
+    let mut bodies = R.then(|| IndexVec::with_capacity(ast.fns.len() + 1));
     let mut functions = IndexVec::with_capacity(ast.fns.len() + 1);
     let module = lowerer
         .module()
         .map_err(|_| too_large(input, "<module>", Span::default()))?;
     functions.push(module);
+    if let Some(bodies) = &mut bodies {
+        bodies.push(
+            lowerer
+                .asm
+                .take_recorded()
+                .expect("recorded while lowering"),
+        );
+    }
     for (id, decl) in ast.fns.iter_enumerated() {
         let function = lowerer.function(id).map_err(|_| {
             let name = input.interner.resolve(input.tokens.symbol(decl.name));
             too_large(input, name, input.tokens.span(decl.name))
         })?;
         functions.push(function);
+        if let Some(bodies) = &mut bodies {
+            bodies.push(
+                lowerer
+                    .asm
+                    .take_recorded()
+                    .expect("recorded while lowering"),
+            );
+        }
     }
     Ok(Program {
         functions,
         entry: ENTRY,
+        bodies,
     })
 }
 
@@ -141,17 +192,17 @@ fn too_large(input: &Input<'_>, name: &str, span: Span) -> Diagnostic {
 
 type Lowered<T> = Result<T, AsmError>;
 
-struct Lowerer<'a, 'i> {
+struct Lowerer<'a, 'i, const R: bool> {
     input: &'a Input<'i>,
     checked: &'a Checked,
-    asm: &'a mut Assembler,
+    asm: &'a mut Assembler<R>,
     slots: &'a mut IndexVec<BindingId, u32>,
     stack: &'a mut Vec<ExprId>,
     /// The next free slot.
     top: u32,
 }
 
-impl Lowerer<'_, '_> {
+impl<const R: bool> Lowerer<'_, '_, R> {
     // ---- functions -------------------------------------------------------
 
     fn module(&mut self) -> Lowered<Function> {

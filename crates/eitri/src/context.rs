@@ -1,6 +1,9 @@
+use std::cell::Cell;
+
 use eitri_base::{IndexVec, Interner, SourceId, Span};
+use eitri_bytecode::ir::Insn;
 use eitri_bytecode::text::{self, HostDecl, PrintOptions};
-use eitri_bytecode::{CallTarget, Callees, FunctionId};
+use eitri_bytecode::{CallSite, CallTarget, Callees, FunctionId};
 use eitri_check::{CheckScratch, HostFnId, Hosts, Input};
 use eitri_diag::{Code, Diagnostic, Diagnostics, Label};
 use eitri_lower::{LowerScratch, Program};
@@ -9,6 +12,22 @@ use eitri_vm::{Fault, Host, Limits, Location, VmScratch};
 
 /// Diagnostics kept per run before the rest are only counted (T047).
 const DIAGNOSTIC_LIMIT: usize = 100;
+
+/// Executions after which code counts as hot, until measured otherwise.
+pub const DEFAULT_TIER_THRESHOLD: u32 = 100;
+
+/// Why [`Context::optimize`] did not run.
+#[derive(Clone, Debug)]
+pub enum OptimizeError {
+    /// The source no longer compiles in this context.
+    Compile(Vec<Diagnostic>),
+    /// The source compiles to code other than the program being optimized:
+    /// it is not the source that program was compiled from.
+    SourceMismatch,
+    /// [`Context::optimize_kept`] on code that kept no logical
+    /// instructions.
+    NoIr,
+}
 
 /// Caller-owned execution context, borrowed exclusively during submission.
 ///
@@ -25,6 +44,12 @@ pub struct Context {
     /// Execute with the tail-call threaded interpreter (the default) or the
     /// portable `match` loop (E5).
     threaded: bool,
+    /// Executions after which [`Context::should_optimize`] reports code
+    /// as hot.
+    tier_threshold: u32,
+    /// Keep each compiled function's logical instructions, for
+    /// [`Context::disassemble`] and re-optimizing. Off for first runs.
+    keep_ir: bool,
     scratch: Scratch,
 }
 
@@ -38,6 +63,8 @@ struct Scratch {
     check: CheckScratch,
     lower: LowerScratch,
     vm: VmScratch,
+    /// For re-assembling optimized code.
+    recording: eitri_bytecode::Assembler<true>,
 }
 
 /// Why a run did not succeed.
@@ -121,6 +148,8 @@ impl Context {
             hosts: Hosts::new(),
             limits: Limits::default(),
             threaded: true,
+            tier_threshold: DEFAULT_TIER_THRESHOLD,
+            keep_ir: false,
             scratch: Scratch::default(),
         }
     }
@@ -142,6 +171,101 @@ impl Context {
         self.threaded = threaded;
     }
 
+    /// Executions after which [`Context::should_optimize`] reports a
+    /// program as hot ([`DEFAULT_TIER_THRESHOLD`] by default).
+    pub fn set_tier_threshold(&mut self, runs: u32) {
+        self.tier_threshold = runs;
+    }
+
+    /// Whether `compiled` has run often enough to be worth
+    /// [`Context::optimize`], and has not been optimized yet.
+    pub fn should_optimize(&self, compiled: &Compiled) -> bool {
+        !compiled.optimized && compiled.runs() >= self.tier_threshold
+    }
+
+    /// Re-optimize hot code: compile `source` again with its logical
+    /// instructions kept, check it is the source `compiled` came from (the
+    /// same code, word for word), run the optimizer's passes, and replace
+    /// `compiled`'s code with the result, verified. Behavior is unchanged:
+    /// the same effects, faults, traces, and budget debits. Returns what the
+    /// passes changed.
+    pub fn optimize(
+        &mut self,
+        compiled: &mut Compiled,
+        source: &str,
+    ) -> Result<eitri_bytecode::opt::Report, OptimizeError> {
+        let keep = std::mem::replace(&mut self.keep_ir, true);
+        let fresh = self.compile(source);
+        self.keep_ir = keep;
+        let fresh = fresh.map_err(OptimizeError::Compile)?;
+        let (old, new) = (&compiled.program.functions, &fresh.program.functions);
+        let same = old.len() == new.len()
+            && old
+                .iter()
+                .zip(new.iter())
+                .all(|(a, b)| a.code == b.code && a.consts == b.consts && a.sites == b.sites);
+        if !same {
+            return Err(OptimizeError::SourceMismatch);
+        }
+        compiled.program.bodies = fresh.program.bodies;
+        self.optimize_kept(compiled)
+    }
+
+    /// Re-optimize code that kept its logical instructions: assembled
+    /// `.eits`, or code compiled with [`Context::set_keep_ir`]. As
+    /// [`Context::optimize`], without compiling again.
+    pub fn optimize_kept(
+        &mut self,
+        compiled: &mut Compiled,
+    ) -> Result<eitri_bytecode::opt::Report, OptimizeError> {
+        let bodies = compiled.program.bodies.take().ok_or(OptimizeError::NoIr)?;
+        let mut report = eitri_bytecode::opt::Report::default();
+        let functions = &mut compiled.program.functions;
+        let mut kept = IndexVec::with_capacity(bodies.len());
+        let hosts = eitri_lower::host_signatures(&self.hosts);
+        let signatures = Program::signatures_of(functions);
+        let callees = Callees {
+            functions: &signatures,
+            hosts: &hosts,
+        };
+        for (function, body) in functions.as_mut_slice().iter_mut().zip(bodies.iter()) {
+            let optimized = eitri_bytecode::opt::optimize(body, function, &mut report);
+            let built = eitri_bytecode::ir::assemble(
+                &optimized,
+                &function.name,
+                function.signature.clone(),
+                &mut self.scratch.recording,
+            );
+            match built {
+                Ok((code, body)) if eitri_bytecode::verify(&code, &callees).is_ok() => {
+                    *function = code;
+                    kept.push(body);
+                }
+                _ => {
+                    // Keep the original: an optimizer bug must not change
+                    // what runs. Tests run in debug builds and catch it.
+                    debug_assert!(
+                        false,
+                        "the optimizer produced invalid code for `{}`",
+                        function.name
+                    );
+                    kept.push(body.clone());
+                }
+            }
+        }
+        compiled.program.bodies = Some(kept);
+        compiled.optimized = true;
+        Ok(report)
+    }
+
+    /// Keep the logical instructions (`.eits` in memory) of code compiled
+    /// from now on, so it can be printed ([`Context::disassemble`]) or
+    /// re-optimized. Off by default: recording costs a little on every
+    /// compile, and a first run does not need it.
+    pub fn set_keep_ir(&mut self, keep: bool) {
+        self.keep_ir = keep;
+    }
+
     /// Register a host module: a declaration file of bodiless `pub fn`s
     /// that scripts can import as `path`. Diagnostics refer to
     /// `declarations` as source 0.
@@ -153,6 +277,11 @@ impl Context {
         self.hosts
             .register(path, declarations, &mut self.interner)
             .map(drop)
+    }
+
+    /// Whether a host module is registered as `path`.
+    pub fn has_host_module(&self, path: &str) -> bool {
+        self.hosts.find(path).is_some()
     }
 
     /// The index [`Host::call`] receives for function `name` of the host
@@ -217,7 +346,7 @@ impl Context {
         if diagnostics.has_errors() {
             return Err(diagnostics.into_vec());
         }
-        let program = eitri_lower::lower(&input, checked, &mut self.scratch.lower)
+        let program = eitri_lower::lower(&input, checked, &mut self.scratch.lower, self.keep_ir)
             .map_err(|diagnostic| vec![diagnostic])?;
         // Compiler-produced code is trusted in release builds; debug builds
         // and tests verify every function, so a lowering bug surfaces as a
@@ -225,13 +354,14 @@ impl Context {
         if cfg!(debug_assertions) {
             verify(&program, &self.hosts)?;
         }
-        Ok(Compiled { program })
+        Ok(Compiled::new(program))
     }
 
     /// Execute compiled top-level code once. `compiled` must come from this
     /// context, since host calls are numbered by its registry. Host calls go
     /// to `host`, by [`Context::host_index`].
     pub fn execute(&mut self, compiled: &Compiled, host: &mut dyn Host) -> Result<(), FaultReport> {
+        compiled.runs.set(compiled.runs.get().saturating_add(1));
         let program = &compiled.program;
         let run = if self.threaded {
             eitri_vm::run_threaded
@@ -301,11 +431,19 @@ impl Context {
             indices.push(index);
         }
         let mut functions: IndexVec<FunctionId, _> = IndexVec::from_raw(parsed.functions);
+        // Declaration order to registry indices, in the code and its IR.
+        let remap = |site: &mut CallSite| {
+            if let CallTarget::Host(index) = &mut site.target {
+                *index = indices[*index as usize];
+            }
+        };
         for function in functions.as_mut_slice() {
-            for site in function.sites.iter_mut() {
-                if let CallTarget::Host(index) = &mut site.target {
-                    *index = indices[*index as usize];
-                }
+            function.sites.iter_mut().for_each(remap);
+        }
+        let mut bodies = parsed.bodies;
+        for item in bodies.iter_mut().flat_map(|body| body.items.iter_mut()) {
+            if let Insn::Call(site) = &mut item.insn {
+                remap(site);
             }
         }
         let entry = FunctionId::from_u32(0);
@@ -324,7 +462,11 @@ impl Context {
                 ),
             ));
         }
-        let program = Program { functions, entry };
+        let program = Program {
+            functions,
+            entry,
+            bodies: Some(IndexVec::from_raw(bodies)),
+        };
         let signatures = program.signatures();
         let callees = Callees {
             functions: &signatures,
@@ -342,13 +484,15 @@ impl Context {
                 return Err(vec![diagnostic]);
             }
         }
-        Ok(Compiled { program })
+        Ok(Compiled::new(program))
     }
 
     /// `compiled` as `.eits` text, with host functions named by this
-    /// context's registry. [`Context::assemble`] turns it back into the
-    /// same code.
-    pub fn disassemble(&self, compiled: &Compiled, options: PrintOptions) -> String {
+    /// context's registry; [`Context::assemble`] turns it back into the
+    /// same code. `None` when `compiled` kept no logical instructions: it
+    /// was compiled without [`Context::set_keep_ir`].
+    pub fn disassemble(&self, compiled: &Compiled, options: PrintOptions) -> Option<String> {
+        let bodies = compiled.program.bodies.as_ref()?;
         let signatures = eitri_lower::host_signatures(&self.hosts);
         let hosts: Vec<HostDecl> = signatures
             .into_iter()
@@ -362,7 +506,12 @@ impl Context {
                 }
             })
             .collect();
-        text::print(compiled.program.functions.as_slice(), &hosts, options)
+        Some(text::print(
+            compiled.program.functions.as_slice(),
+            bodies.as_slice(),
+            &hosts,
+            options,
+        ))
     }
 
     /// The tokens of `source`, one per line: byte range, kind, and text.
@@ -382,8 +531,11 @@ impl Context {
         Ok(eitri_syntax::dump::tokens(source, tokens))
     }
 
-    /// The syntax tree of `source`, indented, with byte ranges.
-    pub fn dump_ast(&mut self, source: &str) -> Result<String, Vec<Diagnostic>> {
+    /// The checked syntax tree of `source`, in the style of
+    /// `clang -ast-dump`: kinds, `<line:col>` ranges, and types. Rejected
+    /// only for lexical and syntax errors; an expression the checker could
+    /// not type shows `'<error>'`. `color` adds terminal colors.
+    pub fn dump_ast(&mut self, source: &str, color: bool) -> Result<String, Vec<Diagnostic>> {
         self.interner.reset();
         let mut diagnostics = Diagnostics::new(DIAGNOSTIC_LIMIT);
         let tokens = eitri_syntax::lex(
@@ -407,7 +559,28 @@ impl Context {
         if diagnostics.has_errors() {
             return Err(diagnostics.into_vec());
         }
-        Ok(eitri_syntax::dump::ast(source, tokens, ast))
+        let input = Input {
+            text: source,
+            source: Self::SOURCE,
+            tokens,
+            ast,
+            interner: &self.interner,
+            hosts: &self.hosts,
+        };
+        // Check errors do not stop the dump: they show as `'<error>'`.
+        let mut ignored = Diagnostics::new(DIAGNOSTIC_LIMIT);
+        let checked = eitri_check::check(&input, &mut ignored, &mut self.scratch.check);
+        Ok(eitri_check::dump::ast(
+            &eitri_check::dump::Input {
+                text: source,
+                tokens,
+                ast,
+                checked,
+                interner: &self.interner,
+                hosts: &self.hosts,
+            },
+            color,
+        ))
     }
 }
 
@@ -415,9 +588,31 @@ impl Context {
 /// of the context's scratch, so it can be executed any number of times.
 pub struct Compiled {
     program: Program,
+    /// Executions so far, for [`Context::should_optimize`]. A `Cell`: the
+    /// count changes while the code is shared for execution.
+    runs: Cell<u32>,
+    optimized: bool,
 }
 
 impl Compiled {
+    fn new(program: Program) -> Self {
+        Compiled {
+            program,
+            runs: Cell::new(0),
+            optimized: false,
+        }
+    }
+
+    /// How many times it has been executed.
+    pub fn runs(&self) -> u32 {
+        self.runs.get()
+    }
+
+    /// Whether [`Context::optimize`] has replaced its code.
+    pub fn is_optimized(&self) -> bool {
+        self.optimized
+    }
+
     /// Functions, including the top-level `<module>`.
     pub fn function_count(&self) -> usize {
         self.program.functions.len()

@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use eitri::PrintOptions;
-use support::eits::{context, round_trip};
+use support::eits::{context, listing, round_trip};
 
 fn collect(directory: &Path, paths: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).unwrap() {
@@ -60,7 +60,7 @@ fn golden_listings() {
         let compiled = context.compile(&source).unwrap();
         let text = format!(
             "; {name}.eit\n\n{}",
-            context.disassemble(&compiled, PrintOptions::default())
+            listing(&context, &compiled, PrintOptions::default())
         );
         let path = root.join(format!("tests/eits/{name}.eits"));
         if bless {

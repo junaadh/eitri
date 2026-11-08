@@ -12,13 +12,7 @@ pub mod oracle;
 use std::thread;
 
 /// The harness host module `test`, as documented in the root README.
-pub const TEST_MODULE: &str = "\
-pub fn emit(value: i64) -> void
-pub fn check(value: bool) -> bool
-pub fn id(value: i64) -> i64
-pub fn fail() -> void
-pub fn reenter(value: i64) -> i64
-";
+pub const TEST_MODULE: &str = include_str!("../fixtures/test.eith");
 
 /// The `test` module's behavior. Effects are recorded in call order.
 pub struct TestHost {
@@ -153,6 +147,16 @@ pub fn outcome(source: &str, setup: &Setup) -> Result<String, String> {
             "threaded interpreter disagrees\n--- match loop\n{outcome}--- threaded\n{threaded}"
         ));
     }
+    // The hot tier (`Context::optimize`) must not change anything visible.
+    for threaded in [false, true] {
+        if let Some(optimized) = run_optimized(source, setup, threaded)
+            && optimized != outcome
+        {
+            return Err(format!(
+                "optimized code disagrees (threaded: {threaded})\n--- compiled\n{outcome}--- optimized\n{optimized}"
+            ));
+        }
+    }
     // The oracle models the language, not implementation limits (`E0002`),
     // which lowering reports after the checker accepts.
     let limited = outcome.starts_with("error[E0002]");
@@ -214,6 +218,40 @@ fn render_fault(message: &str, trace: impl IntoIterator<Item = eitri::TraceFrame
 }
 
 /// One interpreter's outcome, rejections included.
+/// A context set up as `setup` says.
+fn context(setup: &Setup, threaded: bool) -> eitri::Context {
+    let mut context = eitri::Context::new();
+    context.set_threaded(threaded);
+    if setup.test_host {
+        context
+            .register_host_module("test", TEST_MODULE)
+            .expect("the harness module declares cleanly");
+    }
+    if let Some(budget) = setup.budget {
+        context.set_budget(budget);
+    }
+    if let Some(depth) = setup.depth {
+        context.set_depth(depth);
+    }
+    context
+}
+
+/// The outcome of the code `Context::optimize` produces, or `None` if the
+/// source does not compile.
+pub fn run_optimized(source: &str, setup: &Setup, threaded: bool) -> Option<String> {
+    let mut context = context(setup, threaded);
+    let mut compiled = context.compile(source).ok()?;
+    context
+        .optimize(&mut compiled, source)
+        .unwrap_or_else(|error| panic!("optimizing compiled source: {error:?}"));
+    assert!(compiled.is_optimized());
+    let mut host = TestHost::new(|name| context.host_index("test", name));
+    Some(match context.execute(&compiled, &mut host) {
+        Ok(()) => host.effects + "ok\n",
+        Err(report) => host.effects + &render_fault(&report.message, report.trace),
+    })
+}
+
 pub fn run_with(source: &str, setup: &Setup, threaded: bool) -> String {
     let mut context = eitri::Context::new();
     context.set_threaded(threaded);
