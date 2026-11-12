@@ -1,0 +1,17 @@
+//! host: test
+import test from "test"
+let n_i8: i8 = 1
+test.check(256 << n_i8 == 512)
+test.check(256 >> n_i8 == 128)
+let n_u8: u8 = 1
+test.check(256 << n_u8 == 512)
+test.check(256 >> n_u8 == 128)
+let n_i64: i64 = 1
+test.check(256 << n_i64 == 512)
+test.check(256 >> n_i64 == 128)
+let n_u64: u64 = 1
+test.check(256 << n_u64 == 512)
+test.check(256 >> n_u64 == 128)
+var narrow: u8 = 128
+narrow >>= n_i8
+test.check(narrow == 64)

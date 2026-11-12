@@ -12,7 +12,39 @@ eitri_base::newtype_index! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ValueType {
     I64,
+    I8,
+    U8,
+    U64,
+    F32,
+    F64,
+    Char,
     Bool,
+}
+
+impl ValueType {
+    pub fn integer(self) -> bool {
+        matches!(self, Self::I8 | Self::U8 | Self::I64 | Self::U64)
+    }
+    pub fn signed(self) -> bool {
+        matches!(self, Self::I8 | Self::I64)
+    }
+    pub fn bits(self) -> u32 {
+        match self {
+            Self::I8 | Self::U8 => 8,
+            Self::F32 | Self::Char => 32,
+            _ => 64,
+        }
+    }
+    pub fn canonical(self, word: u64) -> bool {
+        match self {
+            Self::Bool => word <= 1,
+            Self::I8 => word == (word as i8 as i64 as u64),
+            Self::U8 => word <= 255,
+            Self::F32 => word >> 32 == 0,
+            Self::Char => u32::try_from(word).ok().and_then(char::from_u32).is_some(),
+            _ => true,
+        }
+    }
 }
 
 /// Parameter and result types. Results occupy slots `0..results.len()` and

@@ -37,6 +37,12 @@ pub const MODULE: &str = "<module>";
 fn type_name(ty: Option<ValueType>) -> &'static str {
     match ty {
         Some(ValueType::I64) => "i64",
+        Some(ValueType::I8) => "i8",
+        Some(ValueType::U8) => "u8",
+        Some(ValueType::U64) => "u64",
+        Some(ValueType::F32) => "f32",
+        Some(ValueType::F64) => "f64",
+        Some(ValueType::Char) => "char",
         Some(ValueType::Bool) => "bool",
         None => "void",
     }

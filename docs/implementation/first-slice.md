@@ -1,6 +1,8 @@
 # The first supported slice (M0)
 
-Status: frozen by T002. This chapter fixes what the first executable
+Status: the M0 contract below was frozen by T002. T013 extends it as
+described in [Scalar extensions](#scalar-extensions-t013). The historical
+M0 restrictions below apply before those extensions. This chapter fixes what the first executable
 implementation accepts, what it rejects, and the resource rules it runs
 under. It narrows the language; it never redefines it. Everything outside
 the slice is rejected with a diagnostic before any part of the submitted
@@ -10,6 +12,30 @@ program the slice already accepts.
 The [fixture corpus](../../crates/eitri/tests/fixtures/) is the executable
 form of this chapter. Fixtures for behavior that does not execute yet carry
 a `pending` directive (see the [root README](../../README.md#fixtures)).
+
+## Scalar extensions (T013)
+
+The current implementation additionally accepts `i8`, `u8`, `u64`, `f32`,
+`f64`, and `char` in source and host signatures. Integer and decimal float
+literals use their expected numeric type; defaults remain `i64` and `f64`.
+Character literals contain one Unicode scalar, including supported escapes.
+The [Types conversion rules](../language/types.md#explicit-numeric-conversions)
+apply, including integer-only `truncating:` conversions. These intrinsic
+conversions spend no call budget.
+
+Arithmetic, comparisons, bitwise operators, shifts, and their compound
+assignments follow [Expressions](../language/expressions.md). Arithmetic
+operands have matching types; shift counts may have any integer type and do
+not determine the left operand's type. Float comparisons retain IEEE NaN
+behavior even in negated conditions. Float `%` is IEEE remainder (nearest
+quotient, ties to even), not truncating remainder.
+
+Out-of-range checked integer operations/conversions fault with `integer
+overflow`; invalid float-to-integer conversions fault with `numeric conversion
+out of range`; bad shift counts fault with `invalid shift amount`. Faults
+preserve prior effects and source traces. Storage-only extern names remain
+unavailable as ordinary source types. Strings, managed values, and the other
+M0 exclusions remain future work.
 
 ## Types
 
@@ -251,7 +277,7 @@ memory (checked by T012).
 | `E0203` | A predeclared type name used as a name |
 | `E0205` | Unresolved import path, or `import` after another item |
 | `E0301` | Type mismatch |
-| `E0302` | Integer literal does not fit its type |
+| `E0302` | Scalar literal does not fit its expected type |
 | `E0303` | Assignment to something other than a `var` binding |
 | `E0304` | Wrong number of arguments, or calling something that is not a function |
 | `E0401` | `if` used as a value without `else`, or a branch without a value |

@@ -1,0 +1,5 @@
+//! host: test
+import test from "test"
+test.emit(1)
+let a: i8 = -128
+let b = a / -1

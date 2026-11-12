@@ -1,0 +1,3 @@
+effect: test.emit(1)
+fault: numeric conversion out of range
+  at <module> 60..74

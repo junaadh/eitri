@@ -1585,3 +1585,54 @@ the first-result corpus. There is no universal percentage gate yet: report
 confidence and absolute costs, then choose an explicit regression budget.
 Use differential tests across tiers, forced GC at safepoints, extended-operand
 boundary cases, host reentry, suspension, overflow, and cleanup faults.
+
+
+## T013 scalar completion audit — 2026-11-12
+
+T013 retains eight-byte slots (D7/D21): `i8` is sign extended, `u8` and
+`char` are zero extended, and `f32` occupies the low 32 bits with a zero
+upper half. The verifier checks literal canonicality and typed conversion
+formats. Narrow arithmetic uses full-width operations and checked or wrapping
+canonicalization (D31); float conditions use the existing ordered/unordered
+families (D32). Source float conditions lower to `FCSET` plus a boolean
+branch; fused `FCB` remains unsupported. Storage-only extern widths remain
+outside the source scalar set. No new unsafe blocks or execution tier were
+introduced. Numeric decisions are recorded in [Types](../language/types.md#explicit-numeric-conversions).
+
+The audit corrected shift contextualization: `256 << count` must remain
+`i64` when `count` is `u8`; the count cannot narrow the left operand. Tests
+cover every integer count type, direct decimal `f32` parsing on both sides
+of a halfway value, ties-to-even, signed underflow, and narrowing infinity.
+Independent integer/IEEE-field models check exhaustive narrow arithmetic,
+random full-width arithmetic, conversions, all float operations and conditions.
+Source boundary matrices additionally run through both lowerers, both VMs,
+the hot tier, and the tree oracle. The tree oracle shares the frontend;
+explicit literal expectations cover rounding independently of that frontend.
+
+**T011 rerun.** `cargo bench --locked -p eitri --bench source_to_result`,
+Apple M5, AArch64 macOS 27.0.1; Rust nightly 1.101.0
+(`2d20b42b8`, 2026-11-04), LLVM 23.1.5; workspace release profile, default
+threaded VM, no extra build flags. 20,001 individual samples per cell,
+1,000 warm-up runs, freshly compiled source each run; file I/O and context
+creation are excluded from compile/execute totals. The harness checks each
+result, also reports fresh-context and 10,000-run hot-tier cases. Timer pair
+p50/p99: 0/42 ns. CPU model was read separately because the sandbox hid it
+from the harness. Frequency scaling was not controlled; these are local
+observations, not cross-platform or controlled regression claims.
+
+| Reused context workload | Compile p50 / p99 | Execute p50 / p99 | Total p50 / p99 |
+|---|---|---|---|
+| module | 7.500 / 14.8 µs | 0.208 / 0.334 µs | 7.708 / 15.4 µs |
+| arithmetic | 1.916 / 3.583 µs | 11.0 / 19.3 µs | 12.9 / 24.2 µs |
+| branching | 3.833 / 8.000 µs | 23.0 / 46.3 µs | 26.8 / 53.2 µs |
+| calls | 1.542 / 3.500 µs | 16.5 / 35.9 µs | 18.1 / 39.6 µs |
+| host_calls | 1.000 / 1.834 µs | 7.208 / 13.5 µs | 8.209 / 15.5 µs |
+
+The 1,236-byte module still misses the few-microsecond goal. Compilation
+dominates its latency. Its reused run allocates 37 times / 2,765 bytes,
+retains 25,249 bytes of context scratch, and emits 344 code bytes plus
+1,571 metadata bytes with 19 maximum frame slots. Across the five workloads:
+7–37 allocations, 448–2,765 allocated bytes, 8,210–25,249 retained bytes.
+This is a completion baseline, not a before/after optimization comparison;
+Lua was not rerun. Full report and raw individual samples are retained locally
+at `target/bench-results/t013-2026-11-12/{report.txt,source_to_result.csv}`.

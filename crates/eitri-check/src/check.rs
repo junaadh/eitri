@@ -50,6 +50,11 @@ pub enum Res {
     Host(HostFnId),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
+    Convert {
+        from: Ty,
+        to: Ty,
+        checked: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -641,15 +646,25 @@ impl<'i> Checker<'_, 'i> {
             );
         }
         let ty = binding.map_or(Ty::Error, |b| self.out.bindings[b].ty);
-        if matches!(op, AssignOp::Compound(_)) {
+        let shifts = matches!(op, AssignOp::Compound(BinaryOp::Shl | BinaryOp::Shr));
+        if let AssignOp::Compound(binary) = op
+            && !valid_operand(binary, ty)
+        {
             self.mismatch(ty, Ty::I64, self.token_span(target));
         }
-        let expected = if matches!(op, AssignOp::Compound(_)) {
-            Ty::I64
+        let operand_ty = if let AssignOp::Compound(binary) = op {
+            if !valid_operand(binary, ty) || ty == Ty::Error {
+                Ty::I64
+            } else {
+                ty
+            }
         } else {
             ty
         };
-        self.value(value, Some(expected));
+        let rhs = self.value(value, if shifts { None } else { Some(operand_ty) });
+        if shifts && rhs != Ty::Error && !rhs.integer() {
+            self.mismatch(rhs, Ty::I64, self.span(value));
+        }
         self.out.stmt_bindings[stmt] = binding;
     }
 
@@ -676,19 +691,53 @@ impl<'i> Checker<'_, 'i> {
     /// which only guides literals and branches.
     fn expr(&mut self, expr: ExprId, expected: Option<Ty>, used: bool) -> Ty {
         let ty = match self.input.ast.exprs[expr] {
-            Expr::Int { token, negative } => self.int(expr, token, negative),
+            Expr::Int { token, negative } => self.int(expr, token, negative, expected),
+            Expr::Float { token, negative } => self.float(expr, token, negative, expected),
+            Expr::Char(token) => {
+                let spelling = &self.input.text[self.token_span(token).range()];
+                if let Some(value) = char_value(spelling) {
+                    self.literal(expr, value as u64);
+                } else {
+                    self.report(
+                        Code::Lexical,
+                        "invalid character literal or escape",
+                        self.token_span(token),
+                    );
+                }
+                Ty::Char
+            }
+            Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
             Expr::Bool(_) => Ty::Bool,
             Expr::Name(token) => self.name(expr, token),
             Expr::Member { base, name } => self.member_value(base, name),
             Expr::Unary { op, operand } => {
-                let operand_ty = match op {
-                    UnaryOp::Neg => Ty::I64,
-                    UnaryOp::Not => Ty::Bool,
+                let operand_ty = if op == UnaryOp::Not {
+                    Some(Ty::Bool)
+                } else {
+                    expected.filter(|t| t.numeric())
                 };
-                self.value(operand, Some(operand_ty));
-                operand_ty
+                let found = self.value(operand, operand_ty);
+                let valid = match op {
+                    UnaryOp::Not => found == Ty::Bool,
+                    UnaryOp::Neg => found.numeric(),
+                    UnaryOp::BitNot => found.integer(),
+                };
+                if !valid && (operand_ty.is_none() || operand_ty == Some(found)) {
+                    self.mismatch(found, Ty::I64, self.span(operand));
+                }
+                if op == UnaryOp::Not {
+                    Ty::Bool
+                } else if !valid {
+                    if op == UnaryOp::BitNot {
+                        Ty::Error
+                    } else {
+                        operand_ty.unwrap_or(Ty::I64)
+                    }
+                } else {
+                    found
+                }
             }
-            Expr::Binary { .. } => self.binary_chain(expr),
+            Expr::Binary { .. } => self.binary_chain(expr, expected),
             Expr::Call { callee, args } => self.call(expr, callee, args),
             Expr::If(id) => self.if_expr(expr, id, expected, used),
             Expr::Error => Ty::Error,
@@ -697,20 +746,107 @@ impl<'i> Checker<'_, 'i> {
         ty
     }
 
-    fn int(&mut self, expr: ExprId, token: TokenId, negative: bool) -> Ty {
+    fn literal(&mut self, expr: ExprId, word: u64) {
+        self.out.resolutions[expr] = Res::Int(self.out.ints.len() as u32);
+        self.out.ints.push(word as i64);
+    }
+
+    fn int(&mut self, expr: ExprId, token: TokenId, negative: bool, expected: Option<Ty>) -> Ty {
         let spelling = &self.input.text[self.token_span(token).range()];
-        match int_value(spelling, negative) {
-            Some(value) => {
-                self.out.resolutions[expr] = Res::Int(self.out.ints.len() as u32);
-                self.out.ints.push(value);
-            }
+        let ty = expected.filter(|t| t.numeric()).unwrap_or(Ty::I64);
+        let value = if ty == Ty::I64 {
+            int_value(spelling, negative).map(|v| v as u64)
+        } else {
+            integer_literal(spelling, negative, ty)
+        };
+        match value {
+            Some(value) => self.literal(expr, value),
             None => self.report(
                 Code::LiteralOutOfRange,
-                "integer literal does not fit `i64`",
+                format!("integer literal does not fit {}", ty.quoted()),
                 self.span(expr),
             ),
         }
-        Ty::I64
+        ty
+    }
+
+    fn float(&mut self, expr: ExprId, token: TokenId, negative: bool, expected: Option<Ty>) -> Ty {
+        let ty = expected.filter(|t| t.float()).unwrap_or(Ty::F64);
+        let text = self.input.text[self.token_span(token).range()].replace('_', "");
+        let value = if ty == Ty::F32 {
+            text.parse::<f32>()
+                .ok()
+                .map(|x| if negative { -x } else { x })
+                .filter(|x| x.is_finite())
+                .map(|x| x.to_bits() as u64)
+        } else {
+            text.parse::<f64>()
+                .ok()
+                .map(|x| if negative { -x } else { x })
+                .filter(|x| x.is_finite())
+                .map(f64::to_bits)
+        };
+        if let Some(value) = value {
+            self.literal(expr, value);
+        } else {
+            self.report(
+                Code::LiteralOutOfRange,
+                format!("float literal does not fit {}", ty.quoted()),
+                self.span(expr),
+            );
+        }
+        ty
+    }
+
+    fn conversion(&mut self, expr: ExprId, callee: ExprId, args: &[ExprId], checked: bool) -> Ty {
+        let Expr::Name(token) = self.ast().exprs[callee] else {
+            unreachable!("conversion target is a type name")
+        };
+        let to = match type_name(self.symbol(token)) {
+            TypeName::Supported(t) if t.numeric() => t,
+            _ => {
+                self.report(
+                    Code::TypeMismatch,
+                    "numeric conversion requires a numeric destination",
+                    self.span(callee),
+                );
+                for &arg in args {
+                    self.value(arg, None);
+                }
+                return Ty::Error;
+            }
+        };
+        if args.len() != 1 {
+            self.report(
+                Code::ArgumentCount,
+                format!(
+                    "{} conversion takes 1 argument, found {}",
+                    to.quoted(),
+                    args.len()
+                ),
+                self.span(expr),
+            );
+            for &arg in args {
+                self.value(arg, None);
+            }
+            return Ty::Error;
+        }
+        let from = self.value(args[0], None);
+        if from != Ty::Error
+            && (!from.numeric() || (!checked && (!from.integer() || !to.integer())))
+        {
+            self.report(
+                Code::TypeMismatch,
+                if checked {
+                    "numeric conversion requires a numeric source"
+                } else {
+                    "`truncating:` requires integer source and destination types"
+                },
+                self.span(expr),
+            );
+        }
+        self.out.resolutions[expr] = Res::Convert { from, to, checked };
+        to
     }
 
     fn name(&mut self, expr: ExprId, token: TokenId) -> Ty {
@@ -789,6 +925,9 @@ impl<'i> Checker<'_, 'i> {
 
     fn call(&mut self, expr: ExprId, callee: ExprId, args: List<ExprId>) -> Ty {
         let ast = self.input.ast;
+        if matches!(ast.exprs[callee], Expr::Name(token) if self.symbol(token).is_type_name()) {
+            return self.conversion(expr, callee, ast.args(args), true);
+        }
         let call_span = self.span(expr);
         let target = match ast.exprs[callee] {
             Expr::Name(token) => match self.resolve(token) {
@@ -982,7 +1121,16 @@ impl<'i> Checker<'_, 'i> {
     /// A binary expression, walking its left spine iteratively: the
     /// left-most operand is checked first, then each operator from the
     /// inside out, so evaluation order and diagnostics follow the source.
-    fn binary_chain(&mut self, root: ExprId) -> Ty {
+    fn hint(&self, expr: ExprId) -> Option<Ty> {
+        if let Expr::Name(token) = self.ast().exprs[expr]
+            && let Some(Some(Name::Binding(binding))) = self.heads.get(self.symbol(token).index())
+        {
+            return Some(self.out.bindings[*binding].ty);
+        }
+        None
+    }
+
+    fn binary_chain(&mut self, root: ExprId, expected: Option<Ty>) -> Ty {
         let ast = self.input.ast;
         let mark = self.spine.len();
         let mut leftmost = root;
@@ -990,43 +1138,77 @@ impl<'i> Checker<'_, 'i> {
             self.spine.push(leftmost);
             leftmost = lhs;
         }
-        let first_op = match ast.exprs[*self.spine.last().unwrap()] {
-            Expr::Binary { op, .. } => op,
-            _ => unreachable!(),
+        let Expr::Binary {
+            op: first_op,
+            rhs: first_rhs,
+            ..
+        } = ast.exprs[*self.spine.last().unwrap()]
+        else {
+            unreachable!()
         };
-        let mut lhs_ty = self.value(leftmost, operand_type(first_op));
+        let guidance = if matches!(first_op, BinaryOp::And | BinaryOp::Or) {
+            Some(Ty::Bool)
+        } else {
+            expected.filter(|t| t.numeric()).or_else(|| {
+                if !matches!(first_op, BinaryOp::Shl | BinaryOp::Shr)
+                    && matches!(ast.exprs[leftmost], Expr::Int { .. } | Expr::Float { .. })
+                {
+                    self.hint(first_rhs)
+                } else {
+                    None
+                }
+            })
+        };
+        let mut lhs_ty = self.expr(leftmost, guidance, true);
         let mut lhs_span = self.span(leftmost);
-        // The left-most operand was just checked against its operator; every
-        // later operator's left side is the previous operator's result.
-        let mut first = true;
         while self.spine.len() > mark {
             let node = self.spine.pop().unwrap();
             let Expr::Binary { op, rhs, .. } = ast.exprs[node] else {
                 unreachable!()
             };
-            if !first && let Some(required) = operand_type(op) {
-                self.mismatch(lhs_ty, required, lhs_span);
+            let valid = valid_operand(op, lhs_ty);
+            if !valid && lhs_ty == Ty::Void && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                self.report(
+                    Code::TypeMismatch,
+                    "type mismatch: expected a value, found `void`",
+                    lhs_span,
+                );
+            } else if !valid {
+                self.mismatch(
+                    lhs_ty,
+                    if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                        Ty::Bool
+                    } else {
+                        Ty::I64
+                    },
+                    lhs_span,
+                );
             }
-            first = false;
-            // One mistake, one diagnostic: once the left operand is wrong for
-            // the operator, the right one is checked only for its own errors.
-            let lhs_wrong = operand_type(op).is_some_and(|t| lhs_ty != t && lhs_ty != Ty::Error);
-            let rhs_expected = match operand_type(op) {
-                Some(_) if lhs_wrong => None,
-                Some(t) => Some(t),
-                // `==` and `!=` compare two values of the same type.
-                None if lhs_ty == Ty::Void => {
-                    self.report(
-                        Code::TypeMismatch,
-                        "type mismatch: expected a value, found `void`",
-                        lhs_span,
-                    );
-                    None
+            let shifts = matches!(op, BinaryOp::Shl | BinaryOp::Shr);
+            let rhs_expected = if valid && !shifts {
+                if lhs_ty == Ty::Error {
+                    match op {
+                        BinaryOp::Eq | BinaryOp::NotEq => None,
+                        BinaryOp::And | BinaryOp::Or => Some(Ty::Bool),
+                        _ => Some(Ty::I64),
+                    }
+                } else {
+                    Some(lhs_ty)
                 }
-                None => Some(lhs_ty).filter(|&t| t != Ty::Error),
+            } else {
+                None
             };
-            self.value(rhs, rhs_expected);
-            let ty = result_type(op);
+            let rhs_ty = self.value(rhs, rhs_expected);
+            if shifts && rhs_ty != Ty::Error && !rhs_ty.integer() {
+                self.mismatch(rhs_ty, Ty::I64, self.span(rhs));
+            }
+            let ty = if comparison(op) || matches!(op, BinaryOp::And | BinaryOp::Or) {
+                Ty::Bool
+            } else if valid && lhs_ty != Ty::Error {
+                lhs_ty
+            } else {
+                Ty::I64
+            };
             self.out.types[node] = ty;
             lhs_ty = ty;
             lhs_span = self.span(node);
@@ -1035,24 +1217,125 @@ impl<'i> Checker<'_, 'i> {
     }
 }
 
-/// The operand type an operator requires, or `None` for `==`/`!=`.
-fn operand_type(op: BinaryOp) -> Option<Ty> {
+fn comparison(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Eq
+            | BinaryOp::NotEq
+            | BinaryOp::Lt
+            | BinaryOp::LtEq
+            | BinaryOp::Gt
+            | BinaryOp::GtEq
+    )
+}
+fn valid_operand(op: BinaryOp, ty: Ty) -> bool {
     use BinaryOp::*;
+    if ty == Ty::Error {
+        return true;
+    }
     match op {
-        Or | And => Some(Ty::Bool),
-        Eq | NotEq => None,
-        Lt | LtEq | Gt | GtEq | Add | Sub | Mul | Div | Rem | WrapAdd | WrapSub | WrapMul => {
-            Some(Ty::I64)
-        }
+        And | Or => ty == Ty::Bool,
+        Eq | NotEq => ty != Ty::Void,
+        Lt | LtEq | Gt | GtEq => ty.numeric() || ty == Ty::Char,
+        Add | Sub | Mul | Div | Rem => ty.numeric(),
+        WrapAdd | WrapSub | WrapMul | BitAnd | BitOr | BitXor | Shl | Shr => ty.integer(),
     }
 }
 
-fn result_type(op: BinaryOp) -> Ty {
-    use BinaryOp::*;
-    match op {
-        Or | And | Eq | NotEq | Lt | LtEq | Gt | GtEq => Ty::Bool,
-        Add | Sub | Mul | Div | Rem | WrapAdd | WrapSub | WrapMul => Ty::I64,
+/// Exact integer-literal contextualization, without rounding large integers
+/// through f64 on the way to f32.
+fn integer_literal(text: &str, negative: bool, ty: Ty) -> Option<u64> {
+    let (digits, radix) = match text.get(..2) {
+        Some("0x") => (&text[2..], 16),
+        Some("0o") => (&text[2..], 8),
+        Some("0b") => (&text[2..], 2),
+        _ => (text, 10),
+    };
+    if ty.float() {
+        return exact_integer_float(digits, radix as u32, negative, ty);
     }
+    let mut magnitude = 0u128;
+    for c in digits.chars().filter(|&c| c != '_') {
+        magnitude = magnitude
+            .checked_mul(radix)?
+            .checked_add(c.to_digit(radix as u32)? as u128)?;
+    }
+    let bits = ty.bits();
+    let max = if ty.signed() {
+        (1u128 << (bits - 1)) - 1
+    } else {
+        (1u128 << bits) - 1
+    };
+    if negative {
+        if !ty.signed() {
+            return (magnitude == 0).then_some(0);
+        }
+        if magnitude > max + 1 {
+            return None;
+        }
+        Some((-(magnitude as i128)) as i64 as u64)
+    } else {
+        (magnitude <= max).then_some(magnitude as u64)
+    }
+}
+
+/// A fixed 1024-bit accumulator covers every finite f64 integer. Long
+/// spellings cost O(bytes), bounded 16-word arithmetic, and no heap buffer.
+fn exact_integer_float(digits: &str, radix: u32, negative: bool, ty: Ty) -> Option<u64> {
+    let mut words = [0u64; 16];
+    for c in digits.chars().filter(|&c| c != '_') {
+        let mut carry = c.to_digit(radix)? as u128;
+        for word in &mut words {
+            let value = *word as u128 * radix as u128 + carry;
+            *word = value as u64;
+            carry = value >> 64;
+        }
+        if carry != 0 {
+            return None;
+        }
+    }
+    let sign = u64::from(negative) << if ty == Ty::F32 { 31 } else { 63 };
+    let Some(high) = words.iter().rposition(|&w| w != 0) else {
+        return Some(sign);
+    };
+    let bits = high * 64 + 64 - words[high].leading_zeros() as usize;
+    let low = words.iter().position(|&w| w != 0).unwrap();
+    let trailing = low * 64 + words[low].trailing_zeros() as usize;
+    let precision = if ty == Ty::F32 { 24 } else { 53 };
+    let max_exp = if ty == Ty::F32 { 127 } else { 1023 };
+    let significant = bits - trailing;
+    if significant > precision || bits - 1 > max_exp {
+        return None;
+    }
+    let mut magnitude = 0u64;
+    for bit in trailing..bits {
+        magnitude |= ((words[bit / 64] >> (bit % 64)) & 1) << (bit - trailing);
+    }
+    let fraction_bits = precision - 1;
+    let bias = if ty == Ty::F32 { 127 } else { 1023 };
+    let fraction = (magnitude << (precision - significant)) & ((1u64 << fraction_bits) - 1);
+    Some(sign | (((bits - 1 + bias) as u64) << fraction_bits) | fraction)
+}
+
+fn char_value(text: &str) -> Option<char> {
+    let inner = text.strip_prefix('\'')?.strip_suffix('\'')?;
+    if !inner.starts_with('\\') {
+        return inner.chars().next();
+    }
+    Some(match &inner[1..] {
+        "n" => '\n',
+        "r" => '\r',
+        "t" => '\t',
+        "0" => '\0',
+        "$" => '$',
+        "\\" => '\\',
+        "\'" => '\'',
+        "\"" => '\"',
+        escape if escape.starts_with("u{") => char::from_u32(
+            u32::from_str_radix(escape.strip_prefix("u{")?.strip_suffix('}')?, 16).ok()?,
+        )?,
+        _ => return None,
+    })
 }
 
 /// The value of an integer literal's spelling as an `i64`, with the sign of

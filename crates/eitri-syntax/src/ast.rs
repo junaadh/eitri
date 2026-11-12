@@ -43,6 +43,11 @@ pub enum BinaryOp {
     WrapAdd,
     WrapSub,
     WrapMul,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +55,7 @@ pub enum UnaryOp {
     /// Checked negation.
     Neg,
     Not,
+    BitNot,
 }
 
 /// `=`, or the operator of a compound assignment.
@@ -67,6 +73,11 @@ pub enum Expr {
         token: TokenId,
         negative: bool,
     },
+    Float {
+        token: TokenId,
+        negative: bool,
+    },
+    Char(TokenId),
     Bool(bool),
     /// A name, resolved by the checker.
     Name(TokenId),
@@ -87,6 +98,11 @@ pub enum Expr {
     Call {
         callee: ExprId,
         args: List<ExprId>,
+    },
+    /// The sole named argument supported before T021: integer truncation.
+    Convert {
+        callee: ExprId,
+        value: ExprId,
     },
     /// Stored aside: its two blocks would double every node's size.
     If(IfId),

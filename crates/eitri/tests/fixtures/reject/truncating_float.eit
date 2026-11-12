@@ -1,0 +1,1 @@
+let x = u8(truncating: 1.5)

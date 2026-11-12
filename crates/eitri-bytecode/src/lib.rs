@@ -9,6 +9,7 @@ mod function;
 pub mod ir;
 pub mod opt;
 pub mod oracle;
+pub mod scalar;
 pub mod spec;
 pub mod text;
 mod verify;
@@ -27,3 +28,6 @@ mod tests;
 
 #[cfg(test)]
 mod opt_tests;
+
+#[cfg(test)]
+mod scalar_tests;

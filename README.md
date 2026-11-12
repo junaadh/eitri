@@ -50,7 +50,7 @@ while i < 10 {
   in the style of `rustc`.
 
 > [!NOTE]
-> Eitri is young. The first scalar slice (integers, booleans, functions,
+> Eitri is young. The scalar slice (integers, floats, characters, booleans, functions,
 > `if`, `while`, host calls) runs end to end; strings, collections,
 > closures, and the rest of the [specification](docs/README.md) are on the
 > [task list](docs/tasks.md). The Rust API is experimental.

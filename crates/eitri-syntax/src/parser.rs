@@ -119,6 +119,9 @@ enum Level {
     Coalesce,
     Range,
     Bitwise,
+    BitXor,
+    BitAnd,
+    Shift,
     Additive,
     Multiplicative,
     Primary,
@@ -134,7 +137,10 @@ impl Level {
             Level::Compare => Level::Coalesce,
             Level::Coalesce => Level::Range,
             Level::Range => Level::Bitwise,
-            Level::Bitwise => Level::Additive,
+            Level::Bitwise => Level::BitXor,
+            Level::BitXor => Level::BitAnd,
+            Level::BitAnd => Level::Shift,
+            Level::Shift => Level::Additive,
             Level::Additive => Level::Multiplicative,
             Level::Multiplicative | Level::Primary => Level::Primary,
         }
@@ -674,7 +680,6 @@ impl Parser<'_> {
 
     fn expr_statement(&mut self) -> Parsed<Option<StmtId>> {
         let target = self.expr(false)?;
-        let op_span = self.current_span();
         let op = match self.kind() {
             T::Eq => Some(AssignOp::Set),
             T::PlusEq => Some(AssignOp::Compound(BinaryOp::Add)),
@@ -685,21 +690,18 @@ impl Parser<'_> {
             T::WrapAddEq => Some(AssignOp::Compound(BinaryOp::WrapAdd)),
             T::WrapSubEq => Some(AssignOp::Compound(BinaryOp::WrapSub)),
             T::WrapMulEq => Some(AssignOp::Compound(BinaryOp::WrapMul)),
-            T::AmpEq | T::PipeEq | T::CaretEq | T::ShlEq => None,
+            T::AmpEq => Some(AssignOp::Compound(BinaryOp::BitAnd)),
+            T::PipeEq => Some(AssignOp::Compound(BinaryOp::BitOr)),
+            T::CaretEq => Some(AssignOp::Compound(BinaryOp::BitXor)),
+            T::ShlEq => Some(AssignOp::Compound(BinaryOp::Shl)),
             // `>>=` arrives as `>` and an adjacent `>=`.
-            T::Gt if self.nth(1) == T::GtEq && self.adjacent(0) => None,
+            T::Gt if self.nth(1) == T::GtEq && self.adjacent(0) => {
+                self.bump();
+                Some(AssignOp::Compound(BinaryOp::Shr))
+            }
             _ => return Ok(Some(self.ast.stmts.push(Stmt::Expr(target)))),
         };
-        let Some(op) = op else {
-            let end = if self.at(T::Gt) {
-                self.span_of(TokenId::from_u32(self.pos + 1)).end
-            } else {
-                op_span.end
-            };
-            self.unsupported(Span::new(op_span.start, end), "bitwise operators");
-            self.skip_statement();
-            return Ok(None);
-        };
+        let op = op.expect("matched an assignment operator");
         self.bump();
         let value = self.expr(false)?;
         let span = self.ast.span(target).to(self.ast.span(value));
@@ -804,15 +806,15 @@ impl Parser<'_> {
             T::GtEq => (Level::Compare, Binary(B::GtEq)),
             // `>` `>` is a right shift; `>` `>=` is `>>=`, which ends the
             // expression for the assignment to take.
-            T::Gt if self.adjacent(0) && self.nth(1) == T::Gt => {
-                (Level::Bitwise, Unsupported("shifts", 2))
-            }
+            T::Gt if self.adjacent(0) && self.nth(1) == T::Gt => (Level::Shift, Binary(B::Shr)),
             T::Gt if self.adjacent(0) && self.nth(1) == T::GtEq => return None,
             T::Gt => (Level::Compare, Binary(B::Gt)),
             T::QuestionQuestion => (Level::Coalesce, Unsupported("`??`", 1)),
             T::DotDot | T::DotDotEq => (Level::Range, Unsupported("ranges", 1)),
-            T::Pipe | T::Caret | T::Amp => (Level::Bitwise, Unsupported("bitwise operators", 1)),
-            T::Shl => (Level::Bitwise, Unsupported("shifts", 1)),
+            T::Pipe => (Level::Bitwise, Binary(B::BitOr)),
+            T::Caret => (Level::BitXor, Binary(B::BitXor)),
+            T::Amp => (Level::BitAnd, Binary(B::BitAnd)),
+            T::Shl => (Level::Shift, Binary(B::Shl)),
             T::Plus => (Level::Additive, Binary(B::Add)),
             T::Minus => (Level::Additive, Binary(B::Sub)),
             T::WrapAdd => (Level::Additive, Binary(B::WrapAdd)),
@@ -881,6 +883,9 @@ impl Parser<'_> {
             match op {
                 Infix::Binary(op) => {
                     self.bump();
+                    if op == BinaryOp::Shr {
+                        self.bump();
+                    }
                     let rhs = self.binary_expr(rhs_min, ns)?;
                     lhs = self.binary(op, lhs, rhs);
                 }
@@ -905,7 +910,8 @@ impl Parser<'_> {
         let op = match self.kind() {
             T::Minus => UnaryOp::Neg,
             T::Bang => UnaryOp::Not,
-            T::Tilde | T::Try | T::TryQuestion | T::Await | T::Spawn => {
+            T::Tilde => UnaryOp::BitNot,
+            T::Try | T::TryQuestion | T::Await | T::Spawn => {
                 let start = self.current_span();
                 let feature = match self.kind() {
                     T::Tilde => "bitwise operators",
@@ -930,14 +936,24 @@ impl Parser<'_> {
         // `-` directly on a literal is one negative constant, unless a
         // postfix operation binds the literal first.
         if op == UnaryOp::Neg
-            && self.at(T::Int)
+            && matches!(self.kind(), T::Int | T::Float)
             && !matches!(
                 self.nth(1),
                 T::Dot | T::LParen | T::LBracket | T::QuestionDot | T::QuestionBracket
             )
         {
+            let float = self.at(T::Float);
             let token = self.bump();
             let span = start.to(self.span_of(token));
+            if float {
+                return Ok(self.ast.expr(
+                    Expr::Float {
+                        token,
+                        negative: true,
+                    },
+                    span,
+                ));
+            }
             return Ok(self.ast.expr(
                 Expr::Int {
                     token,
@@ -1008,6 +1024,18 @@ impl Parser<'_> {
     fn call(&mut self, callee: ExprId) -> Parsed<ExprId> {
         let open = self.bump();
         let mark = self.exprs.len();
+        if self.at(T::Ident)
+            && self.nth(1) == T::Colon
+            && &self.text[self.current_span().range()] == "truncating"
+            && matches!(self.ast.exprs[callee], Expr::Name(token) if self.tokens.symbol(token).is_type_name())
+        {
+            self.bump();
+            self.bump();
+            let value = self.expr(false)?;
+            let close = self.expect(T::RParen, "`)`")?;
+            let span = self.ast.span(callee).to(self.span_of(close));
+            return Ok(self.ast.expr(Expr::Convert { callee, value }, span));
+        }
         let mut labeled = false;
         while !self.at(T::RParen) {
             if self.at(T::Ident) && self.nth(1) == T::Colon {
@@ -1101,9 +1129,21 @@ impl Parser<'_> {
                 self.bump();
                 self.ast.expr(Expr::Bool(value), span)
             }
-            T::Float => self.unsupported_primary("float literals"),
+            T::Float => {
+                self.bump();
+                self.ast.expr(
+                    Expr::Float {
+                        token,
+                        negative: false,
+                    },
+                    span,
+                )
+            }
             T::Str => self.unsupported_primary("string literals"),
-            T::Char => self.unsupported_primary("char literals"),
+            T::Char => {
+                self.bump();
+                self.ast.expr(Expr::Char(token), span)
+            }
             T::Null => self.unsupported_primary("`null`"),
             T::SelfLower => self.unsupported_primary("`self`"),
             T::LBracket => self.unsupported_primary("array literals"),

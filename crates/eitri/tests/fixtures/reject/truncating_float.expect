@@ -1,0 +1,1 @@
+error[E0301] 8..27: `truncating:` requires integer source and destination types

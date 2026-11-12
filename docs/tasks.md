@@ -1,6 +1,6 @@
 # Implementation tasks
 
-Status: T001–T012 and T045–T047 are complete; the M0 gate is closed.
+Status: T001–T013 and T045–T047 are complete; the M0 gate is closed.
 Source now runs end to end: lex, parse, check, lower, verify (debug builds),
 and interpret.
 Unchecked boxes describe work still to do. This is the executable work breakdown for the
@@ -626,12 +626,33 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 
 ### T013 — Complete scalar representations and conversions
 
-- [ ] Depends on: T012.
+- [x] Depends on: T012.
 - Add `i8`, `u8`, `u64`, `f32`, `f64`, `char`, conversions, bitwise operations,
   width-aware shifts, and precise float arithmetic/comparisons. Keep storage-only
   extern widths distinct from ordinary source types.
 - Done when: canonical slot representations and conversion faults agree
   with reference models, including narrow arithmetic and all float conditions.
+
+- Completed 2026-11-12: added canonical `i8`/`u8`/`u64`/`f32`/`f64`/
+  `char` slots, contextual literals, checked and integer-only truncating
+  conversions, bitwise operations, width-aware shifts, IEEE arithmetic and
+  all float conditions. Storage-only extern widths remain unavailable as
+  ordinary source types. Both interpreters, both lowerers, the hot tier, and
+  text bytecode round trips cover the new scalars; independent integer and
+  IEEE-field reference models cover narrow arithmetic and conversion faults.
+  Completion audit fixed count-driven narrowing of a shift's left literal;
+  added all-count-type, decimal rounding, signed underflow, negative infinity,
+  arithmetic boundary, and unsupported-neighbor regressions.
+- Completion checks: locked workspace build, format check, Clippy with
+  warnings denied, and workspace tests (185 pass) succeed; 151 fixtures,
+  zero pending. Diagnostic catalog freshness and local documentation links
+  pass. Local Apple M5 / AArch64 macOS only; no x86-64 or sanitizer claims.
+- T011 rerun: 20,001 samples per cell, default threaded release build;
+  reused-context module compile/execute/total p50 = 7.500/0.208/7.708 µs,
+  total p99 = 15.4 µs. The few-microsecond module goal remains missed.
+  Memory, environment, method, raw samples, and limitations are recorded in
+  the [T013 ledger](implementation/vm-research.md#t013-scalar-completion-audit--2026-11-12).
+  Review summary and check output: `/tmp/codex-eitri-T013.md`.
 
 ### T014 — Define layouts and root descriptors
 
@@ -1272,5 +1293,5 @@ a debugger with breakpoints (T055); a mandatory native tier (T043).
 
 ## Immediate next task
 
-**T013 — complete scalar representations and conversions**. The M0 gate,
-including T047's diagnostic coverage and generated catalog, is complete.
+**T014 — define layouts and root descriptors**. T013 scalar representations
+and conversions are complete. T014 has not started.

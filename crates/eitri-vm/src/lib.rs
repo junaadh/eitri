@@ -42,7 +42,7 @@
 use std::marker::PhantomData;
 
 use eitri_base::IndexVec;
-use eitri_bytecode::{CallTarget, Function, FunctionId, Op, SlotRange, ValueType};
+use eitri_bytecode::{CallTarget, Function, FunctionId, Op, SlotRange};
 
 mod threaded;
 
@@ -53,10 +53,24 @@ pub use threaded::run_threaded;
 pub enum FaultKind {
     Overflow,
     DivisionByZero,
+    ShiftAmount,
+    Conversion,
     Budget,
     Depth,
     /// Raised by a host function, with its message.
     Host(String),
+}
+
+impl From<eitri_bytecode::scalar::ScalarFault> for FaultKind {
+    fn from(value: eitri_bytecode::scalar::ScalarFault) -> Self {
+        use eitri_bytecode::scalar::ScalarFault;
+        match value {
+            ScalarFault::Overflow => Self::Overflow,
+            ScalarFault::DivisionByZero => Self::DivisionByZero,
+            ScalarFault::ShiftAmount => Self::ShiftAmount,
+            ScalarFault::Conversion => Self::Conversion,
+        }
+    }
 }
 
 impl FaultKind {
@@ -65,6 +79,8 @@ impl FaultKind {
         match self {
             FaultKind::Overflow => "integer overflow",
             FaultKind::DivisionByZero => "division by zero",
+            FaultKind::ShiftAmount => "invalid shift amount",
+            FaultKind::Conversion => "numeric conversion out of range",
             FaultKind::Budget => "execution budget exhausted",
             FaultKind::Depth => "call depth exceeded",
             FaultKind::Host(message) => message,
@@ -278,7 +294,7 @@ impl<'c> Call<'c, '_> {
             || args
                 .iter()
                 .zip(&signature.params)
-                .any(|(&arg, &ty)| ty == ValueType::Bool && arg > 1);
+                .any(|(&arg, &ty)| !ty.canonical(arg));
         if mismatch {
             let message = format!(
                 "host error: reentrant call to `{}` does not match its signature",
@@ -746,7 +762,22 @@ fn execute(
                         s = &mut m.slots[base..base + function.frame_size as usize];
                         pc = caller.resume;
                     }
-                    other => unreachable!("`{}` is rejected by the verifier", other.name()),
+                    other => {
+                        let info = other.info();
+                        if let eitri_bytecode::spec::Sem::Branch { cond, imm } = info.sem {
+                            let rhs = if imm { cbi_imm!() } else { s[b!()] as i64 };
+                            branch!(cond.eval(s[a!()] as i64, rhs), (word >> 24) as i8);
+                        } else {
+                            let x = if info.roles[1].is_slot() { s[b!()] } else { 0 };
+                            let y = if info.roles[2].is_slot() { s[c!()] } else { 0 };
+                            match eitri_bytecode::scalar::eval(info.sem, x, y, (word >> 24) as u8) {
+                                Ok(value) => s[a!()] = value,
+                                Err(kind) => {
+                                    return Err(fault(&m.frames[floor..], kind.into(), id, start));
+                                }
+                            }
+                        }
+                    }
                 }
             }};
         }
@@ -762,3 +793,6 @@ fn execute(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod scalar_tests;

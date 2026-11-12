@@ -54,6 +54,7 @@ pub enum ErrorKind {
     UntypedLiteral,
     /// A `bool` literal that is not 0 or 1.
     BadBool(u64),
+    InvalidScalar(&'static str),
     Uninitialized(u32),
     /// Paths that meet here leave different types in the slot.
     Conflict(u32),
@@ -85,6 +86,7 @@ impl fmt::Display for VerifyError {
             ErrorKind::FallsOffEnd => write!(f, "execution can fall off the end of the code"),
             ErrorKind::StartMapMismatch => write!(f, "the instruction-start map is wrong"),
             ErrorKind::UntypedLiteral => write!(f, "a literal load without a type"),
+            ErrorKind::InvalidScalar(message) => f.write_str(message),
             ErrorKind::BadBool(v) => write!(f, "`bool` literal {v} is neither 0 nor 1"),
             ErrorKind::Uninitialized(s) => write!(f, "slot r{s} may be read before it is written"),
             ErrorKind::Conflict(s) => {
@@ -392,31 +394,139 @@ fn transfer(
             if ty == Bool && value > 1 {
                 return Err(error(pc, ErrorKind::BadBool(value)));
             }
+            if !ty.canonical(value) {
+                return Err(error(
+                    pc,
+                    ErrorKind::InvalidScalar("noncanonical scalar literal"),
+                ));
+            }
             write(state, a, ty);
         }
-        // An immediate form: one integer operand and an `Imm8`.
-        Sem::Int { imm: true, .. } => {
-            read(state, pc, b, Some(I64))?;
-            write(state, a, I64);
-        }
-        Sem::Int { op, .. } => {
-            use crate::spec::IntOp;
-            match op {
-                IntOp::Xor => {
-                    let ty = read(state, pc, b, None)?;
+        Sem::Int { op, mode, imm } => {
+            use crate::spec::{IntOp, Mode};
+            let ty = read(state, pc, b, None)?;
+            let invalid = || {
+                error(
+                    pc,
+                    ErrorKind::InvalidScalar("incompatible integer operation or width"),
+                )
+            };
+            let unary = matches!(op, IntOp::Neg | IntOp::Not);
+            let bool_xor = op == IntOp::Xor && ty == Bool;
+            if !ty.integer() && !bool_xor {
+                read(state, pc, b, Some(I64))?;
+                return Err(invalid());
+            }
+            if !imm && !unary {
+                if matches!(op, IntOp::Shl(_) | IntOp::Shr(_)) {
+                    let rhs = read(state, pc, c, None)?;
+                    if !rhs.integer() {
+                        return Err(invalid());
+                    }
+                } else {
                     read(state, pc, c, Some(ty))?;
-                    write(state, a, ty);
-                }
-                IntOp::Neg => {
-                    read(state, pc, b, Some(I64))?;
-                    write(state, a, I64);
-                }
-                _ => {
-                    read(state, pc, b, Some(I64))?;
-                    read(state, pc, c, Some(I64))?;
-                    write(state, a, I64);
                 }
             }
+            let result = match op {
+                IntOp::Shl(width) | IntOp::Shr(width) => {
+                    if ty.bits() != width.bits()
+                        || (mode == Mode::Signed && !ty.signed())
+                        || (mode == Mode::Unsigned && ty.signed())
+                    {
+                        return Err(invalid());
+                    }
+                    if imm && c >= width.bits() as i64 {
+                        return Err(invalid());
+                    }
+                    ty
+                }
+                IntOp::And | IntOp::Or | IntOp::Xor => ty,
+                IntOp::Not => {
+                    if ty.signed() {
+                        I64
+                    } else {
+                        ValueType::U64
+                    }
+                }
+                _ => {
+                    if matches!(mode, Mode::Signed | Mode::CheckedSigned) && ty == ValueType::U64 {
+                        return Err(invalid());
+                    }
+                    if matches!(mode, Mode::Unsigned | Mode::CheckedUnsigned) && ty.signed() {
+                        return Err(invalid());
+                    }
+                    if matches!(mode, Mode::Unsigned | Mode::CheckedUnsigned) {
+                        ValueType::U64
+                    } else {
+                        I64
+                    }
+                }
+            };
+            write(state, a, result);
+        }
+        Sem::Convert { .. } => {
+            let source = read(state, pc, b, None)?;
+            let descriptor = c as u8;
+            let dest = crate::scalar::format_type(descriptor & 7);
+            if descriptor & !15 != 0
+                || dest.is_none()
+                || !source.integer()
+                || (descriptor & 8 != 0) != source.signed()
+            {
+                return Err(error(
+                    pc,
+                    ErrorKind::InvalidScalar("invalid integer conversion descriptor"),
+                ));
+            }
+            write(state, a, dest.unwrap());
+        }
+        Sem::Float { op, precision } => {
+            let ty = if precision == crate::spec::Precision::F32 {
+                ValueType::F32
+            } else {
+                ValueType::F64
+            };
+            read(state, pc, b, Some(ty))?;
+            if op != crate::spec::FloatOp::Neg {
+                read(state, pc, c, Some(ty))?;
+            }
+            write(state, a, ty);
+        }
+        Sem::FloatSet { precision, .. } => {
+            let ty = if precision == crate::spec::Precision::F32 {
+                ValueType::F32
+            } else {
+                ValueType::F64
+            };
+            read(state, pc, b, Some(ty))?;
+            read(state, pc, c, Some(ty))?;
+            write(state, a, Bool);
+        }
+        Sem::FloatConvert(kind) => {
+            use crate::spec::FloatConversion::*;
+            let descriptor = c as u8;
+            let int = crate::scalar::format_type(descriptor).ok_or_else(|| {
+                error(
+                    pc,
+                    ErrorKind::InvalidScalar("invalid float conversion descriptor"),
+                )
+            })?;
+            if matches!(kind, F32ToF64 | F64ToF32) && c != 0 {
+                return Err(error(
+                    pc,
+                    ErrorKind::InvalidScalar("reserved float conversion field"),
+                ));
+            }
+            let (from, to) = match kind {
+                IntToF32 => (int, ValueType::F32),
+                IntToF64 => (int, ValueType::F64),
+                F32ToInt => (ValueType::F32, int),
+                F64ToInt => (ValueType::F64, int),
+                F32ToF64 => (ValueType::F32, ValueType::F64),
+                F64ToF32 => (ValueType::F64, ValueType::F32),
+            };
+            read(state, pc, b, Some(from))?;
+            write(state, a, to);
         }
         Sem::Branch { imm: true, .. } => {
             read(state, pc, a, Some(I64))?;
@@ -454,12 +564,20 @@ fn transfer(
 /// Operands of a comparison: `EQ`/`NE` take two values of one type,
 /// ordering takes integers.
 fn compare(state: &[Slot], pc: u32, cond: Cond, a: i64, b: i64) -> Result<(), VerifyError> {
-    if matches!(cond, Cond::Eq | Cond::Ne) {
-        let ty = read(state, pc, a, None)?;
-        read(state, pc, b, Some(ty))?;
-    } else {
-        read(state, pc, a, Some(ValueType::I64))?;
-        read(state, pc, b, Some(ValueType::I64))?;
+    let ty = read(state, pc, a, None)?;
+    read(state, pc, b, Some(ty))?;
+    let equal = matches!(cond, Cond::Eq | Cond::Ne);
+    if !(ty.integer() || ty == ValueType::Char || (equal && ty == ValueType::Bool)) {
+        return Err(error(
+            pc,
+            ErrorKind::InvalidScalar("invalid integer comparison type"),
+        ));
+    }
+    if !equal && matches!(cond, Cond::Lt | Cond::Le | Cond::Gt) && ty == ValueType::U64 {
+        return Err(error(
+            pc,
+            ErrorKind::InvalidScalar("signed comparison of u64"),
+        ));
     }
     Ok(())
 }

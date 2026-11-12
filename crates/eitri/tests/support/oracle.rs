@@ -16,7 +16,6 @@
 
 use eitri_base::{Idx, Interner, SourceId, Span};
 use eitri_bytecode::oracle::{self, Arith, IntType};
-use eitri_bytecode::spec::Cond;
 use eitri_check::{BindingId, CheckScratch, Checked, HostFnId, Hosts, Input, Res, Ty};
 use eitri_diag::Diagnostics;
 use eitri_syntax::ast::{
@@ -194,14 +193,53 @@ impl Oracle {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Value {
     Int(i64),
+    Scalar(Ty, u64),
     Bool(bool),
     Void,
 }
 
 impl Value {
+    fn from_word(ty: Ty, word: u64) -> Self {
+        match ty {
+            Ty::I64 => Self::Int(word as i64),
+            Ty::Bool => Self::Bool(word != 0),
+            Ty::Void => Self::Void,
+            _ => Self::Scalar(ty, word),
+        }
+    }
+    fn ty(self) -> Ty {
+        match self {
+            Self::Int(_) => Ty::I64,
+            Self::Bool(_) => Ty::Bool,
+            Self::Scalar(ty, _) => ty,
+            Self::Void => Ty::Void,
+        }
+    }
+    fn integer(self) -> i128 {
+        if self.ty().signed() {
+            self.word() as i64 as i128
+        } else {
+            self.word() as i128
+        }
+    }
+    fn integer_or_bool(self) -> i128 {
+        if let Self::Bool(value) = self {
+            i128::from(value)
+        } else {
+            self.integer()
+        }
+    }
+    fn float(self) -> f64 {
+        if self.ty() == Ty::F32 {
+            f32::from_bits(self.word() as u32) as f64
+        } else {
+            f64::from_bits(self.word())
+        }
+    }
     fn int(self) -> i64 {
         match self {
             Value::Int(value) => value,
+            Value::Scalar(_, word) => word as i64,
             other => unreachable!("checked as `i64`, found {other:?}"),
         }
     }
@@ -217,6 +255,7 @@ impl Value {
     fn word(self) -> u64 {
         match self {
             Value::Int(value) => value as u64,
+            Value::Scalar(_, word) => word,
             Value::Bool(value) => u64::from(value),
             Value::Void => unreachable!("the checker rejects `void` arguments"),
         }
@@ -285,13 +324,6 @@ impl Eval<'_> {
         Ok(())
     }
 
-    fn arith(&self, op: Arith, a: i64, b: i64, span: Span) -> Flow<Value> {
-        match oracle::arith(IntType::I64, op, a.into(), b.into()) {
-            Ok(value) => Ok(Value::Int(i64::try_from(value).expect("in range"))),
-            Err(fault) => Err(self.fault(message(fault), span)),
-        }
-    }
-
     fn block(&mut self, host: &mut dyn Host, block: Block) -> Flow<Value> {
         let mut value = Value::Void;
         for &stmt in self.ast.block(block) {
@@ -353,9 +385,14 @@ impl Eval<'_> {
     fn expr(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
         let span = self.ast.span(e);
         match self.ast.exprs[e] {
-            Expr::Int { .. } => Ok(Value::Int(
-                self.checked.int_value(e).expect("checked literal fits"),
+            Expr::Int { .. } | Expr::Float { .. } | Expr::Char(_) => Ok(Value::from_word(
+                self.checked.types[e],
+                self.checked.int_value(e).expect("checked literal fits") as u64,
             )),
+            Expr::Convert { value, .. } => {
+                let value = self.expr(host, value)?;
+                self.convert(e, value)
+            }
             Expr::Bool(value) => Ok(Value::Bool(value)),
             Expr::Name(_) => match self.checked.resolutions[e] {
                 Res::Binding(binding) => Ok(self.read(binding)),
@@ -365,10 +402,23 @@ impl Eval<'_> {
                 let value = self.expr(host, operand)?;
                 match op {
                     UnaryOp::Not => Ok(Value::Bool(!value.bool())),
-                    UnaryOp::Neg => match oracle::neg(IntType::I64, value.int().into()) {
-                        Ok(value) => Ok(Value::Int(i64::try_from(value).expect("in range"))),
+                    UnaryOp::Neg if value.ty().float() => Ok(Value::from_word(
+                        value.ty(),
+                        oracle::scalar::float(
+                            eitri_bytecode::spec::FloatOp::Neg,
+                            wire_type(value.ty()),
+                            value.word(),
+                            0,
+                        ),
+                    )),
+                    UnaryOp::Neg => match oracle::neg(int_type(value.ty()), value.integer()) {
+                        Ok(number) => Ok(Value::from_word(value.ty(), number as u64)),
                         Err(fault) => Err(self.fault(message(fault), span)),
                     },
+                    UnaryOp::BitNot => Ok(Value::from_word(
+                        value.ty(),
+                        int_type(value.ty()).wrap(!value.integer()) as u64,
+                    )),
                 }
             }
             Expr::Binary { op, lhs, rhs } => match op {
@@ -384,6 +434,12 @@ impl Eval<'_> {
                     self.binary_values(op, a, b, span)
                 }
             },
+            Expr::Call { args, .. }
+                if matches!(self.checked.resolutions[e], Res::Convert { .. }) =>
+            {
+                let value = self.expr(host, self.ast.args(args)[0])?;
+                self.convert(e, value)
+            }
             Expr::Call { args, .. } => {
                 let mut values = Vec::with_capacity(self.ast.args(args).len());
                 for &arg in self.ast.args(args) {
@@ -417,27 +473,86 @@ impl Eval<'_> {
         }
     }
 
-    fn binary_values(&self, op: BinaryOp, a: Value, b: Value, span: Span) -> Flow<Value> {
-        let cond = |cond, x: i64, y: i64| Ok(Value::Bool(oracle::int_cond(cond, x, y)));
-        let arith = match op {
-            // Equality applies to both types; the checker made them agree.
-            BinaryOp::Eq => return Ok(Value::Bool(a == b)),
-            BinaryOp::NotEq => return Ok(Value::Bool(a != b)),
-            BinaryOp::Lt => return cond(Cond::Lt, a.int(), b.int()),
-            BinaryOp::LtEq => return cond(Cond::Le, a.int(), b.int()),
-            BinaryOp::Gt => return cond(Cond::Gt, a.int(), b.int()),
-            BinaryOp::GtEq => return cond(Cond::Le, b.int(), a.int()),
-            BinaryOp::Add => Arith::Add,
-            BinaryOp::Sub => Arith::Sub,
-            BinaryOp::Mul => Arith::Mul,
-            BinaryOp::Div => Arith::Div,
-            BinaryOp::Rem => Arith::Rem,
-            BinaryOp::WrapAdd => Arith::WrapAdd,
-            BinaryOp::WrapSub => Arith::WrapSub,
-            BinaryOp::WrapMul => Arith::WrapMul,
-            BinaryOp::And | BinaryOp::Or => unreachable!("short-circuit operators"),
+    fn convert(&self, e: ExprId, value: Value) -> Flow<Value> {
+        let Res::Convert { from, to, checked } = self.checked.resolutions[e] else {
+            unreachable!()
         };
-        self.arith(arith, a.int(), b.int(), span)
+        oracle::scalar::convert(value.word(), wire_type(from), wire_type(to), checked)
+            .map(|word| Value::from_word(to, word))
+            .map_err(|error| {
+                self.fault(
+                    match error {
+                        oracle::scalar::ConversionFault::Overflow => "integer overflow",
+                        oracle::scalar::ConversionFault::Conversion => {
+                            "numeric conversion out of range"
+                        }
+                    },
+                    self.ast.span(e),
+                )
+            })
+    }
+
+    fn binary_values(&self, op: BinaryOp, a: Value, b: Value, span: Span) -> Flow<Value> {
+        use BinaryOp::*;
+        let ty = a.ty();
+        if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {
+            let order = if ty.float() {
+                a.float().partial_cmp(&b.float())
+            } else {
+                Some(a.integer_or_bool().cmp(&b.integer_or_bool()))
+            };
+            use std::cmp::Ordering::{Equal, Greater, Less};
+            return Ok(Value::Bool(match op {
+                Eq => order == Some(Equal),
+                NotEq => order != Some(Equal),
+                Lt => order == Some(Less),
+                LtEq => matches!(order, Some(Less | Equal)),
+                Gt => order == Some(Greater),
+                GtEq => matches!(order, Some(Greater | Equal)),
+                _ => unreachable!(),
+            }));
+        }
+        if ty.float() {
+            use eitri_bytecode::spec::FloatOp;
+            let operation = match op {
+                Add => FloatOp::Add,
+                Sub => FloatOp::Sub,
+                Mul => FloatOp::Mul,
+                Div => FloatOp::Div,
+                Rem => FloatOp::Rem,
+                _ => unreachable!(),
+            };
+            return Ok(Value::from_word(
+                ty,
+                oracle::scalar::float(operation, wire_type(ty), a.word(), b.word()),
+            ));
+        }
+        if matches!(op, BitAnd | BitOr | BitXor) {
+            let (x, y) = (a.integer(), b.integer());
+            let result = match op {
+                BitAnd => x & y,
+                BitOr => x | y,
+                _ => x ^ y,
+            };
+            return Ok(Value::from_word(ty, int_type(ty).wrap(result) as u64));
+        }
+        let arith = match op {
+            Add => Arith::Add,
+            Sub => Arith::Sub,
+            Mul => Arith::Mul,
+            Div => Arith::Div,
+            Rem => Arith::Rem,
+            WrapAdd => Arith::WrapAdd,
+            WrapSub => Arith::WrapSub,
+            WrapMul => Arith::WrapMul,
+            Shl => Arith::Shl,
+            Shr => Arith::Shr,
+            _ => unreachable!(),
+        };
+        match oracle::arith(int_type(ty), arith, a.integer(), b.integer()) {
+            Ok(value) => Ok(Value::from_word(ty, value as u64)),
+            Err(error) => Err(self.fault(message(error), span)),
+        }
     }
 
     fn call_script(
@@ -500,11 +615,10 @@ impl Eval<'_> {
                 trace,
             }));
         }
-        Ok(match function.ret {
-            Ty::I64 => Value::Int(results[0] as i64),
-            Ty::Bool => Value::Bool(results[0] != 0),
-            _ => Value::Void,
-        })
+        Ok(Value::from_word(
+            function.ret,
+            results.first().copied().unwrap_or(0),
+        ))
     }
 
     fn find(&self, name: &str) -> Option<FnId> {
@@ -535,7 +649,7 @@ impl Reenter for Eval<'_> {
         let signature = self.checked.signatures[f];
         let params = &self.checked.param_types[signature.params];
         let returns = usize::from(signature.ret != Ty::Void);
-        let fits = |ty: Ty, word: u64| ty != Ty::Bool || word <= 1;
+        let fits = |ty: Ty, word: u64| wire_type(ty).canonical(word);
         if args.len() != params.len()
             || results.len() != returns
             || !params.iter().zip(args).all(|(&ty, &word)| fits(ty, word))
@@ -564,10 +678,7 @@ impl Reenter for Eval<'_> {
         let values: Vec<Value> = params
             .iter()
             .zip(args)
-            .map(|(&ty, &word)| match ty {
-                Ty::Bool => Value::Bool(word == 1),
-                _ => Value::Int(word as i64),
-            })
+            .map(|(&ty, &word)| Value::from_word(ty, word))
             .collect();
         // The nested run's trace starts empty; its entry is one more frame.
         let calls = std::mem::take(&mut self.calls);
@@ -605,6 +716,27 @@ fn message(fault: oracle::Fault) -> &'static str {
     match fault {
         oracle::Fault::Overflow => "integer overflow",
         oracle::Fault::DivisionByZero => "division by zero",
-        oracle::Fault::ShiftAmount => unreachable!("no shifts in the first slice"),
+        oracle::Fault::ShiftAmount => "invalid shift amount",
+    }
+}
+
+fn wire_type(ty: Ty) -> eitri_bytecode::ValueType {
+    use eitri_bytecode::ValueType as V;
+    match ty {
+        Ty::I64 => V::I64,
+        Ty::I8 => V::I8,
+        Ty::U8 => V::U8,
+        Ty::U64 => V::U64,
+        Ty::F32 => V::F32,
+        Ty::F64 => V::F64,
+        Ty::Char => V::Char,
+        Ty::Bool => V::Bool,
+        _ => unreachable!(),
+    }
+}
+fn int_type(ty: Ty) -> IntType {
+    IntType {
+        bits: ty.bits(),
+        signed: ty.signed(),
     }
 }

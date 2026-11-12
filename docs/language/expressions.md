@@ -67,8 +67,10 @@ functions: `floor_div(a, b)` and `floor_mod(a, b)`.
 
 ### Shifts
 
-- The shift amount must be in `0..bits` for the operand's type. Anything else
-  **faults**.
+- The left operand is an integer. The shift count may have any integer
+  type; it need not match the left operand's type.
+- The shift amount must be in `0..bits` for the left operand's type. Anything
+  else **faults**, including a negative signed count.
 - Bits shifted out are dropped; shifting is not checked for overflow.
 - `>>` on a signed integer keeps the sign; on an unsigned integer it fills
   with zeros.

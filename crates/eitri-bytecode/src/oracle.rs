@@ -107,13 +107,22 @@ pub enum Arith {
 }
 
 pub fn arith(ty: IntType, op: Arith, a: i128, b: i128) -> Result<i128, Fault> {
-    debug_assert!(ty.contains(a) && ty.contains(b));
+    debug_assert!(ty.contains(a) && (matches!(op, Arith::Shl | Arith::Shr) || ty.contains(b)));
     match op {
         Arith::Add => ty.checked(a + b),
         Arith::Sub => ty.checked(a - b),
+        Arith::Mul if !ty.signed => {
+            let value = (a as u128) * (b as u128);
+            if value > ty.max() as u128 {
+                Err(Fault::Overflow)
+            } else {
+                Ok(value as i128)
+            }
+        }
         Arith::Mul => ty.checked(a * b),
         Arith::WrapAdd => Ok(ty.wrap(a + b)),
         Arith::WrapSub => Ok(ty.wrap(a - b)),
+        Arith::WrapMul if !ty.signed => Ok(((a as u128 * b as u128) & ty.max() as u128) as i128),
         Arith::WrapMul => Ok(ty.wrap(a * b)),
         Arith::Div | Arith::Rem => {
             if b == 0 {
@@ -388,3 +397,6 @@ mod tests {
         assert!(float_cond(FloatCond::Lt, f64::NEG_INFINITY, f64::MIN));
     }
 }
+
+#[path = "oracle_scalar.rs"]
+pub mod scalar;

@@ -86,6 +86,12 @@ impl LowerScratch {
 pub fn value_type(ty: Ty) -> ValueType {
     match ty {
         Ty::I64 => ValueType::I64,
+        Ty::I8 => ValueType::I8,
+        Ty::U8 => ValueType::U8,
+        Ty::U64 => ValueType::U64,
+        Ty::F32 => ValueType::F32,
+        Ty::F64 => ValueType::F64,
+        Ty::Char => ValueType::Char,
         Ty::Bool => ValueType::Bool,
         Ty::Void | Ty::Error => unreachable!("checked code has only value types here"),
     }
@@ -386,7 +392,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                     AssignOp::Compound(op) => {
                         // A fault here points at the whole statement.
-                        if let (Some(k), Some(imm_op)) = (self.imm8(value), imm_op(op)) {
+                        if let (Some(k), Some(imm_op)) = (
+                            self.imm8(value)
+                                .filter(|_| checked.bindings[binding].ty == Ty::I64),
+                            imm_op(op),
+                        ) {
                             self.asm.emit(
                                 imm_op,
                                 Operands::abc(slot.into(), slot.into(), k),
@@ -394,7 +404,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             )?;
                         } else {
                             let rhs = self.expr(value, None)?;
-                            self.operate(op, slot, slot, rhs, span)?;
+                            self.operate(op, checked.bindings[binding].ty, slot, slot, rhs, span)?;
                         }
                     }
                 }
@@ -479,7 +489,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let span = ast.span(e);
         let mark = self.top;
         match ast.exprs[e] {
-            Expr::Binary { op, lhs, rhs } if !SIMPLE && compare(op).is_some() => {
+            Expr::Binary { op, lhs, rhs }
+                if !SIMPLE
+                    && compare(op).is_some()
+                    && matches!(self.checked.types[lhs], Ty::I64 | Ty::Bool) =>
+            {
                 // Against a small literal: one `CBI`, no load (E5, C2).
                 if let Some((x, cond, k)) = self.compare_imm(op, lhs, rhs) {
                     let x = self.expr(x, None)?;
@@ -582,10 +596,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let (ast, checked) = (self.input.ast, self.checked);
         let span = ast.span(e);
         match ast.exprs[e] {
-            Expr::Int { .. } => {
+            Expr::Int { .. } | Expr::Float { .. } | Expr::Char(_) => {
                 let slot = self.dst(dst);
                 let value = checked.int_value(e).expect("checked literals have values");
-                self.asm.load(slot, value as u64, ValueType::I64, span)?;
+                self.asm
+                    .load(slot, value as u64, value_type(checked.types[e]), span)?;
                 Ok(slot)
             }
             Expr::Bool(value) => {
@@ -615,13 +630,34 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             Expr::Unary {
-                op: UnaryOp::Neg,
+                op: UnaryOp::Neg | UnaryOp::BitNot,
                 operand,
             } => {
                 let x = self.expr(operand, None)?;
                 let slot = self.dst(dst);
+                let ty = checked.types[e];
+                let Expr::Unary { op, .. } = ast.exprs[e] else {
+                    unreachable!()
+                };
+                let opcode = if op == UnaryOp::BitNot {
+                    Op::Not
+                } else if ty == Ty::F32 {
+                    Op::FnegF32
+                } else if ty == Ty::F64 {
+                    Op::FnegF64
+                } else if !ty.signed() {
+                    Op::NegChkU
+                } else if ty == Ty::I8 {
+                    Op::NegWrap
+                } else {
+                    Op::NegChkS
+                };
                 self.asm
-                    .emit(Op::NegChkS, Operands::abc(slot.into(), x.into(), 0), span)?;
+                    .emit(opcode, Operands::abc(slot.into(), x.into(), 0), span)?;
+                if ty == Ty::I8 || ty == Ty::U8 {
+                    let from = if ty.signed() { Ty::I64 } else { Ty::U64 };
+                    self.convert(slot, slot, from, ty, op != UnaryOp::BitNot, span)?;
+                }
                 Ok(slot)
             }
             Expr::Unary {
@@ -645,6 +681,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 ..
             } => self.logic_value(e, dst),
             Expr::Binary { .. } => self.chain(e, dst),
+            Expr::Call { args, .. } if matches!(checked.resolutions[e], Res::Convert { .. }) => {
+                self.conversion(e, ast.args(args)[0], dst)
+            }
+            Expr::Convert { value, .. } => self.conversion(e, value, dst),
             Expr::Call { .. } => self.call(e, dst),
             Expr::If(id) => self.if_value(id, dst, span),
             Expr::Member { .. } | Expr::Error => {
@@ -692,7 +732,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 unreachable!("only binary nodes are pushed");
             };
             // A small literal right operand becomes an immediate (E5, C2).
-            let imm = self.imm8(rhs).zip(imm_op(op));
+            let Expr::Binary { lhs, .. } = ast.exprs[n] else {
+                unreachable!()
+            };
+            let operand_ty = self.checked.types[lhs];
+            let imm = self
+                .imm8(rhs)
+                .filter(|_| operand_ty == Ty::I64)
+                .zip(imm_op(op));
             let save = self.top;
             let rhs = match imm {
                 Some(_) => 0,
@@ -711,7 +758,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     let operands = Operands::abc(out.into(), acc.into(), k);
                     self.asm.emit(imm_op, operands, ast.span(n))?;
                 }
-                None => self.operate(op, out, acc, rhs, ast.span(n))?,
+                None => self.operate(op, operand_ty, out, acc, rhs, ast.span(n))?,
             }
             acc = out;
         }
@@ -763,26 +810,233 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         Some((x, cond, k))
     }
 
-    fn operate(&mut self, op: BinaryOp, out: u32, a: u32, b: u32, span: Span) -> Lowered<()> {
-        let (op, a, b) = match op {
-            BinaryOp::Add => (Op::AddChkS, a, b),
-            BinaryOp::Sub => (Op::SubChkS, a, b),
-            BinaryOp::Mul => (Op::MulChkS, a, b),
-            BinaryOp::WrapAdd => (Op::AddWrap, a, b),
-            BinaryOp::WrapSub => (Op::SubWrap, a, b),
-            BinaryOp::WrapMul => (Op::MulWrap, a, b),
-            BinaryOp::Div => (Op::DivS, a, b),
-            BinaryOp::Rem => (Op::RemS, a, b),
-            BinaryOp::Eq => (Op::CsetEq, a, b),
-            BinaryOp::NotEq => (Op::CsetNe, a, b),
-            BinaryOp::Lt => (Op::CsetLt, a, b),
-            BinaryOp::LtEq => (Op::CsetLe, a, b),
-            BinaryOp::Gt => (Op::CsetLt, b, a),
-            BinaryOp::GtEq => (Op::CsetLe, b, a),
-            BinaryOp::And | BinaryOp::Or => unreachable!("lowered by branching"),
+    fn conversion(&mut self, e: ExprId, value: ExprId, dst: Option<u32>) -> Lowered<u32> {
+        let Res::Convert { from, to, checked } = self.checked.resolutions[e] else {
+            unreachable!()
+        };
+        let source = self.expr(value, None)?;
+        let out = self.dst(dst);
+        self.convert(out, source, from, to, checked, self.input.ast.span(e))?;
+        Ok(out)
+    }
+
+    fn convert(
+        &mut self,
+        out: u32,
+        source: u32,
+        from: Ty,
+        to: Ty,
+        checked: bool,
+        span: Span,
+    ) -> Lowered<()> {
+        use eitri_bytecode::scalar::integer_format;
+        if from == to {
+            if out != source {
+                self.asm
+                    .emit(Op::Mov, Operands::abc(out.into(), source.into(), 0), span)?;
+            }
+            return Ok(());
+        }
+        let (op, format) = if from.integer() && to.integer() {
+            (
+                if checked { Op::CvtChk } else { Op::CvtWrap },
+                integer_format(to.bits(), to.signed()) | (u8::from(from.signed()) << 3),
+            )
+        } else if from.integer() {
+            (
+                if to == Ty::F32 {
+                    Op::FcvtI2f32
+                } else {
+                    Op::FcvtI2f64
+                },
+                integer_format(from.bits(), from.signed()),
+            )
+        } else if to.integer() {
+            (
+                if from == Ty::F32 {
+                    Op::FcvtF32i
+                } else {
+                    Op::FcvtF64i
+                },
+                integer_format(to.bits(), to.signed()),
+            )
+        } else {
+            (
+                if to == Ty::F32 {
+                    Op::FcvtF64f32
+                } else {
+                    Op::FcvtF32f64
+                },
+                0,
+            )
+        };
+        self.asm.emit(
+            op,
+            Operands::abc(out.into(), source.into(), format.into()),
+            span,
+        )
+    }
+
+    fn operate(
+        &mut self,
+        op: BinaryOp,
+        ty: Ty,
+        out: u32,
+        a: u32,
+        b: u32,
+        span: Span,
+    ) -> Lowered<()> {
+        use BinaryOp::*;
+        let (opcode, a, b) = if ty.float() {
+            let f32 = ty == Ty::F32;
+            let (opcode, swap) = match op {
+                Add => (if f32 { Op::FaddF32 } else { Op::FaddF64 }, false),
+                Sub => (if f32 { Op::FsubF32 } else { Op::FsubF64 }, false),
+                Mul => (if f32 { Op::FmulF32 } else { Op::FmulF64 }, false),
+                Div => (if f32 { Op::FdivF32 } else { Op::FdivF64 }, false),
+                Rem => (if f32 { Op::FremF32 } else { Op::FremF64 }, false),
+                Eq => (
+                    if f32 {
+                        Op::FcsetFeqF32
+                    } else {
+                        Op::FcsetFeqF64
+                    },
+                    false,
+                ),
+                NotEq => (
+                    if f32 {
+                        Op::FcsetFneF32
+                    } else {
+                        Op::FcsetFneF64
+                    },
+                    false,
+                ),
+                Lt | Gt => (
+                    if f32 {
+                        Op::FcsetFltF32
+                    } else {
+                        Op::FcsetFltF64
+                    },
+                    op == Gt,
+                ),
+                LtEq | GtEq => (
+                    if f32 {
+                        Op::FcsetFleF32
+                    } else {
+                        Op::FcsetFleF64
+                    },
+                    op == GtEq,
+                ),
+                _ => unreachable!(),
+            };
+            (opcode, if swap { b } else { a }, if swap { a } else { b })
+        } else {
+            let narrow = ty == Ty::I8 || ty == Ty::U8;
+            let unsigned = ty == Ty::U64 || ty == Ty::U8 || ty == Ty::Char;
+            let opcode = match op {
+                Add => {
+                    if narrow {
+                        Op::AddWrap
+                    } else if unsigned {
+                        Op::AddChkU
+                    } else {
+                        Op::AddChkS
+                    }
+                }
+                Sub => {
+                    if narrow {
+                        Op::SubWrap
+                    } else if unsigned {
+                        Op::SubChkU
+                    } else {
+                        Op::SubChkS
+                    }
+                }
+                Mul => {
+                    if narrow {
+                        Op::MulWrap
+                    } else if unsigned {
+                        Op::MulChkU
+                    } else {
+                        Op::MulChkS
+                    }
+                }
+                WrapAdd => Op::AddWrap,
+                WrapSub => Op::SubWrap,
+                WrapMul => Op::MulWrap,
+                Div => {
+                    if unsigned {
+                        Op::DivU
+                    } else {
+                        Op::DivS
+                    }
+                }
+                Rem => {
+                    if unsigned {
+                        Op::RemU
+                    } else {
+                        Op::RemS
+                    }
+                }
+                BitAnd => Op::And,
+                BitOr => Op::Or,
+                BitXor => Op::Xor,
+                Shl => match ty {
+                    Ty::I8 => Op::ShlS8,
+                    Ty::U8 => Op::ShlU8,
+                    _ => Op::Shl64,
+                },
+                Shr => match ty {
+                    Ty::I8 => Op::ShrS8,
+                    Ty::U8 => Op::ShrU8,
+                    Ty::U64 => Op::ShrU64,
+                    _ => Op::ShrS64,
+                },
+                Eq => Op::CsetEq,
+                NotEq => Op::CsetNe,
+                Lt | Gt => {
+                    if unsigned {
+                        Op::CsetLo
+                    } else {
+                        Op::CsetLt
+                    }
+                }
+                LtEq | GtEq => {
+                    if unsigned {
+                        Op::CsetLs
+                    } else {
+                        Op::CsetLe
+                    }
+                }
+                And | Or => unreachable!(),
+            };
+            let swap = matches!(op, Gt | GtEq);
+            (opcode, if swap { b } else { a }, if swap { a } else { b })
         };
         self.asm
-            .emit(op, Operands::abc(out.into(), a.into(), b.into()), span)
+            .emit(opcode, Operands::abc(out.into(), a.into(), b.into()), span)?;
+        if matches!(
+            op,
+            Add | Sub | Mul | Div | Rem | WrapAdd | WrapSub | WrapMul
+        ) && matches!(ty, Ty::I8 | Ty::U8 | Ty::U64)
+        {
+            let from = if (matches!(op, Div | Rem) && !ty.signed())
+                || (ty == Ty::U64 && matches!(op, Add | Sub | Mul))
+            {
+                Ty::U64
+            } else {
+                Ty::I64
+            };
+            self.convert(
+                out,
+                out,
+                from,
+                ty,
+                !matches!(op, WrapAdd | WrapSub | WrapMul),
+                span,
+            )?;
+        }
+        Ok(())
     }
 
     /// Arguments in order into a fresh window; the result after it, so a

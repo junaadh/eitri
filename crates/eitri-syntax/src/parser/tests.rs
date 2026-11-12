@@ -184,8 +184,12 @@ impl Printer<'_> {
 
     fn expr(&self, id: ExprId) -> String {
         match self.ast.exprs[id] {
-            Expr::Int { token, negative } => {
+            Expr::Int { token, negative } | Expr::Float { token, negative } => {
                 format!("{}{}", if negative { "-" } else { "" }, self.token(token))
+            }
+            Expr::Char(token) => self.token(token).to_owned(),
+            Expr::Convert { callee, value } => {
+                format!("(truncating {} {})", self.expr(callee), self.expr(value))
             }
             Expr::Bool(b) => b.to_string(),
             Expr::Name(token) => self.token(token).to_owned(),
@@ -322,15 +326,7 @@ fn syntax_errors_resynchronize() {
 #[test]
 fn unsupported_features_are_reported_once_and_dropped() {
     let cases: &[(&str, &str)] = &[
-        (
-            "let x = 1.5",
-            "E0001 8..11 not supported yet: float literals",
-        ),
         ("\"ދިވެހި\"", "E0001 0..14 not supported yet: string literals"),
-        (
-            "let c = 'a'",
-            "E0001 8..11 not supported yet: char literals",
-        ),
         ("let x = null", "E0001 8..12 not supported yet: `null`"),
         (
             "fn f(x: ?i64) -> void {\n}",
@@ -392,24 +388,6 @@ fn unsupported_features_are_reported_once_and_dropped() {
             "let f = n => n + 1",
             "E0001 10..12 not supported yet: lambdas",
         ),
-        (
-            "let x = 6 & 3",
-            "E0001 10..11 not supported yet: bitwise operators",
-        ),
-        (
-            "var x = 6\nx &= 3",
-            "E0001 12..14 not supported yet: bitwise operators",
-        ),
-        (
-            "var x = 6\nx >>= 3",
-            "E0001 12..15 not supported yet: bitwise operators",
-        ),
-        (
-            "let x = ~1",
-            "E0001 8..9 not supported yet: bitwise operators",
-        ),
-        ("let x = 1 << 3", "E0001 10..12 not supported yet: shifts"),
-        ("let x = 8 >> 1", "E0001 10..12 not supported yet: shifts"),
         ("let r = 0..3", "E0001 9..11 not supported yet: ranges"),
         ("let x = a ?? 1", "E0001 10..12 not supported yet: `??`"),
         (
@@ -470,7 +448,7 @@ fn unsupported_features_are_reported_once_and_dropped() {
         assert_eq!(errors(text), [expected], "{text:?}");
     }
     // The rest of the program still parses normally.
-    let (tree, errors) = parse_text("let x = 1.5 + y\nlet z = 2", ModuleKind::Script);
+    let (tree, errors) = parse_text("let x = null + y\nlet z = 2", ModuleKind::Script);
     assert_eq!(errors.len(), 1);
     assert_eq!(tree, "(let x <error>)\n(let z 2)");
 }
@@ -577,6 +555,9 @@ fn scratch_is_reused() {
 fn differential_against_the_reference_parser() {
     use crate::test_support::{FRAGMENTS, Rng, corpus, mutate};
     let check = |text: &str, case: &str| {
+        if !m0_reference_input(text) {
+            return;
+        }
         for kind in [ModuleKind::Script, ModuleKind::Host] {
             let expected = parse_with(text, kind, true);
             let actual = parse_with(text, kind, false);
@@ -637,6 +618,9 @@ fn operator_edge_cases_match_the_reference() {
         "let x = a & b ?? c..d < e && f",
     ];
     for text in cases {
+        if !m0_reference_input(text) {
+            continue;
+        }
         for kind in [ModuleKind::Script, ModuleKind::Host] {
             assert_eq!(
                 parse_with(text, kind, true),
@@ -654,4 +638,55 @@ fn long_coalesce_chains_do_not_recurse() {
     let errors = errors_only(&text);
     assert_eq!(errors.len(), 100);
     assert!(errors.iter().all(|e| e == "E0001 not supported yet: `??`"));
+}
+
+/// E2's frozen parser predates T013. Preserve it for the original syntax;
+/// scalar extensions are covered by semantic fixtures and reference models.
+fn m0_reference_input(text: &str) -> bool {
+    let mut interner = Interner::new();
+    let mut diagnostics = Diagnostics::new(100);
+    let mut scratch = LexScratch::new();
+    let tokens = lex(
+        text,
+        SourceId::from_u32(0),
+        &mut interner,
+        &mut diagnostics,
+        &mut scratch,
+    );
+    !tokens.kinds().iter().any(|kind| {
+        matches!(
+            kind,
+            crate::TokenKind::Float
+                | crate::TokenKind::Char
+                | crate::TokenKind::Tilde
+                | crate::TokenKind::Amp
+                | crate::TokenKind::Pipe
+                | crate::TokenKind::Caret
+                | crate::TokenKind::Shl
+                | crate::TokenKind::AmpEq
+                | crate::TokenKind::PipeEq
+                | crate::TokenKind::CaretEq
+                | crate::TokenKind::ShlEq
+        )
+    }) && !text.contains(">>")
+        && !text.contains("truncating:")
+}
+
+#[test]
+fn scalar_operators_follow_the_language_precedence() {
+    let (tree, errors) = parse_text("let x = a | b ^ c & d << e + f", ModuleKind::Script);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        tree,
+        "(let x (BitOr a (BitXor b (BitAnd c (Shl d (Add e f))))))"
+    );
+    for text in [
+        "let c = 'a'",
+        "let f = -1.5",
+        "let x = 8 >> 1",
+        "var x = 8\nx >>= 1",
+        "let x = u8(truncating: 257)",
+    ] {
+        assert!(errors_only(text).is_empty(), "{text}");
+    }
 }

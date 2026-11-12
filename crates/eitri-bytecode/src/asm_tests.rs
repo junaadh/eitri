@@ -350,11 +350,11 @@ fn the_verifier_rejects_malformed_code() {
     // An opcode outside the first subset.
     let mut f = assembled_return();
     let mut code = Vec::new();
-    encode(Op::AddChkU, Operands::abc(0, 0, 0), &mut code).unwrap();
+    encode(Op::ShlS16, Operands::abc(0, 0, 0), &mut code).unwrap();
     encode(Op::Ret, Operands::default(), &mut code).unwrap();
     f.code = code.into_boxed_slice();
     f.starts = vec![0b11].into_boxed_slice();
-    assert_eq!(kind(&f), ErrorKind::Unimplemented(Op::AddChkU));
+    assert_eq!(kind(&f), ErrorKind::Unimplemented(Op::ShlS16));
 
     // Falling off the end, and an empty function.
     let mut asm = Assembler::new();

@@ -254,6 +254,16 @@ Swapping alone is not a complement for floats: on NaN both `a < b` and
 evaluating every condition and its complement on values including NaN,
 infinities, and both zeros, at both precisions.
 
+**Float conversions (`FCVT`).** Float-to-integer truncates toward zero,
+then range-checks the mathematical integer against the destination width
+and signedness. NaN and either infinity fault. Integer-to-float and
+`f64`-to-`f32` never fault: round to nearest, ties to even; narrowing
+overflow gives signed infinity, and signed zero is preserved. Widening
+`f32` to `f64` is exact. Integer `CVT.WRAP` corresponds to `truncating:`,
+which accepts only integer sources/destinations; there is no wrapping
+float conversion. Decimal literal overflow is a compile diagnostic rather
+than `FCVT` execution; decimal literal underflow to subnormal/zero is allowed.
+
 **Float precision.** A float slot holds raw `f32` or `f64` bits (see
 [Memory access](#memory-access)), so every float instruction, including
 comparisons, has `f32` and `f64` variants. Reading an `f32` slot as `f64`
@@ -382,7 +392,7 @@ and disassembled, and the verifier rejects them before anything runs.
 | `ALUI` | 16 | `ADD SUB` × wrap, checked signed (4); `ADD` checked unsigned (1); `MUL` checked signed (1); `AND` (1); `SHL` as in `ALU` (7); `SHR` signed, unsigned (2) |
 | `UN` | 4 | `NEG` × wrap, checked signed, checked unsigned; `NOT` |
 | `CVT` | 2 | wrap, checked |
-| `FALU` | 10 | `ADD SUB MUL DIV NEG` × `f32`, `f64` |
+| `FALU` | 12 | `ADD SUB MUL DIV NEG REM` × `f32`, `f64` |
 | `FCVT` | 6 | integer→`f32`, integer→`f64`, `f32`→integer, `f64`→integer, `f32`→`f64`, `f64`→`f32` |
 | `CB`, `CBI`, `FCB` | 24 | 6 + 6 + 6 conditions × `f32`, `f64` |
 | `TB` | 4 | true, false, none, some |
@@ -395,7 +405,7 @@ and disassembled, and the verifier rejects them before anything runs.
 | `LDK_X`, `LDF_X`, `STF_X` | 3 | |
 | `CALL` | 3 | script, host, value |
 | `RET`, `TRAP`, `WIDE` | 3 | |
-| **Total** | **163** | 93 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
+| **Total** | **165** | 91 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
 
 `SHR` immediate forms need no width, because the amount is checked at
 compile time and a canonical value shifted right stays canonical. `LDF_X`
@@ -614,12 +624,17 @@ written quoted (`@"name"`). Integers are decimal, optionally negative.
 function by its qualified name and signature; assembling resolves it
 against the registered host modules and requires the same signature.
 `define <ret> @name(<type> %rN, …) frame(N) { … }` defines a function: its
-result type (`i64`, `bool`, or `void`), its parameters in their slots
+result type (`i8`, `u8`, `i64`, `u64`, `f32`, `f64`, `char`, `bool`,
+or `void`), its parameters in their slots
 (results come first, so a function with a result has its parameters from
 `%r1`), and its frame size, which must equal the size the assembled code
 needs. Functions are numbered in definition order; the first must be
 `define void @<module>()`, the top-level code. Calls may refer to functions
 defined later.
+
+Float literals in `.eits` are unsigned decimal IEEE bit patterns (`f32`
+uses only the low 32 bits); `char` literals are Unicode scalar numbers.
+Narrow integers must have their canonical sign- or zero-extended value.
 
 **Instructions.** A label is `name:` before an instruction. Each opcode's
 mnemonic is its specification name in lower case. Types appear only where

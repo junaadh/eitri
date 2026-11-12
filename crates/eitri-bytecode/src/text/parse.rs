@@ -343,6 +343,12 @@ impl<'a> Parser<'_, 'a> {
         let (word, span) = self.word("a type")?;
         match word {
             "i64" => Ok((Some(ValueType::I64), span)),
+            "i8" => Ok((Some(ValueType::I8), span)),
+            "u8" => Ok((Some(ValueType::U8), span)),
+            "u64" => Ok((Some(ValueType::U64), span)),
+            "f32" => Ok((Some(ValueType::F32), span)),
+            "f64" => Ok((Some(ValueType::F64), span)),
+            "char" => Ok((Some(ValueType::Char), span)),
             "bool" => Ok((Some(ValueType::Bool), span)),
             "void" if void_ok => Ok((None, span)),
             _ => Err(syntax(span, format!("expected a type, found `{word}`"))),
@@ -626,12 +632,28 @@ impl<'a> Body<'_, '_, 'a> {
                         (u64::from(w == "true"), span)
                     }
                     (ValueType::Bool, _) => return Err(self.parser.expected("`true` or `false`")),
+                    (other, _) if other != ValueType::I64 => {
+                        let (value, span) = self.parser.int()?;
+                        let word = if other == ValueType::I8 {
+                            i64::try_from(value)
+                                .map(|v| v as u64)
+                                .map_err(|_| mismatch(span, "integer out of range"))?
+                        } else {
+                            u64::try_from(value)
+                                .map_err(|_| mismatch(span, "scalar bits out of range"))?
+                        };
+                        if !other.canonical(word) {
+                            return Err(mismatch(span, "noncanonical scalar literal"));
+                        }
+                        (word, span)
+                    }
                     (ValueType::I64, _) => {
                         let (value, span) = self.parser.int()?;
                         let value = i64::try_from(value)
                             .map_err(|_| mismatch(span, "integer does not fit `i64`"))?;
                         (value as u64, span)
                     }
+                    _ => unreachable!("all scalar types covered"),
                 };
                 // The text names the form the assembler will choose.
                 let chosen = if (i16::MIN as i64..=i16::MAX as i64).contains(&(value as i64)) {

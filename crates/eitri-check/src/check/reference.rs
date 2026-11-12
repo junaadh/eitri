@@ -606,6 +606,7 @@ impl<'i> Checker<'_, 'i> {
                 let operand_ty = match op {
                     UnaryOp::Neg => Ty::I64,
                     UnaryOp::Not => Ty::Bool,
+                    UnaryOp::BitNot => unreachable!("outside frozen M0 reference"),
                 };
                 self.value(operand, Some(operand_ty));
                 operand_ty
@@ -613,6 +614,9 @@ impl<'i> Checker<'_, 'i> {
             Expr::Binary { .. } => self.binary_chain(expr),
             Expr::Call { callee, args } => self.call(expr, callee, args),
             Expr::If(id) => self.if_expr(expr, id, expected, used),
+            Expr::Float { .. } | Expr::Char(_) | Expr::Convert { .. } => {
+                unreachable!("outside frozen M0 reference")
+            }
             Expr::Error => Ty::Error,
         };
         self.out.types[expr] = ty;
@@ -928,6 +932,7 @@ fn operand_type(op: BinaryOp) -> Option<Ty> {
     match op {
         Or | And => Some(Ty::Bool),
         Eq | NotEq => None,
+        BitAnd | BitOr | BitXor | Shl | Shr => unreachable!("outside frozen M0 reference"),
         Lt | LtEq | Gt | GtEq | Add | Sub | Mul | Div | Rem | WrapAdd | WrapSub | WrapMul => {
             Some(Ty::I64)
         }
@@ -939,6 +944,7 @@ fn result_type(op: BinaryOp) -> Ty {
     match op {
         Or | And | Eq | NotEq | Lt | LtEq | Gt | GtEq => Ty::Bool,
         Add | Sub | Mul | Div | Rem | WrapAdd | WrapSub | WrapMul => Ty::I64,
+        BitAnd | BitOr | BitXor | Shl | Shr => unreachable!("outside frozen M0 reference"),
     }
 }
 

@@ -1,0 +1,37 @@
+//! host: test
+import test from "test"
+let lo: i8 = -128
+let hi: u8 = 255
+let wide: u64 = 18446744073709551615
+test.check(i64(lo) == -128)
+test.check(i64(hi) == 255)
+test.check(wide > 9223372036854775807)
+test.check(i8(127.9) == 127)
+test.check(u8(-0.5) == 0)
+test.check(u8(truncating: 257) == 1)
+test.check(i8(truncating: 255) == -1)
+test.check((hi &+ 1) == 0)
+test.check((lo &- 1) == 127)
+test.check((lo % -1) == 0)
+test.check((hi << 1) == 254)
+let count: u64 = 7
+test.check((lo >> count) == -1)
+test.check((hi >> count) == 1)
+test.check((~hi) == 0)
+test.check((~lo) == 127)
+var bits: u8 = 0
+bits |= 128
+bits ^= 1
+bits &= 128
+bits >>= 7
+test.check(bits == 1)
+var wrap: u64 = wide
+wrap &+= 1
+test.check(wrap == 0)
+fn identity(x: u8) -> u8 {
+    return x
+}
+test.check(identity(255) == hi)
+test.check('a' < 'b')
+test.check('\u{10ffff}' > '\u{10000}')
+test.check('\$' == '$')

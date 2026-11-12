@@ -206,6 +206,24 @@ let ratio = f64(count) / f64(total)
 
 A failed checked conversion is a [fault](errors.md#faults).
 
+Numeric conversions have these rules:
+
+- Float to integer truncates toward zero, then faults if the truncated
+  mathematical integer is outside the destination range. NaN and either
+  infinity fault. Thus `i8(127.9)` is `127`, and `u8(-0.5)` is `0`.
+- Integer to float and `f64` to `f32` never fault. They round to nearest,
+  ties to even. Narrowing overflow produces the appropriately signed
+  infinity; signed zero is preserved. `f32` to `f64` is exact.
+- `truncating:` accepts integer sources and integer destinations only. It
+  keeps the destination's low bits, interpreted with its signedness; a float
+  source is a compile error.
+
+Decimal float literals round to nearest, ties to even, directly to their
+expected float type (or `f64` without an expected type). Overflow of that
+literal's destination type is a compile error. Underflow to a subnormal or
+zero is allowed, with the sign preserved. This differs from explicit float
+narrowing, whose overflow produces infinity.
+
 ## Type inference
 
 Inference is local and bidirectional:

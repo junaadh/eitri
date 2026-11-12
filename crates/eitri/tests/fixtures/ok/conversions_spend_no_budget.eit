@@ -1,0 +1,8 @@
+//! budget: 0
+let a = u8(1)
+let b = i64(a)
+let c = f32(b)
+let d = i8(f64(c))
+if d != 1 {
+    let fail = 1 / 0
+}

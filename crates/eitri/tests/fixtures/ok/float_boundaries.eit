@@ -1,0 +1,30 @@
+//! host: test
+import test from "test"
+let n = 16777217
+let rounded = f32(n)
+test.check(rounded == 16777216)
+let precise: f32 = 16777216.0
+test.check((precise + 1.0) - precise == 0.0)
+let subnormal: f32 = 1e-45
+test.check(subnormal > 0.0)
+let zero: f32 = -1e-100
+test.check(f64(zero) == -0.0)
+let inf = 1.0 / 0.0
+let negative_inf = -1.0 / 0.0
+test.check(1.0 / f64(zero) == negative_inf)
+let nan = 0.0 / 0.0
+test.check(nan != nan)
+test.check(!(nan < 1.0))
+test.check(!(nan <= 1.0))
+test.check(!(nan > 1.0))
+test.check(!(nan >= 1.0))
+test.check(0.0 == -0.0)
+test.check(5.0 % 3.0 == -1.0)
+test.check(7.0 % 2.0 == -1.0)
+test.check(1.0 / (-4.0 % 2.0) == negative_inf)
+let huge: f64 = 1e100
+test.check(f64(f32(huge)) == inf)
+let wide: u64 = 18446744073709551615
+test.check(f64(wide) == 18446744073709551616)
+let exact: f64 = 1606938044258990275541962092341162602522202993782792835301376
+test.check(exact == 2.0 * 803469022129495137770981046170581301261101496891396417650688)

@@ -223,7 +223,21 @@ fn slot_op(
         x if x == Op::CsetNe as u8 => u64::from(get(s, len, b) != get(s, len, c)),
         x if x == Op::CsetLt as u8 => u64::from(int(b) < int(c)),
         x if x == Op::CsetLe as u8 => u64::from(int(b) <= int(c)),
-        other => unreachable!("opcode {other:#04x} is rejected by the verifier"),
+        other => {
+            let info = Op::from_byte(other).expect("verified opcode").info();
+            let x = if info.roles[1].is_slot() {
+                get(s, len, b)
+            } else {
+                0
+            };
+            let y = if info.roles[2].is_slot() {
+                get(s, len, c)
+            } else {
+                0
+            };
+            eitri_bytecode::scalar::eval(info.sem, x, y, (word >> 24) as u8)
+                .map_err(FaultKind::from)?
+        }
     };
     set(s, len, a, value);
     Ok(())
@@ -257,7 +271,24 @@ fn branch_op(op: u8, a: usize, b: usize, word: u32, s: *mut u64, len: usize) -> 
         x if x == Op::CbiGt as u8 => (int(a) > cbi_imm(word), d8),
         x if x == Op::TbTrue as u8 => (get(s, len, a) != 0, d16),
         x if x == Op::TbFalse as u8 => (get(s, len, a) == 0, d16),
-        other => unreachable!("opcode {other:#04x} is rejected by the verifier"),
+        other => {
+            let eitri_bytecode::spec::Sem::Branch { cond, imm } =
+                Op::from_byte(other).expect("verified opcode").info().sem
+            else {
+                unreachable!("verified branch")
+            };
+            (
+                cond.eval(
+                    get(s, len, a) as i64,
+                    if imm {
+                        cbi_imm(word)
+                    } else {
+                        get(s, len, b) as i64
+                    },
+                ),
+                d8,
+            )
+        }
     }
 }
 
@@ -424,19 +455,10 @@ extern "rust-preserve-none" fn wide(
         set(s, len, a, st.function.consts[code[after] as usize]);
         next!(code, after + 1, s, len, st)
     }
-    let branches = [
-        Op::CbEq,
-        Op::CbNe,
-        Op::CbLt,
-        Op::CbLe,
-        Op::CbiEq,
-        Op::CbiNe,
-        Op::CbiLt,
-        Op::CbiGt,
-        Op::TbTrue,
-        Op::TbFalse,
-    ];
-    if branches.iter().any(|&branch| branch as u8 == op) {
+    if matches!(
+        Op::from_byte(op).expect("verified opcode").info().sem,
+        eitri_bytecode::spec::Sem::Branch { .. } | eitri_bytecode::spec::Sem::TestBranch(_)
+    ) {
         let (taken, disp) = branch_op(op, a, b, word, s, len);
         let mut to = after;
         if taken {
@@ -650,8 +672,133 @@ extern "rust-preserve-none" fn invalid(
     unreachable!("opcode {:#04x} is rejected by the verifier", word as u8)
 }
 
+slot_handler!(t013_add_chk_u, Op::AddChkU);
+slot_handler!(t013_sub_chk_u, Op::SubChkU);
+slot_handler!(t013_mul_chk_u, Op::MulChkU);
+slot_handler!(t013_div_u, Op::DivU);
+slot_handler!(t013_rem_u, Op::RemU);
+slot_handler!(t013_and, Op::And);
+slot_handler!(t013_or, Op::Or);
+slot_handler!(t013_shl_s8, Op::ShlS8);
+slot_handler!(t013_shl_u8, Op::ShlU8);
+slot_handler!(t013_shl64, Op::Shl64);
+slot_handler!(t013_shr_s8, Op::ShrS8);
+slot_handler!(t013_shr_s64, Op::ShrS64);
+slot_handler!(t013_shr_u8, Op::ShrU8);
+slot_handler!(t013_shr_u64, Op::ShrU64);
+slot_handler!(t013_addi_chk_u, Op::AddiChkU);
+slot_handler!(t013_andi, Op::Andi);
+slot_handler!(t013_shli_s8, Op::ShliS8);
+slot_handler!(t013_shli_u8, Op::ShliU8);
+slot_handler!(t013_shli64, Op::Shli64);
+slot_handler!(t013_shri_s, Op::ShriS);
+slot_handler!(t013_shri_u, Op::ShriU);
+slot_handler!(t013_neg_wrap, Op::NegWrap);
+slot_handler!(t013_neg_chk_u, Op::NegChkU);
+slot_handler!(t013_not, Op::Not);
+slot_handler!(t013_cvt_wrap, Op::CvtWrap);
+slot_handler!(t013_cvt_chk, Op::CvtChk);
+slot_handler!(t013_fadd_f32, Op::FaddF32);
+slot_handler!(t013_fadd_f64, Op::FaddF64);
+slot_handler!(t013_fsub_f32, Op::FsubF32);
+slot_handler!(t013_fsub_f64, Op::FsubF64);
+slot_handler!(t013_fmul_f32, Op::FmulF32);
+slot_handler!(t013_fmul_f64, Op::FmulF64);
+slot_handler!(t013_fdiv_f32, Op::FdivF32);
+slot_handler!(t013_fdiv_f64, Op::FdivF64);
+slot_handler!(t013_fneg_f32, Op::FnegF32);
+slot_handler!(t013_fneg_f64, Op::FnegF64);
+slot_handler!(t013_fcvt_i2f32, Op::FcvtI2f32);
+slot_handler!(t013_fcvt_i2f64, Op::FcvtI2f64);
+slot_handler!(t013_fcvt_f32i, Op::FcvtF32i);
+slot_handler!(t013_fcvt_f64i, Op::FcvtF64i);
+slot_handler!(t013_fcvt_f32f64, Op::FcvtF32f64);
+slot_handler!(t013_fcvt_f64f32, Op::FcvtF64f32);
+branch_handler!(t013_cb_lo, Op::CbLo);
+branch_handler!(t013_cb_ls, Op::CbLs);
+branch_handler!(t013_cbi_lo, Op::CbiLo);
+branch_handler!(t013_cbi_hi, Op::CbiHi);
+slot_handler!(t013_cset_lo, Op::CsetLo);
+slot_handler!(t013_cset_ls, Op::CsetLs);
+slot_handler!(t013_fcset_feq_f32, Op::FcsetFeqF32);
+slot_handler!(t013_fcset_fne_f32, Op::FcsetFneF32);
+slot_handler!(t013_fcset_flt_f32, Op::FcsetFltF32);
+slot_handler!(t013_fcset_fle_f32, Op::FcsetFleF32);
+slot_handler!(t013_fcset_fult_f32, Op::FcsetFultF32);
+slot_handler!(t013_fcset_fule_f32, Op::FcsetFuleF32);
+slot_handler!(t013_fcset_feq_f64, Op::FcsetFeqF64);
+slot_handler!(t013_fcset_fne_f64, Op::FcsetFneF64);
+slot_handler!(t013_fcset_flt_f64, Op::FcsetFltF64);
+slot_handler!(t013_fcset_fle_f64, Op::FcsetFleF64);
+slot_handler!(t013_fcset_fult_f64, Op::FcsetFultF64);
+slot_handler!(t013_fcset_fule_f64, Op::FcsetFuleF64);
+slot_handler!(t013_frem_f32, Op::FremF32);
+slot_handler!(t013_frem_f64, Op::FremF64);
+
 static TABLE: [Handler; 256] = {
     let mut table = [invalid as Handler; 256];
+    table[Op::AddChkU as usize] = t013_add_chk_u;
+    table[Op::SubChkU as usize] = t013_sub_chk_u;
+    table[Op::MulChkU as usize] = t013_mul_chk_u;
+    table[Op::DivU as usize] = t013_div_u;
+    table[Op::RemU as usize] = t013_rem_u;
+    table[Op::And as usize] = t013_and;
+    table[Op::Or as usize] = t013_or;
+    table[Op::ShlS8 as usize] = t013_shl_s8;
+    table[Op::ShlU8 as usize] = t013_shl_u8;
+    table[Op::Shl64 as usize] = t013_shl64;
+    table[Op::ShrS8 as usize] = t013_shr_s8;
+    table[Op::ShrS64 as usize] = t013_shr_s64;
+    table[Op::ShrU8 as usize] = t013_shr_u8;
+    table[Op::ShrU64 as usize] = t013_shr_u64;
+    table[Op::AddiChkU as usize] = t013_addi_chk_u;
+    table[Op::Andi as usize] = t013_andi;
+    table[Op::ShliS8 as usize] = t013_shli_s8;
+    table[Op::ShliU8 as usize] = t013_shli_u8;
+    table[Op::Shli64 as usize] = t013_shli64;
+    table[Op::ShriS as usize] = t013_shri_s;
+    table[Op::ShriU as usize] = t013_shri_u;
+    table[Op::NegWrap as usize] = t013_neg_wrap;
+    table[Op::NegChkU as usize] = t013_neg_chk_u;
+    table[Op::Not as usize] = t013_not;
+    table[Op::CvtWrap as usize] = t013_cvt_wrap;
+    table[Op::CvtChk as usize] = t013_cvt_chk;
+    table[Op::FaddF32 as usize] = t013_fadd_f32;
+    table[Op::FaddF64 as usize] = t013_fadd_f64;
+    table[Op::FsubF32 as usize] = t013_fsub_f32;
+    table[Op::FsubF64 as usize] = t013_fsub_f64;
+    table[Op::FmulF32 as usize] = t013_fmul_f32;
+    table[Op::FmulF64 as usize] = t013_fmul_f64;
+    table[Op::FdivF32 as usize] = t013_fdiv_f32;
+    table[Op::FdivF64 as usize] = t013_fdiv_f64;
+    table[Op::FnegF32 as usize] = t013_fneg_f32;
+    table[Op::FnegF64 as usize] = t013_fneg_f64;
+    table[Op::FcvtI2f32 as usize] = t013_fcvt_i2f32;
+    table[Op::FcvtI2f64 as usize] = t013_fcvt_i2f64;
+    table[Op::FcvtF32i as usize] = t013_fcvt_f32i;
+    table[Op::FcvtF64i as usize] = t013_fcvt_f64i;
+    table[Op::FcvtF32f64 as usize] = t013_fcvt_f32f64;
+    table[Op::FcvtF64f32 as usize] = t013_fcvt_f64f32;
+    table[Op::CbLo as usize] = t013_cb_lo;
+    table[Op::CbLs as usize] = t013_cb_ls;
+    table[Op::CbiLo as usize] = t013_cbi_lo;
+    table[Op::CbiHi as usize] = t013_cbi_hi;
+    table[Op::CsetLo as usize] = t013_cset_lo;
+    table[Op::CsetLs as usize] = t013_cset_ls;
+    table[Op::FcsetFeqF32 as usize] = t013_fcset_feq_f32;
+    table[Op::FcsetFneF32 as usize] = t013_fcset_fne_f32;
+    table[Op::FcsetFltF32 as usize] = t013_fcset_flt_f32;
+    table[Op::FcsetFleF32 as usize] = t013_fcset_fle_f32;
+    table[Op::FcsetFultF32 as usize] = t013_fcset_fult_f32;
+    table[Op::FcsetFuleF32 as usize] = t013_fcset_fule_f32;
+    table[Op::FcsetFeqF64 as usize] = t013_fcset_feq_f64;
+    table[Op::FcsetFneF64 as usize] = t013_fcset_fne_f64;
+    table[Op::FcsetFltF64 as usize] = t013_fcset_flt_f64;
+    table[Op::FcsetFleF64 as usize] = t013_fcset_fle_f64;
+    table[Op::FcsetFultF64 as usize] = t013_fcset_fult_f64;
+    table[Op::FcsetFuleF64 as usize] = t013_fcset_fule_f64;
+    table[Op::FremF32 as usize] = t013_frem_f32;
+    table[Op::FremF64 as usize] = t013_frem_f64;
     table[Op::Mov as usize] = mov;
     table[Op::Ldi as usize] = ldi;
     table[Op::Ldk as usize] = ldk;

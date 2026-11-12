@@ -78,6 +78,7 @@ These need a working compiler and VM, and measurements. Each is marked ⚠️ or
 
 | Question | Decision |
 |---|---|
+| T013 numeric conversions and shift counts | Float-to-integer truncates, then range-checks; NaN/infinities fault. Integer-to-float and float narrowing use nearest/ties-even without faults, including signed infinity on narrowing overflow. Decimal literals use nearest/ties-even but reject overflow; underflow is allowed. `truncating:` is integer-only. Shift counts may be any integer type. See [Conversions](language/types.md#explicit-numeric-conversions) and [Shifts](language/expressions.md#shifts) |
 | Numeric types | Exactly `i8`, `i64`, `u8`, `u64`, `f32`, `f64` (plus `bool`), every width in the name and none target-dependent. Literals default to `i64` and `f64`; no `int`/`float` aliases. See [Types](language/types.md#the-scalar-set) |
 | `guard let name = text.trim()` in the original example | `trim()` returns `string`; the example validates with `guard name != ""`. APIs return `E!T` only for operations that can fail and `?T` only when "no value" is normal. See [Errors](language/errors.md#choosing-et-t-or-a-plain-value) |
 | Map iteration | `for key, value in m` kept; one name gives keys; arrays get `for i, x in a`; `_` allowed. Maps keep insertion order. Assigning existing entries during iteration is allowed; inserting, removing, or resizing faults. See [Collections](language/collections.md#iteration) |

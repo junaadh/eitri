@@ -169,7 +169,8 @@ impl Printer<'_> {
                 let name = op.map_or_else(|_| "ldi".to_owned(), mnemonic);
                 let value = match ty {
                     ValueType::Bool if value <= 1 => (value == 1).to_string(),
-                    _ => (value as i64).to_string(),
+                    ValueType::I64 | ValueType::I8 => (value as i64).to_string(),
+                    _ => value.to_string(),
                 };
                 format!("%r{dst} = {name} {} {value}", type_name(Some(ty)))
             }

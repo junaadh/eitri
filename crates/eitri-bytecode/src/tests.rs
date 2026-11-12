@@ -3,13 +3,13 @@ use crate::{DecodeError, EncodeError, Operands, decode, disassemble, encode};
 
 #[test]
 fn inventory_matches_the_manifest() {
-    assert_eq!(Op::ALL.len(), 163, "the documented inventory");
+    assert_eq!(Op::ALL.len(), 165, "the documented inventory");
     // Numbering is the table order, so it is deterministic.
     for (index, &op) in Op::ALL.iter().enumerate() {
         assert_eq!(op as usize, index);
         assert_eq!(Op::from_byte(index as u8), Some(op));
     }
-    assert_eq!(Op::from_byte(163), None);
+    assert_eq!(Op::from_byte(165), None);
     let mut names: Vec<&str> = OPS.iter().map(|info| info.name).collect();
     names.sort();
     names.dedup();
@@ -46,56 +46,61 @@ fn inventory_matches_the_manifest() {
 }
 
 #[test]
-fn the_first_subset_is_exactly_what_lowering_emits() {
+fn scalar_extensions_preserve_m0_and_reject_managed_neighbors() {
     let implemented: Vec<&str> = OPS
         .iter()
         .filter(|info| info.implemented)
         .map(|info| info.name)
         .collect();
-    assert_eq!(
-        implemented,
-        [
-            "MOV",
-            "LDI",
-            "LDK",
-            "ADD.WRAP",
-            "ADD.CHK.S",
-            "SUB.WRAP",
-            "SUB.CHK.S",
-            "MUL.WRAP",
-            "MUL.CHK.S",
-            "DIV.S",
-            "REM.S",
-            "XOR",
-            "ADDI.WRAP",
-            "ADDI.CHK.S",
-            "SUBI.WRAP",
-            "SUBI.CHK.S",
-            "MULI.CHK.S",
-            "NEG.CHK.S",
-            "CB.EQ",
-            "CB.NE",
-            "CB.LT",
-            "CB.LE",
-            "CBI.EQ",
-            "CBI.NE",
-            "CBI.LT",
-            "CBI.GT",
-            "TB.TRUE",
-            "TB.FALSE",
-            "CSET.EQ",
-            "CSET.NE",
-            "CSET.LT",
-            "CSET.LE",
-            "J",
-            "J_X",
-            "LDK_X",
-            "CALL.SCRIPT",
-            "CALL.HOST",
-            "RET",
-            "WIDE",
-        ]
+    for name in [
+        "MOV",
+        "LDI",
+        "LDK",
+        "ADD.WRAP",
+        "ADD.CHK.S",
+        "SUB.WRAP",
+        "SUB.CHK.S",
+        "MUL.WRAP",
+        "MUL.CHK.S",
+        "DIV.S",
+        "REM.S",
+        "XOR",
+        "ADDI.WRAP",
+        "ADDI.CHK.S",
+        "SUBI.WRAP",
+        "SUBI.CHK.S",
+        "MULI.CHK.S",
+        "NEG.CHK.S",
+        "CB.EQ",
+        "CB.NE",
+        "CB.LT",
+        "CB.LE",
+        "CBI.EQ",
+        "CBI.NE",
+        "CBI.LT",
+        "CBI.GT",
+        "TB.TRUE",
+        "TB.FALSE",
+        "CSET.EQ",
+        "CSET.NE",
+        "CSET.LT",
+        "CSET.LE",
+        "J",
+        "J_X",
+        "LDK_X",
+        "CALL.SCRIPT",
+        "CALL.HOST",
+        "RET",
+        "WIDE",
+    ] {
+        assert!(implemented.contains(&name), "missing M0 operation {name}");
+    }
+    assert!(
+        Op::CvtChk.info().implemented
+            && Op::FaddF32.info().implemented
+            && Op::FcsetFuleF64.info().implemented
     );
+    assert!(!Op::ShlS16.info().implemented && !Op::LdfU1.info().implemented);
 }
 
 #[test]

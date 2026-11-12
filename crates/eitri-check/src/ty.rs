@@ -8,16 +8,47 @@ use eitri_base::{Symbol, sym};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
     I64,
+    I8,
+    U8,
+    U64,
+    F32,
+    F64,
+    Char,
     Bool,
     Void,
     Error,
 }
 
 impl Ty {
+    pub fn integer(self) -> bool {
+        matches!(self, Self::I8 | Self::U8 | Self::I64 | Self::U64)
+    }
+    pub fn float(self) -> bool {
+        matches!(self, Self::F32 | Self::F64)
+    }
+    pub fn numeric(self) -> bool {
+        self.integer() || self.float()
+    }
+    pub fn signed(self) -> bool {
+        matches!(self, Self::I8 | Self::I64)
+    }
+    pub fn bits(self) -> u32 {
+        match self {
+            Self::I8 | Self::U8 => 8,
+            Self::F32 | Self::Char => 32,
+            _ => 64,
+        }
+    }
     /// The type's name as diagnostics quote it.
     pub fn quoted(self) -> &'static str {
         match self {
             Ty::I64 => "`i64`",
+            Ty::I8 => "`i8`",
+            Ty::U8 => "`u8`",
+            Ty::U64 => "`u64`",
+            Ty::F32 => "`f32`",
+            Ty::F64 => "`f64`",
+            Ty::Char => "`char`",
             Ty::Bool => "`bool`",
             Ty::Void => "`void`",
             Ty::Error => "an erroneous type",
@@ -34,7 +65,19 @@ pub(crate) enum TypeName {
 }
 
 pub(crate) fn type_name(symbol: Symbol) -> TypeName {
-    if symbol == sym::I64 {
+    if symbol == sym::I8 {
+        TypeName::Supported(Ty::I8)
+    } else if symbol == sym::U8 {
+        TypeName::Supported(Ty::U8)
+    } else if symbol == sym::U64 {
+        TypeName::Supported(Ty::U64)
+    } else if symbol == sym::F32 {
+        TypeName::Supported(Ty::F32)
+    } else if symbol == sym::F64 {
+        TypeName::Supported(Ty::F64)
+    } else if symbol == sym::CHAR {
+        TypeName::Supported(Ty::Char)
+    } else if symbol == sym::I64 {
         TypeName::Supported(Ty::I64)
     } else if symbol == sym::BOOL {
         TypeName::Supported(Ty::Bool)

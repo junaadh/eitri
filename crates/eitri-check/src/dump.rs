@@ -162,6 +162,12 @@ impl Dumper<'_> {
 
     fn ty(&self, ty: Ty) -> String {
         let name = match ty {
+            Ty::I8 => "'i8'",
+            Ty::U8 => "'u8'",
+            Ty::U64 => "'u64'",
+            Ty::F32 => "'f32'",
+            Ty::F64 => "'f64'",
+            Ty::Char => "'char'",
             Ty::I64 => "'i64'",
             Ty::Bool => "'bool'",
             Ty::Void => "'void'",
@@ -172,6 +178,12 @@ impl Dumper<'_> {
 
     fn fn_type(&self, params: &[Ty], ret: Ty) -> String {
         let name = |ty: Ty| match ty {
+            Ty::I8 => "i8",
+            Ty::U8 => "u8",
+            Ty::U64 => "u64",
+            Ty::F32 => "f32",
+            Ty::F64 => "f64",
+            Ty::Char => "char",
             Ty::I64 => "i64",
             Ty::Bool => "bool",
             Ty::Void => "void",
@@ -423,13 +435,25 @@ impl Dumper<'_> {
         let ty = self.ty(checked.types.get(e).copied().unwrap_or(Ty::Error));
         let call_target = call.map(|c| checked.resolutions[c]);
         match ast.exprs[e] {
-            Expr::Int { .. } => {
-                let value = checked
-                    .int_value(e)
-                    .map_or_else(|| self.text(span).to_owned(), |v| v.to_string());
+            Expr::Int { .. } | Expr::Float { .. } | Expr::Char(_) => {
+                let value = checked.int_value(e).map_or_else(
+                    || self.text(span).to_owned(),
+                    |v| match checked.types[e] {
+                        Ty::U64 => (v as u64).to_string(),
+                        Ty::F32 | Ty::F64 | Ty::Char => self.text(span).to_owned(),
+                        _ => v.to_string(),
+                    },
+                );
                 let line = format!(
                     "{} {range} {ty} {}",
-                    self.paint(STMT, "IntegerLiteral"),
+                    self.paint(
+                        STMT,
+                        match ast.exprs[e] {
+                            Expr::Float { .. } => "FloatLiteral",
+                            Expr::Char(_) => "CharacterLiteral",
+                            _ => "IntegerLiteral",
+                        }
+                    ),
                     self.paint(VALUE, &value)
                 );
                 (line, Vec::new())
@@ -476,6 +500,7 @@ impl Dumper<'_> {
                 let op = match op {
                     UnaryOp::Neg => "-",
                     UnaryOp::Not => "!",
+                    UnaryOp::BitNot => "~",
                 };
                 (
                     format!(
@@ -492,6 +517,10 @@ impl Dumper<'_> {
                     binary(op)
                 ),
                 vec![Node::Expr(lhs), Node::Expr(rhs)],
+            ),
+            Expr::Convert { callee, value } => (
+                format!("ConversionExpr {range} {ty} truncating"),
+                vec![Node::Callee(callee, e), Node::Expr(value)],
             ),
             Expr::Call { callee, args } => {
                 let mut children = vec![Node::Callee(callee, e)];
@@ -544,5 +573,10 @@ fn binary(op: BinaryOp) -> &'static str {
         BinaryOp::WrapAdd => "&+",
         BinaryOp::WrapSub => "&-",
         BinaryOp::WrapMul => "&*",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        BinaryOp::Shr => ">>",
     }
 }

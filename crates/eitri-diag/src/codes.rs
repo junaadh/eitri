@@ -65,7 +65,7 @@ codes! {
     }
     "types" {
         TypeMismatch = 301: "Type mismatch",
-        LiteralOutOfRange = 302: "Integer literal does not fit its type",
+        LiteralOutOfRange = 302: "Scalar literal does not fit its expected type",
         AssignToImmutable = 303: "Assignment to something other than a `var` binding",
         ArgumentCount = 304: "Wrong number of arguments, or calling something that is not a function",
     }
