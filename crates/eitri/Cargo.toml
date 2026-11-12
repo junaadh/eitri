@@ -6,6 +6,7 @@ publish.workspace = true
 description = "A small, typed, embeddable scripting language for immediate execution"
 
 [dependencies]
+eitri-types.workspace = true
 eitri-base.workspace = true
 eitri-bytecode.workspace = true
 eitri-check.workspace = true

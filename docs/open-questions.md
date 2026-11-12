@@ -3,6 +3,29 @@
 This page tracks what is not decided yet. When a question is resolved, move the
 answer into the relevant reference chapter and delete it here.
 
+## T014 owner decisions
+
+### Q1 — Identity of named types across contexts
+
+When two contexts independently register named declarations with the same
+qualified name and shape, are those declarations the same nominal type? What
+identifies a declaration across runtime templates, separately compiled artifacts
+and future reloads: shared declaration provenance, a stable module/declaration
+key, or another owner-defined rule? State when such declarations compare equal
+and when registration/artifact binding must reject them. Structural field equality
+alone and context-local type IDs do not establish nominal identity. T014 step 1
+handles scalars and unnamed constructors; the nominal parts of steps 2–3 wait
+for this decision. See [T014](tasks.md#t014--define-layouts-and-root-descriptors).
+
+### Q2 — Exact type tests on `dyn`
+
+[Out of dyn](design/dynamic.md#out-of-dyn) requires exact-type matches, then says
+an `i64` inside a `dyn` does not match `i64`. Should that example instead say it
+does not match a different scalar type, or is an additional distinction intended?
+Specify whether a value created by converting `42: i64` to `dyn` matches an
+`i64` type pattern and correct the conflicting sentence accordingly. This is
+open for the owner; no runtime behavior is selected here.
+
 ## Lua parity
 
 Every outcome a Lua script can achieve now has an Eitri route; see
@@ -133,4 +156,5 @@ These need a working compiler and VM, and measurements. Each is marked ⚠️ or
 
 ## Inconsistencies
 
-None currently open.
+[Q2](#q2--exact-type-tests-on-dyn) tracks the contradictory dynamic type-test
+sentence pending an owner decision.

@@ -8,6 +8,7 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
+eitri-types = { path = "crates/eitri-types" }
 eitri-base = { path = "crates/eitri-base" }
 eitri-bytecode = { path = "crates/eitri-bytecode" }
 eitri-check = { path = "crates/eitri-check" }

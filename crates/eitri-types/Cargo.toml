@@ -1,0 +1,12 @@
+[package]
+name = "eitri-types"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Caller-owned canonical type descriptions and portable signatures"
+
+[dependencies]
+eitri-base.workspace = true
+
+[lints]
+workspace = true

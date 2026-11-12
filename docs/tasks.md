@@ -664,6 +664,16 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   references, and reused temporaries; every allocation-capable path has a
   defined root publication point before allocation.
 
+- Step 1 landed: caller-owned `eitri-types` canonical descriptors and owned
+  portable signatures compare structure across contexts without comparing local
+  IDs. Host-binding snapshots/cache comparisons use these encodings; successful
+  execution allocates nothing for signature validation. Compound constructors
+  remain internal to the type crate's tests; no language/registration support
+  was added. Steps 2–3's nominal parts wait on
+  [Q1](open-questions.md#q1--identity-of-named-types-across-contexts); the
+  contradictory dynamic type-test sentence is tracked as
+  [Q2](open-questions.md#q2--exact-type-tests-on-dyn). T014 remains incomplete.
+
 ### T015 — Implement allocation and non-moving collection
 
 - [ ] Depends on: T014.

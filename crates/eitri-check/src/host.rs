@@ -11,6 +11,8 @@ use eitri_diag::{Code, Diagnostic, Diagnostics, Label};
 use eitri_syntax::ast::TypeExpr;
 use eitri_syntax::{LexScratch, ModuleKind, ParseScratch, Tokens, lex, parse};
 
+use eitri_types::{PortableSignature, TypeStore};
+
 use crate::ty::{Ty, TypeName, type_name};
 
 eitri_base::newtype_index! {
@@ -39,6 +41,8 @@ pub struct HostModule {
 /// Every host module registered with a context.
 #[derive(Default)]
 pub struct Hosts {
+    types: TypeStore,
+    signatures: IndexVec<HostFnId, PortableSignature>,
     modules: IndexVec<HostModuleId, HostModule>,
     fns: IndexVec<HostFnId, HostFn>,
 }
@@ -135,7 +139,34 @@ impl Hosts {
             interner.reset();
             return Err(diagnostics.into_vec());
         }
+        let signatures = fns
+            .iter()
+            .map(|function| {
+                let params = function
+                    .params
+                    .iter()
+                    .map(|ty| {
+                        self.types
+                            .intern(ty.descriptor().expect("checked parameter type"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let result = self
+                    .types
+                    .intern(function.ret.descriptor().expect("checked return type"))?;
+                self.types.signature(&params, result)
+            })
+            .collect::<Result<Vec<_>, eitri_types::TypeError>>()
+            .map_err(|_| {
+                vec![error(
+                    Code::Limit,
+                    "host signature exceeds type encoding limits",
+                    Default::default(),
+                )]
+            })?;
         interner.commit();
+        for signature in signatures {
+            self.signatures.push(signature);
+        }
         let ids = fns.into_iter().map(|f| self.fns.push(f)).collect();
         Ok(self.modules.push(HostModule {
             path: path.to_owned(),
@@ -165,6 +196,11 @@ impl Hosts {
             .iter()
             .copied()
             .find(|&f| self.fns[f].name == name)
+    }
+
+    /// Cached structural signature; never compare context-local type IDs.
+    pub fn signature(&self, id: HostFnId) -> &PortableSignature {
+        &self.signatures[id]
     }
 
     pub fn function_count(&self) -> usize {

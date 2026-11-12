@@ -6,6 +6,7 @@ publish.workspace = true
 description = "Eitri name resolution and type checking"
 
 [dependencies]
+eitri-types.workspace = true
 eitri-base.workspace = true
 eitri-diag.workspace = true
 eitri-syntax.workspace = true

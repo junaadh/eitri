@@ -20,6 +20,23 @@ pub enum Ty {
 }
 
 impl Ty {
+    /// Shared semantic description; recovery errors are never executable types.
+    pub fn descriptor(self) -> Option<eitri_types::TypeDesc> {
+        use eitri_types::{ScalarKind as S, TypeDesc};
+        Some(TypeDesc::Scalar(match self {
+            Self::I64 => S::I64,
+            Self::I8 => S::I8,
+            Self::U8 => S::U8,
+            Self::U64 => S::U64,
+            Self::F32 => S::F32,
+            Self::F64 => S::F64,
+            Self::Char => S::Char,
+            Self::Bool => S::Bool,
+            Self::Void => return Some(TypeDesc::Void),
+            Self::Error => return None,
+        }))
+    }
+
     pub fn integer(self) -> bool {
         matches!(self, Self::I8 | Self::U8 | Self::I64 | Self::U64)
     }

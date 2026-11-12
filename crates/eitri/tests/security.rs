@@ -257,3 +257,24 @@ fn artifacts_require_same_used_bindings_not_same_context() {
     let plain = b.compile("let x = 1\n").unwrap();
     empty.execute(&plain, &mut host).unwrap();
 }
+
+#[test]
+fn canonical_descriptors_do_not_enable_compound_registration() {
+    let mut context = Context::new();
+    for declarations in [
+        "pub fn f(x: ?i64) -> void\n",
+        "pub fn f(x: [2]i64) -> void\n",
+        "pub fn f() -> i64!i64\n",
+        "type Alias = i64\npub fn f(x: Alias) -> void\n",
+    ] {
+        assert!(
+            context
+                .register_host_module("compound", declarations)
+                .is_err()
+        );
+        assert!(!context.has_host_module("compound"));
+    }
+    context
+        .register_host_module("compound", "pub fn f(x: i64) -> void\n")
+        .unwrap();
+}

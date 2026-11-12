@@ -4,10 +4,11 @@ use eitri_base::{IndexVec, Interner, SourceId, Span};
 use eitri_bytecode::ir::Insn;
 use eitri_bytecode::text::{self, HostDecl, PrintOptions};
 use eitri_bytecode::{CallSite, CallTarget, Callees, FunctionId};
-use eitri_check::{CheckScratch, HostFnId, Hosts, Input, Ty};
+use eitri_check::{CheckScratch, HostFnId, Hosts, Input};
 use eitri_diag::{Code, Diagnostic, Diagnostics, Label};
 use eitri_lower::{LowerScratch, Program};
 use eitri_syntax::{LexScratch, ModuleKind, ParseScratch};
+use eitri_types::PortableSignature;
 use eitri_vm::{Fault, Host, Limits, Location, VmScratch};
 
 /// Diagnostics kept per run before the rest are only counted (T047).
@@ -394,8 +395,7 @@ impl Context {
                 let function = self.hosts.function(HostFnId::from_u32(binding.index));
                 self.hosts.module(function.module).path == binding.module
                     && self.interner.resolve(function.name) == binding.name
-                    && function.params == binding.params
-                    && function.ret == binding.ret
+                    && self.hosts.signature(HostFnId::from_u32(binding.index)) == &binding.signature
             };
             if !matches {
                 return Err(FaultReport {
@@ -416,7 +416,9 @@ impl Context {
     /// in this registry. Otherwise returns [`Code::HostBindingMismatch`] before
     /// execution or changing the run count. Host calls go to `host`, by
     /// [`Context::host_index`]. Validation allocates nothing on success and is
-    /// O(bindings used), including comparison of their name bytes and parameters.
+    /// O(name bytes + encoded signature bytes) across used bindings, O(1)
+    /// extra space. Each cached encoding is bounded by u32::MAX bytes;
+    /// for P scalar parameters its length is P+5. No local type IDs compare.
     /// Reentry borrows this validated program and registry for the whole run.
     pub fn execute(&mut self, compiled: &Compiled, host: &mut dyn Host) -> Result<(), FaultReport> {
         self.check_bindings(compiled)?;
@@ -662,8 +664,7 @@ struct HostBinding {
     index: u32,
     module: String,
     name: String,
-    params: Vec<Ty>,
-    ret: Ty,
+    signature: PortableSignature,
 }
 
 impl Compiled {
@@ -689,8 +690,7 @@ impl Compiled {
                     index,
                     module: hosts.module(function.module).path.clone(),
                     name: interner.resolve(function.name).to_owned(),
-                    params: function.params.clone(),
-                    ret: function.ret,
+                    signature: hosts.signature(HostFnId::from_u32(index)).clone(),
                 }
             })
             .collect();
@@ -737,7 +737,7 @@ impl Compiled {
                 .map(|binding| {
                     binding.module.capacity()
                         + binding.name.capacity()
-                        + binding.params.capacity() * size_of::<Ty>()
+                        + binding.signature.heap_bytes()
                 })
                 .sum::<usize>()
             + self

@@ -12,6 +12,7 @@ dependencies = [
  "eitri-diag",
  "eitri-lower",
  "eitri-syntax",
+ "eitri-types",
  "eitri-vm",
 ]
 
@@ -33,6 +34,7 @@ dependencies = [
  "eitri-base",
  "eitri-diag",
  "eitri-syntax",
+ "eitri-types",
 ]
 
 [[package]]
@@ -59,6 +61,13 @@ version = "0.0.0"
 dependencies = [
  "eitri-base",
  "eitri-diag",
+]
+
+[[package]]
+name = "eitri-types"
+version = "0.0.0"
+dependencies = [
+ "eitri-base",
 ]
 
 [[package]]
