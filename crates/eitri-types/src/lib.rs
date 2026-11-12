@@ -1,6 +1,11 @@
 //! Context-local canonical types; owned signatures compare across stores.
 use eitri_base::FxHashMap;
 
+mod layout;
+pub use layout::{
+    FieldLayout, Layout, LayoutError, LayoutId, LayoutStore, StorageDomain, TraceDesc,
+};
+
 /// A local index: meaningful only with the store that issued it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TypeId(u32);

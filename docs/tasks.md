@@ -674,6 +674,18 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   contradictory dynamic type-test sentence is tracked as
   [Q2](open-questions.md#q2--exact-type-tests-on-dyn). T014 remains incomplete.
 
+- Step 2 landed: checked Frame/Heap/ExternC layout arithmetic in `eitri-types`,
+  with test-only anonymous products, compact fixed-array Repeat trace descriptors,
+  and distinct managed-reference/raw-pointer/host-identity leaves. An explicit
+  work stack rejects inline cycles; reference edges terminate inline traversal.
+  Unit tests cover padding, nested offsets, scalar roots, array stride/zero counts,
+  overflow, deep graphs and target Rust `repr(C)` agreement; 512 deterministic
+  generated shapes agree with an independent byte-offset calculator. No language,
+  registration, nominal type or VM changes. Nominal parts still await Q1; split
+  unions/dynamic recipes, helper roots, call-state maps, verifier obligations and
+  runtime publication remain for steps 3–7. Collection and aggregate execution
+  remain T015/T017 work; T014 is not complete.
+
 ### T015 — Implement allocation and non-moving collection
 
 - [ ] Depends on: T014.
