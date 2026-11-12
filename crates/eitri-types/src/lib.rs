@@ -1,6 +1,11 @@
 //! Context-local canonical types; owned signatures compare across stores.
 use eitri_base::FxHashMap;
 
+mod split;
+pub use split::{
+    ByteRange, CaseLayout, CopyKind, CopyPlan, DynamicRoot, InitPlan, ScalarTransfer, Transfer,
+    UnionLayout,
+};
 mod layout;
 pub use layout::{
     FieldLayout, Layout, LayoutError, LayoutId, LayoutStore, StorageDomain, TraceDesc,

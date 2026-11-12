@@ -686,6 +686,19 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   runtime publication remain for steps 3–7. Collection and aggregate execution
   remain T015/T017 work; T014 is not complete.
 
+- Step 3 (anonymous tagged values) landed: Optional/Result split-union layouts
+  have explicit tags, separate reference/scalar partitions, per-case transfers
+  and null-initialization plans. Compact CopyPlan/Repeat data composes through
+  products and arrays without unrolling elements. Synthetic dynamic-root recipes
+  compose through products/arrays, but unions containing them remain unsupported
+  pending an inactive-state representation decision. Tests cover every anonymous
+  case, nested optional/result ordering, transitions, cleared inactive references,
+  full i64 payload bits and an independent semantic label visitor. No nominal
+  enum, dyn behavior, language, registration or VM support was added. Q1/Q2 stay
+  open; the dyn inactive-state rule, helper-root scopes and steps 4–7 publication/
+  verifier work remain. T014 is still incomplete; real GC and aggregate execution
+  remain T015/T017 work.
+
 ### T015 — Implement allocation and non-moving collection
 
 - [ ] Depends on: T014.

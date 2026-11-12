@@ -1,5 +1,6 @@
 //! Layout arithmetic only: no allocation of script objects or pointer tracing.
 use super::{ScalarKind, TypeDesc, TypeId, TypeStore};
+use crate::{CopyKind, CopyPlan, DynamicRoot, UnionLayout};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageDomain {
@@ -8,7 +9,7 @@ pub enum StorageDomain {
     ExternC,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LayoutId(u32);
+pub struct LayoutId(pub(crate) u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutError {
     InvalidId,
@@ -24,10 +25,17 @@ pub struct FieldLayout {
     pub layout: LayoutId,
 }
 /// Reference locations are byte offsets. Product entries compose child maps;
-/// Repeat never expands per element, even for nested arrays. Only Reference
-/// denotes a managed reference; extern pointers and host identities do not.
+/// Repeat never expands per element, even for nested arrays. Reference and
+/// ReferencePartition describe ordinary managed positions; Dynamic is a
+/// conditional type/payload recipe. Extern pointers/host identities are untraced.
 #[derive(Debug)]
 pub enum TraceDesc {
+    Dynamic(DynamicRoot),
+    ReferencePartition {
+        offset: usize,
+        bytes: usize,
+        stride: usize,
+    },
     None,
     Reference,
     Product(Vec<FieldLayout>),
@@ -39,6 +47,8 @@ pub enum TraceDesc {
 }
 #[derive(Debug)]
 pub struct Layout {
+    pub union: Option<UnionLayout>,
+    pub copy: CopyPlan,
     /// Array element spacing, including padding; None for other shapes.
     pub array_stride: Option<usize>,
     pub size: usize,
@@ -62,7 +72,10 @@ pub struct LayoutStore {
 // there is deliberately no declaration identity or public graph builder.
 #[derive(Clone, Copy)]
 #[allow(dead_code)] // Synthetic leaves are exercised before language support.
-enum Shape<'a> {
+pub(crate) enum Shape<'a> {
+    Optional(usize),
+    Result(usize, usize),
+    Dynamic,
     Scalar(ScalarKind),
     Void,
     Product(&'a [usize]),
@@ -73,7 +86,7 @@ enum Shape<'a> {
     HostIdentity { size: usize, alignment: usize },
 }
 
-fn aligned(size: usize, alignment: usize) -> Result<usize, LayoutError> {
+pub(crate) fn aligned(size: usize, alignment: usize) -> Result<usize, LayoutError> {
     if !alignment.is_power_of_two() {
         return Err(LayoutError::InvalidAlignment);
     }
@@ -91,7 +104,7 @@ impl LayoutStore {
     /// Sizes/offsets are checked and limited to isize::MAX bytes. Frame uses
     /// eight-byte scalar slots; heap keeps compact native scalar geometry.
     /// ExternC follows target C field order/alignment and rejects managed leaves.
-    /// Optional/result layouts are deliberately unsupported until step 3.
+    /// Anonymous Optional/Result use split unions; ExternC rejects them.
     pub fn for_type(
         types: &TypeStore,
         root: TypeId,
@@ -102,7 +115,10 @@ impl LayoutStore {
                 TypeDesc::Scalar(kind) => Shape::Scalar(kind),
                 TypeDesc::Void => Shape::Void,
                 TypeDesc::FixedArray { count, element } => Shape::Array(count, element.0 as usize),
-                _ => return Err(LayoutError::Unsupported),
+                TypeDesc::Optional(child) => Shape::Optional(child.0 as usize),
+                TypeDesc::Result { error, value } => {
+                    Shape::Result(error.0 as usize, value.0 as usize)
+                }
             })
         })
     }
@@ -147,7 +163,8 @@ impl LayoutStore {
                     Shape::Product(fields) => {
                         stack.extend(fields.iter().rev().map(|&child| (child, false)))
                     }
-                    Shape::Array(_, child) => stack.push((child, false)),
+                    Shape::Array(_, child) | Shape::Optional(child) => stack.push((child, false)),
+                    Shape::Result(error, value) => stack.extend([(value, false), (error, false)]),
                     Shape::ManagedReference(target) if target >= count => {
                         return Err(LayoutError::InvalidId);
                     }
@@ -162,9 +179,33 @@ impl LayoutStore {
                     .and_then(Option::as_ref)
                     .ok_or(LayoutError::InvalidId)
             };
+            let cases = match node {
+                Shape::Optional(child) => Some([None, Some(child)]),
+                Shape::Result(error, value) => Some([Some(error), Some(value)]),
+                _ => None,
+            };
+            if let Some(cases) = cases {
+                store.layouts[id] = Some(crate::split::union(domain, cases, child)?);
+                active[id] = false;
+                continue;
+            }
             let mut fields = Vec::new();
             let mut array_stride = None;
             let (size, alignment, trace) = match node {
+                Shape::Optional(_) | Shape::Result(_, _) => unreachable!("handled above"),
+                Shape::Dynamic => {
+                    if domain == StorageDomain::ExternC {
+                        return Err(LayoutError::Unsupported);
+                    }
+                    (
+                        16,
+                        8,
+                        TraceDesc::Dynamic(DynamicRoot {
+                            type_slot: 0,
+                            payload_slot: 1,
+                        }),
+                    )
+                }
                 Shape::Void => (0, 1, TraceDesc::None),
                 Shape::Scalar(kind) => {
                     let (size, align) = match kind {
@@ -258,13 +299,23 @@ impl LayoutStore {
             } else {
                 (aligned(size, alignment)?, alignment)
             };
-            store.layouts[id] = Some(Layout {
+            let mut layout = Layout {
+                union: None,
+                copy: CopyPlan {
+                    reference_bytes: 0,
+                    scalar_bytes: 0,
+                    scalar_alignment: 1,
+                    has_dynamic: false,
+                    kind: CopyKind::Scalar,
+                },
                 array_stride,
                 size,
                 alignment,
                 fields,
                 trace,
-            });
+            };
+            layout.copy = crate::split::plan(node, &layout, child)?;
+            store.layouts[id] = Some(layout);
             active[id] = false;
         }
         Ok(store)
@@ -274,3 +325,7 @@ impl LayoutStore {
 #[cfg(test)]
 #[path = "layout_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "union_tests.rs"]
+mod union_tests;

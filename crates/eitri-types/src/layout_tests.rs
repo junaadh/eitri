@@ -24,6 +24,12 @@ fn references(store: &LayoutStore) -> Vec<usize> {
     let mut stack = vec![(store.root(), 0usize)];
     while let Some((id, base)) = stack.pop() {
         match &store.get(id).unwrap().trace {
+            TraceDesc::Dynamic(_) => panic!("dynamic-specific visitor required"),
+            TraceDesc::ReferencePartition {
+                offset,
+                bytes,
+                stride,
+            } => result.extend((0..*bytes / stride).map(|n| base + offset + n * stride)),
             TraceDesc::None => {}
             TraceDesc::Reference => result.push(base),
             TraceDesc::Product(fields) => {
@@ -157,10 +163,7 @@ fn arrays_keep_stride_and_compact_repeat_descriptors() {
         .intern(TypeDesc::Result { error: f, value: f })
         .unwrap();
     for id in [optional, result] {
-        assert!(matches!(
-            LayoutStore::for_type(&types, id, Heap),
-            Err(LayoutError::Unsupported)
-        ));
+        assert!(LayoutStore::for_type(&types, id, Heap).is_ok());
     }
     let heap = LayoutStore::for_type(&types, a, Heap).unwrap();
     assert_eq!(heap.get(heap.root()).unwrap().array_stride, Some(4));
