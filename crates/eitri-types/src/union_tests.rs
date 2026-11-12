@@ -53,7 +53,7 @@ enum Source {
     Packed(usize, usize),
 }
 fn tag(storage: &[Cell], offset: usize) -> usize {
-    let Cell::Scalar(n @ 0..=1) = storage[offset] else {
+    let Cell::Scalar(n) = storage[offset] else {
         panic!("invalid tag")
     };
     n as usize
@@ -613,5 +613,72 @@ fn dynamic_transitions_and_nested_copies_never_read_inactive_garbage() {
         // Copying a nested scalar case must not bulk-copy its poisoned pairs.
         check(&outer, &some(case(1, Value::Scalar(13))));
         check(&outer, &Value::Case(0, None));
+    }
+}
+
+#[test]
+fn multiple_cases_transition_without_reading_inactive_roots() {
+    let cases = [Some(0), Some(1), Some(2)];
+    let nodes = [
+        Shape::ManagedReference(0),
+        Shape::Scalar(ScalarKind::I64),
+        Shape::Dynamic,
+        Shape::Union(&cases),
+        Shape::Optional(3),
+    ];
+    for domain in [StorageDomain::Frame, StorageDomain::Heap] {
+        let store = build(&nodes, 3, domain);
+        let union = store.get(store.root()).unwrap().union.as_ref().unwrap();
+        let mut storage = vec![Cell::Poison; store.get(store.root()).unwrap().size];
+        for (tag, value) in [
+            (0, Value::Reference(42)),
+            (1, Value::Scalar(42)),
+            (2, Value::Dynamic(true, 43)),
+            (1, Value::Scalar(44)),
+            (2, Value::Dynamic(false, 42)),
+            (0, Value::Reference(45)),
+        ] {
+            let src = encode(&store, union.cases[tag].payload.unwrap(), &value);
+            init(&store, store.root(), tag, Some(&src), &mut storage);
+            if tag == 1 {
+                storage[union.scalars.offset + 8..union.scalars.offset + union.scalars.bytes]
+                    .fill(Cell::Poison);
+            }
+            let mut expected = Vec::new();
+            labels(&value, &mut expected);
+            expected.sort_unstable();
+            assert_eq!(roots(&store, &storage), expected);
+        }
+        let outer = build(&nodes, 4, domain);
+        check(&outer, &some(case(1, Value::Scalar(42))));
+        check(&outer, &some(case(2, Value::Dynamic(true, 43))));
+    }
+}
+
+#[test]
+fn thousand_case_metadata_and_tag_bound() {
+    let cases = vec![Some(0); 1000];
+    let nodes = [Shape::Dynamic, Shape::Union(&cases)];
+    let store = build(&nodes, 1, StorageDomain::Heap);
+    let layout = store.get(store.root()).unwrap();
+    let union = layout.union.as_ref().unwrap();
+    assert_eq!(union.cases.len(), 1000);
+    assert_eq!(union.tag.bytes, 4);
+    assert_eq!(union.cases[999].init.tag, 999);
+    let TraceDesc::Guarded { cases, .. } = &layout.trace else {
+        panic!("guarded union")
+    };
+    assert_eq!(cases.len(), 1000);
+    let CopyKind::Split { cases, .. } = &layout.copy.kind else {
+        panic!("split")
+    };
+    assert_eq!(cases.len(), 1000);
+    check(&store, &case(999, Value::Dynamic(true, 91)));
+    assert!(crate::split::checked_case_count(u32::MAX as usize).is_ok());
+    if usize::BITS > 32 {
+        assert_eq!(
+            crate::split::checked_case_count((u32::MAX as u64 + 1) as usize),
+            Err(LayoutError::Overflow)
+        );
     }
 }

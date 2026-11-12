@@ -701,6 +701,12 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   Helper-root scopes and steps 4–7 runtime publication/verifier work remain.
   T014 is still incomplete; real GC and aggregate execution remain T015/T017 work.
 
+- Step 3 case tables generalized: anonymous unions have dense u32 tags and at
+  most u32::MAX cases, with checked bounds, case-specific initialization,
+  copying and guarded dynamic traces. Optional/Result remain two-case instances.
+  Tests cover three distinct root shapes, poisoned inactive pairs and a
+  1,000-case descriptor. Named types and enum declarations remain for 9b/9c.
+
 ### T015 — Implement allocation and non-moving collection
 
 - [ ] Depends on: T014.

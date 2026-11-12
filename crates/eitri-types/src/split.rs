@@ -50,7 +50,7 @@ pub enum CopyKind {
         tag: ByteRange,
         scalar_source: usize,
         scalar_destination: usize,
-        cases: [Option<LayoutId>; 2],
+        cases: Vec<Option<LayoutId>>,
     },
 }
 /// Describes packing source values into ordinary-reference and scalar/dynamic
@@ -78,7 +78,7 @@ pub struct CopyPlan {
 #[derive(Debug)]
 pub struct InitPlan {
     pub null_references: ByteRange,
-    pub tag: u8,
+    pub tag: u32,
 }
 #[derive(Debug)]
 pub struct CaseLayout {
@@ -92,7 +92,13 @@ pub struct UnionLayout {
     pub references: ByteRange,
     pub scalars: ByteRange,
     /// Optional: null/some. Result: error/success. Tags are internal, not ABI.
-    pub cases: [CaseLayout; 2],
+    pub cases: Vec<CaseLayout>,
+}
+/// Dense tags 0..case_count; at most u32::MAX cases.
+pub(crate) fn checked_case_count(n: usize) -> Result<(), LayoutError> {
+    u32::try_from(n)
+        .map(|_| ())
+        .map_err(|_| LayoutError::Overflow)
 }
 fn add(a: usize, b: usize) -> Result<usize, LayoutError> {
     a.checked_add(b)
@@ -172,15 +178,16 @@ pub(crate) fn plan<'a>(
 
 pub(crate) fn union<'a>(
     domain: StorageDomain,
-    cases: [Option<usize>; 2],
+    cases: &[Option<usize>],
     child: impl Fn(usize) -> Result<&'a Layout, LayoutError>,
 ) -> Result<Layout, LayoutError> {
+    checked_case_count(cases.len())?;
     if domain == StorageDomain::ExternC {
         return Err(LayoutError::Unsupported);
     }
     let (mut refs, mut scalars, mut scalar_align) = (0, 0, 1);
     let mut has_dynamic = false;
-    for id in cases.into_iter().flatten() {
+    for &id in cases.iter().flatten() {
         let copy = &child(id)?.copy;
         has_dynamic |= copy.has_dynamic;
         refs = refs.max(copy.reference_bytes);
@@ -201,7 +208,13 @@ pub(crate) fn union<'a>(
     };
     let tag = ByteRange {
         offset: 0,
-        bytes: if domain == StorageDomain::Frame { 8 } else { 1 },
+        bytes: if domain == StorageDomain::Frame {
+            8
+        } else if cases.len() <= 256 {
+            1
+        } else {
+            4
+        },
     };
     let references = ByteRange {
         offset: aligned(tag.bytes, ref_align)?,
@@ -213,6 +226,7 @@ pub(crate) fn union<'a>(
         bytes: aligned(scalars, scalar_align)?,
     };
     let alignment = ref_align
+        .max(if tag.bytes == 4 { 4 } else { 1 })
         .max(scalar_align)
         .max(if domain == StorageDomain::Frame { 8 } else { 1 });
     let size = aligned(add(scalar_offset, scalars.bytes)?, alignment)?;
@@ -220,17 +234,26 @@ pub(crate) fn union<'a>(
     let copy = CopyPlan {
         reference_bytes: refs,
         scalar_bytes: add(scalar_payload, scalars.bytes)?,
-        scalar_alignment: scalar_align.max(if domain == StorageDomain::Frame { 8 } else { 1 }),
+        scalar_alignment: scalar_align.max(if domain == StorageDomain::Frame {
+            8
+        } else if tag.bytes == 4 {
+            4
+        } else {
+            1
+        }),
         has_dynamic,
         kind: CopyKind::Split {
             reference_source: references.offset,
             tag,
             scalar_source: scalars.offset,
             scalar_destination: scalar_payload,
-            cases: cases.map(|id| id.map(|id| LayoutId(id as u32))),
+            cases: cases
+                .iter()
+                .map(|id| id.map(|id| LayoutId(id as u32)))
+                .collect(),
         },
     };
-    let make_case = |tag: u8, id: Option<usize>| CaseLayout {
+    let make_case = |tag: u32, id: Option<usize>| CaseLayout {
         payload: id.map(|id| LayoutId(id as u32)),
         transfer: id.map(|id| Transfer {
             source: 0,
@@ -243,7 +266,11 @@ pub(crate) fn union<'a>(
             tag,
         },
     };
-    let cases = [make_case(0, cases[0]), make_case(1, cases[1])];
+    let cases: Vec<_> = cases
+        .iter()
+        .enumerate()
+        .map(|(n, &id)| make_case(n as u32, id))
+        .collect();
     Ok(Layout {
         array_stride: None,
         size,
@@ -255,21 +282,23 @@ pub(crate) fn union<'a>(
                 tag,
                 ordinary: references,
                 stride: reference_size,
-                cases: std::array::from_fn(|n| {
-                    cases[n]
-                        .payload
-                        .filter(|&id| {
-                            child(id.0 as usize)
-                                .expect("validated child")
-                                .copy
-                                .has_dynamic
-                        })
-                        .map(|layout| crate::CaseDynamicRoots {
-                            layout,
-                            references: references.offset,
-                            scalars: scalars.offset,
-                        })
-                }),
+                cases: (0..cases.len())
+                    .map(|n| {
+                        cases[n]
+                            .payload
+                            .filter(|&id| {
+                                child(id.0 as usize)
+                                    .expect("validated child")
+                                    .copy
+                                    .has_dynamic
+                            })
+                            .map(|layout| crate::CaseDynamicRoots {
+                                layout,
+                                references: references.offset,
+                                scalars: scalars.offset,
+                            })
+                    })
+                    .collect(),
             }
         } else if refs == 0 {
             TraceDesc::None

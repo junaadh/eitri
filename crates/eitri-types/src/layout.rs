@@ -36,7 +36,7 @@ pub enum TraceDesc {
         tag: crate::ByteRange,
         ordinary: crate::ByteRange,
         stride: usize,
-        cases: [Option<CaseDynamicRoots>; 2],
+        cases: Vec<Option<CaseDynamicRoots>>,
     },
     Dynamic(DynamicRoot),
     ReferencePartition {
@@ -90,6 +90,7 @@ pub struct LayoutStore {
 #[derive(Clone, Copy)]
 #[allow(dead_code)] // Synthetic leaves are exercised before language support.
 pub(crate) enum Shape<'a> {
+    Union(&'a [Option<usize>]),
     Optional(usize),
     Result(usize, usize),
     Dynamic,
@@ -180,6 +181,9 @@ impl LayoutStore {
                     Shape::Product(fields) => {
                         stack.extend(fields.iter().rev().map(|&child| (child, false)))
                     }
+                    Shape::Union(cases) => {
+                        stack.extend(cases.iter().rev().flatten().map(|&id| (id, false)))
+                    }
                     Shape::Array(_, child) | Shape::Optional(child) => stack.push((child, false)),
                     Shape::Result(error, value) => stack.extend([(value, false), (error, false)]),
                     Shape::ManagedReference(target) if target >= count => {
@@ -196,9 +200,17 @@ impl LayoutStore {
                     .and_then(Option::as_ref)
                     .ok_or(LayoutError::InvalidId)
             };
-            let cases = match node {
-                Shape::Optional(child) => Some([None, Some(child)]),
-                Shape::Result(error, value) => Some([Some(error), Some(value)]),
+            let pair;
+            let cases: Option<&[Option<usize>]> = match node {
+                Shape::Optional(child) => {
+                    pair = [None, Some(child)];
+                    Some(&pair)
+                }
+                Shape::Result(error, value) => {
+                    pair = [Some(error), Some(value)];
+                    Some(&pair)
+                }
+                Shape::Union(cases) => Some(cases),
                 _ => None,
             };
             if let Some(cases) = cases {
@@ -209,7 +221,9 @@ impl LayoutStore {
             let mut fields = Vec::new();
             let mut array_stride = None;
             let (size, alignment, trace) = match node {
-                Shape::Optional(_) | Shape::Result(_, _) => unreachable!("handled above"),
+                Shape::Optional(_) | Shape::Result(_, _) | Shape::Union(_) => {
+                    unreachable!("handled above")
+                }
                 Shape::Dynamic => {
                     if domain == StorageDomain::ExternC {
                         return Err(LayoutError::Unsupported);
