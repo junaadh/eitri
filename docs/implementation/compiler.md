@@ -37,6 +37,29 @@ source ─▶ lex ─▶ parse ─▶ resolve ─▶ check ─▶ allocate regis
   arguments are expanded at the call site, so calls cost the same as positional
   calls.
 
+## Retained scalar lowering baseline (T009)
+
+The M0 compiler retains two lowering modes over the same checked syntax.
+`Context::compile` uses direct binding reads, immediate arithmetic where it
+fits, and fused comparison branches. `Context::compile_simple` copies
+binding operands, uses register arithmetic, and materializes comparisons
+before testing them. Both keep destination passing, stack-ordered temporary
+reuse, iterative operator chains, and the same source-order, fault-span,
+call, and loop-budget rules. Both run only after the whole frontend succeeds.
+
+The simple mode is an explicit comparison baseline, not an execution tier
+selected automatically. Both modes take linear time and working memory in
+the module syntax; additional copies and materialized operands can increase
+code and frame size and can reach implementation limits earlier. Fixtures,
+generated programs, and encoding-limit programs compare both modes on both
+interpreters with the independent tree oracle. This comparison does not make
+the shared frontend an independent oracle.
+
+`set_keep_ir(true)` also works with the simple mode, so its disassembly
+shows the actual words and frame size. To optimize this retained IR, use
+`optimize_kept`; `optimize` recompiles with the default lowering and checks
+for identical compiled functions before replacing them.
+
 ## Module analyses
 
 Two checks need more than one function at a time: return-type inference

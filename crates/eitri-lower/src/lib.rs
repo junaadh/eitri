@@ -21,6 +21,11 @@
 //!   body, so the budget is polled after the body and before the condition,
 //!   as the first slice specifies.
 //!
+//! `lower_simple` retains the comparison baseline: binding operands are
+//! copied, arithmetic uses registers, and comparisons materialize before
+//! branching. The choice is a const parameter, so the default lowering has
+//! no runtime mode test. Both modes retain destination passing and reuse.
+//!
 //! Time and memory are linear in the module's syntax.
 
 use eitri_base::{Idx, IndexVec, Span};
@@ -117,11 +122,33 @@ pub fn lower(
     scratch: &mut LowerScratch,
     keep_ir: bool,
 ) -> Result<Program, Diagnostic> {
+    lower_mode::<false>(input, checked, scratch, keep_ir)
+}
+
+/// Retained simple lowering baseline (T009): copy binding operands, use
+/// register arithmetic, and materialize comparisons before testing them.
+/// Keeps destination passing and stack-ordered temporary reuse. It has the
+/// same source semantics and limits as `lower`, but may need more slots.
+pub fn lower_simple(
+    input: &Input<'_>,
+    checked: &Checked,
+    scratch: &mut LowerScratch,
+    keep_ir: bool,
+) -> Result<Program, Diagnostic> {
+    lower_mode::<true>(input, checked, scratch, keep_ir)
+}
+
+fn lower_mode<const SIMPLE: bool>(
+    input: &Input<'_>,
+    checked: &Checked,
+    scratch: &mut LowerScratch,
+    keep_ir: bool,
+) -> Result<Program, Diagnostic> {
     scratch.slots.clear();
     scratch.slots.resize(checked.bindings.len(), u32::MAX);
     scratch.stack.clear();
     if keep_ir {
-        let lowerer = Lowerer {
+        let lowerer = Lowerer::<_, SIMPLE> {
             input,
             checked,
             asm: &mut scratch.recording,
@@ -131,7 +158,7 @@ pub fn lower(
         };
         lower_with(lowerer)
     } else {
-        let lowerer = Lowerer {
+        let lowerer = Lowerer::<_, SIMPLE> {
             input,
             checked,
             asm: &mut scratch.asm,
@@ -144,7 +171,9 @@ pub fn lower(
 }
 
 /// Lower every function; with a recording assembler, keep each body.
-fn lower_with<const R: bool>(mut lowerer: Lowerer<'_, '_, R>) -> Result<Program, Diagnostic> {
+fn lower_with<const R: bool, const SIMPLE: bool>(
+    mut lowerer: Lowerer<'_, '_, R, SIMPLE>,
+) -> Result<Program, Diagnostic> {
     let (input, ast) = (lowerer.input, lowerer.input.ast);
     let mut bodies = R.then(|| IndexVec::with_capacity(ast.fns.len() + 1));
     let mut functions = IndexVec::with_capacity(ast.fns.len() + 1);
@@ -192,7 +221,7 @@ fn too_large(input: &Input<'_>, name: &str, span: Span) -> Diagnostic {
 
 type Lowered<T> = Result<T, AsmError>;
 
-struct Lowerer<'a, 'i, const R: bool> {
+struct Lowerer<'a, 'i, const R: bool, const SIMPLE: bool> {
     input: &'a Input<'i>,
     checked: &'a Checked,
     asm: &'a mut Assembler<R>,
@@ -202,7 +231,7 @@ struct Lowerer<'a, 'i, const R: bool> {
     top: u32,
 }
 
-impl<const R: bool> Lowerer<'_, '_, R> {
+impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     // ---- functions -------------------------------------------------------
 
     fn module(&mut self) -> Lowered<Function> {
@@ -450,7 +479,7 @@ impl<const R: bool> Lowerer<'_, '_, R> {
         let span = ast.span(e);
         let mark = self.top;
         match ast.exprs[e] {
-            Expr::Binary { op, lhs, rhs } if compare(op).is_some() => {
+            Expr::Binary { op, lhs, rhs } if !SIMPLE && compare(op).is_some() => {
                 // Against a small literal: one `CBI`, no load (E5, C2).
                 if let Some((x, cond, k)) = self.compare_imm(op, lhs, rhs) {
                     let x = self.expr(x, None)?;
@@ -576,6 +605,12 @@ impl<const R: bool> Lowerer<'_, '_, R> {
                             .emit(Op::Mov, Operands::abc(d.into(), slot.into(), 0), span)?;
                         Ok(d)
                     }
+                    None if SIMPLE => {
+                        let copy = self.temp();
+                        self.asm
+                            .emit(Op::Mov, Operands::abc(copy.into(), slot.into(), 0), span)?;
+                        Ok(copy)
+                    }
                     _ => Ok(slot),
                 }
             }
@@ -685,6 +720,9 @@ impl<const R: bool> Lowerer<'_, '_, R> {
 
     /// An integer literal that fits an eight-bit immediate.
     fn imm8(&self, e: ExprId) -> Option<i64> {
+        if SIMPLE {
+            return None;
+        }
         match self.input.ast.exprs[e] {
             Expr::Int { .. } => self
                 .checked

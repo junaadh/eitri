@@ -136,8 +136,8 @@ pub struct Setup {
     pub depth: Option<u32>,
 }
 
-/// The outcome in the expectation format. Both interpreters and the
-/// program-level oracle run the program and must agree; later tiers join
+/// The outcome in the expectation format. Both lowering modes, both
+/// interpreters, and the program-level oracle must agree; later tiers join
 /// here. `Err` describes a disagreement.
 pub fn outcome(source: &str, setup: &Setup) -> Result<String, String> {
     let outcome = run_with(source, setup, false);
@@ -146,6 +146,14 @@ pub fn outcome(source: &str, setup: &Setup) -> Result<String, String> {
         return Err(format!(
             "threaded interpreter disagrees\n--- match loop\n{outcome}--- threaded\n{threaded}"
         ));
+    }
+    for threaded in [false, true] {
+        let simple = run_with_lowering(source, setup, threaded, true);
+        if simple != outcome {
+            return Err(format!(
+                "simple lowering disagrees (threaded: {threaded})\n--- default\n{outcome}--- simple\n{simple}"
+            ));
+        }
     }
     // The hot tier (`Context::optimize`) must not change anything visible.
     for threaded in [false, true] {
@@ -253,6 +261,10 @@ pub fn run_optimized(source: &str, setup: &Setup, threaded: bool) -> Option<Stri
 }
 
 pub fn run_with(source: &str, setup: &Setup, threaded: bool) -> String {
+    run_with_lowering(source, setup, threaded, false)
+}
+
+fn run_with_lowering(source: &str, setup: &Setup, threaded: bool, simple: bool) -> String {
     let mut context = eitri::Context::new();
     context.set_threaded(threaded);
     if setup.test_host {
@@ -267,7 +279,17 @@ pub fn run_with(source: &str, setup: &Setup, threaded: bool) -> String {
         context.set_depth(depth);
     }
     let mut host = TestHost::new(|name| context.host_index("test", name));
-    match context.run(source, &mut host) {
+    let compiled = if simple {
+        context.compile_simple(source)
+    } else {
+        context.compile(source)
+    };
+    let result = compiled.map_err(eitri::RunError::Compile).and_then(|code| {
+        context
+            .execute(&code, &mut host)
+            .map_err(eitri::RunError::Fault)
+    });
+    match result {
         Ok(()) => host.effects + "ok\n",
         Err(eitri::RunError::Fault(report)) => {
             host.effects + &render_fault(&report.message, report.trace)

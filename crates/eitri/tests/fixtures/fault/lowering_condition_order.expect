@@ -1,0 +1,5 @@
+effect: test.emit(1)
+effect: test.id(2)
+effect: test.id(1)
+fault: integer overflow
+  at <module> 69..101

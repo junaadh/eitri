@@ -1,0 +1,13 @@
+//! host: test
+import test from "test"
+var x = 7
+x = (x + 2) * x + test.id(x)
+test.emit(x)
+x += x + test.id(1)
+test.emit(x)
+fn calc(a: i64) -> i64 {
+    return a + (a + 1) * a
+}
+if test.id(3) < test.id(4) && !test.check(false) {
+    test.emit(calc(3))
+}

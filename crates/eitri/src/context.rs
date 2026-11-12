@@ -308,6 +308,22 @@ impl Context {
     /// checks, so rejected source never executes. Compiling invalidates
     /// nothing previously compiled.
     pub fn compile(&mut self, source: &str) -> Result<Compiled, Vec<Diagnostic>> {
+        self.compile_with::<false>(source)
+    }
+
+    /// Compile with the retained simple lowering baseline (T009), for
+    /// semantic and performance comparisons. Uses the same frontend and
+    /// budgets as [`Self::compile`], with additional operand copies and
+    /// register operations instead of immediate arithmetic/fused comparisons.
+    /// This can need more frame slots; implementation limits still apply.
+    pub fn compile_simple(&mut self, source: &str) -> Result<Compiled, Vec<Diagnostic>> {
+        self.compile_with::<true>(source)
+    }
+
+    fn compile_with<const SIMPLE: bool>(
+        &mut self,
+        source: &str,
+    ) -> Result<Compiled, Vec<Diagnostic>> {
         // No spelling from a previous compile is referenced any more:
         // compiled code holds names as strings, not symbols.
         self.interner.reset();
@@ -345,8 +361,12 @@ impl Context {
         if diagnostics.has_errors() {
             return Err(diagnostics.into_vec());
         }
-        let program = eitri_lower::lower(&input, checked, &mut self.scratch.lower, self.keep_ir)
-            .map_err(|diagnostic| vec![diagnostic])?;
+        let program = if SIMPLE {
+            eitri_lower::lower_simple(&input, checked, &mut self.scratch.lower, self.keep_ir)
+        } else {
+            eitri_lower::lower(&input, checked, &mut self.scratch.lower, self.keep_ir)
+        }
+        .map_err(|diagnostic| vec![diagnostic])?;
         // Compiler-produced code is trusted in release builds; debug builds
         // and tests verify every function, so a lowering bug surfaces as a
         // `bug:` diagnostic instead of a wrong answer.

@@ -308,6 +308,13 @@ Run it with the script above, and it prints `0 1 1 2 3 5 8 13 21 34`.
 to run compiled code more than once. Budgets and depth are set with
 `set_budget` and `set_depth`.
 
+`Context::compile_simple` retains T009's comparison baseline: operand
+copies, register arithmetic, and materialized comparison results. It uses
+the same frontend and execution API. Both lowering modes are checked against
+the fixture expectations and independent oracle on both interpreters. See
+[Compiler: retained baseline](docs/implementation/compiler.md#retained-scalar-lowering-baseline-t009)
+for its limits and IR/optimization API.
+
 A host function can call back into the running script:
 `cx.function("on_key")` finds a script function for the current call, and
 `cx.call(self, f, &args, &mut results)` runs it on top of that call,

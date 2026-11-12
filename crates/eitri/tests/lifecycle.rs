@@ -3,8 +3,9 @@
 //! context that is created, used, and dropped leaves nothing behind.
 //!
 //! The corpus is every fixture (successes, faults, and rejections) plus
-//! the benchmark workloads, under both interpreters. Live bytes come from a
-//! counting allocator installed in this test binary only, which holds one
+//! the benchmark workloads, under both lowering modes and interpreters.
+//! Live bytes come from a counting allocator installed in this test binary
+//! only, which holds one
 //! test so no other test allocates concurrently.
 
 mod support;
@@ -73,11 +74,16 @@ fn context(threaded: bool) -> Context {
 /// Returns how many sources compiled, so the pass cannot silently be empty.
 /// The harness host, which records effects (and so allocates) and
 /// reenters, lives only for the pass.
-fn pass(context: &mut Context, corpus: &[String]) -> usize {
+fn pass(context: &mut Context, corpus: &[String], simple: bool) -> usize {
     let mut host = TestHost::new(|name| context.host_index("test", name));
     let mut compiled = 0;
     for source in corpus {
-        if let Ok(code) = context.compile(source) {
+        let code = if simple {
+            context.compile_simple(source)
+        } else {
+            context.compile(source)
+        };
+        if let Ok(code) = code {
             compiled += 1;
             // Faults are expected for some fixtures; only memory matters here.
             let _ = context.execute(&code, &mut host);
@@ -101,23 +107,23 @@ fn repeated_runs_retain_no_growing_memory() {
     assert!(corpus.len() > 100, "the corpus was found");
 
     let mut retained = Vec::new();
-    for threaded in [false, true] {
+    for (simple, threaded) in [(false, false), (false, true), (true, false), (true, true)] {
         // A fresh context leaves nothing behind.
         let baseline = LIVE.load(Relaxed);
         for _ in 0..3 {
             let mut fresh = context(threaded);
-            assert!(pass(&mut fresh, &corpus) > 30);
+            assert!(pass(&mut fresh, &corpus, simple) > 30);
             drop(fresh);
             assert_eq!(LIVE.load(Relaxed), baseline, "a dropped context leaked");
         }
 
         // A reused context reaches its high-water mark, then stays there.
         let mut reused = context(threaded);
-        pass(&mut reused, &corpus);
-        pass(&mut reused, &corpus);
+        pass(&mut reused, &corpus, simple);
+        pass(&mut reused, &corpus, simple);
         let warm = LIVE.load(Relaxed);
         for round in 0..20 {
-            pass(&mut reused, &corpus);
+            pass(&mut reused, &corpus, simple);
             let live = LIVE.load(Relaxed);
             assert_eq!(
                 live,
@@ -132,9 +138,11 @@ fn repeated_runs_retain_no_growing_memory() {
         retained.push(warm - baseline);
     }
     eprintln!(
-        "{} sources; a warm context retains {} bytes (match), {} bytes (threaded)",
+        "{} sources; warm retained bytes: default match {}, default threaded {}, simple match {}, simple threaded {}",
         corpus.len(),
         retained[0],
-        retained[1]
+        retained[1],
+        retained[2],
+        retained[3]
     );
 }

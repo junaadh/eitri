@@ -1,10 +1,8 @@
 # Implementation tasks
 
-Status: T001–T008, T045, and T046 are complete; T009 and T010 are
-implemented with open completion checks (below); T012 and T047 are in
-progress. Source
-now runs end to end: lex, parse, check, lower, verify (debug builds), and
-interpret.
+Status: T001–T012, T045, and T046 are complete; T047 is in progress.
+Source now runs end to end: lex, parse, check, lower, verify (debug builds),
+and interpret.
 Unchecked boxes describe work still to do. This is the executable work breakdown for the
 [roadmap](roadmap.md), [execution design](implementation/execution-design.md),
 and [research ledger](implementation/vm-research.md).
@@ -291,7 +289,7 @@ concurrent implementation.
 
 ### T009 — Lower checked bodies into typed bytecode
 
-- [ ] Depends on: T005, T008.
+- [x] Depends on: T005, T008.
 - Connect checked binding/type IDs to slots, constants, call sites, branches,
   and source information. Start with cheap temporary reuse and destination
   passing; retain a simple lowering mode for later optimization comparisons.
@@ -319,9 +317,25 @@ concurrent implementation.
   the corpus alone; `ok/comparison_boundaries` now covers equal, adjacent,
   extreme, and immediate-range operands for every comparison.
 
+- Completed 2026-11-12 (T009/T010/T012 step 1): the retained simple
+  lowering baseline is `eitri_lower::lower_simple` / `Context::compile_simple`.
+  It copies binding operands, uses register arithmetic and materialized
+  comparisons, and retains destination passing and temporary reuse. Const
+  specialization keeps mode tests off default lowering. Both modes verify
+  and agree with both interpreters and the independent oracle on all 124
+  fixtures (0 pending), 100,000 generated programs, and encoding/budget/depth
+  limits. Two new fixtures cover destination reads and comparison-fault
+  effect order; iterative lowering is checked in both modes. Existing
+  annotated disassembly and frame reporting remain available, and benchmark
+  golden words are unchanged. Seven lowering tests pass. Full workspace
+  build, format, Clippy (`--all-targets -- -D warnings`), and tests pass.
+  T011 was rerun before/after, on both interpreters after, and against Lua;
+  see the [step 1 ledger](implementation/vm-research.md#t009t010t012-retained-simple-lowering-and-semantic-gate--2026-11-12)
+  for exact commands, raw samples, latency and memory results. No new unsafe.
+
 ### T010 — Connect typed host calls and the runner
 
-- [ ] Depends on: T006, T009.
+- [x] Depends on: T006, T009.
 - Register one scalar host signature by index, execute submitted source, and
   return structured compile errors, success, or faults. Capture observable
   host effects in fixtures. Keep the first call context thread-bound.
@@ -371,6 +385,15 @@ concurrent implementation.
   396 KB (`tests/verify_memory.rs`). Memory is O(blocks × frame); the same
   300,000 mutated programs verify as before.
 
+- Closed dependency gate 2026-11-12 (step 1): T009's simple mode now
+  exists. `cargo test --locked --workspace` passes, including host reentry
+  and its lifetime doctests; `cargo test --locked -p eitri --test fixtures
+  --test limits --test lifecycle --test reentry --test eits -- --nocapture`
+  passes (124 fixtures, 5 limit tests, 3 reentry tests, 2 `.eits` tests, and
+  lifecycle). The fixture comparisons include the simple mode on both VMs,
+  with identical ordered effects, fault spans/traces, and shared budgets.
+  This closes T010; it does not implement T024's retained handles.
+
 ### T011 — Establish the first performance harness
 
 - [x] Depends on: T010.
@@ -404,7 +427,7 @@ concurrent implementation.
 
 ### T012 — Close the first end-to-end semantic gate
 
-- [ ] Depends on: T010, T011.
+- [x] Depends on: T010, T011.
 - Differentially exercise supported source/control-flow combinations and
   encoding limits. Add malformed-input/bytecode fuzz entry points, execution
   limits, and repeated compile/run/dispose checks.
@@ -459,6 +482,22 @@ concurrent implementation.
   is the T011 record), and reentry cases are now in the fixtures,
   differential, and fuzz runs. T012 stays open until its dependency T010
   closes, which waits only on T009.
+
+- Completed 2026-11-12 (step 1): T009 and T010 are closed. The four
+  workspace checks pass. `EITRI_DIFF_CASES=100000 cargo test --locked -p
+  eitri --test differential -- --nocapture` reports 100,000 agreeing cases
+  and 887,041 compared host effects across both lowerings, both VMs, the
+  hot tier, and the independent oracle. `EITRI_FUZZ_CASES=1000000 cargo test
+  --locked -p eitri --test fuzz -- --nocapture` and its `--release` variant
+  each pass one million inputs per source, assembly, and bytecode target:
+  100,440 sources compile and agree, 28,171 assembly inputs assemble and
+  agree, and 51,699 bytecode inputs verify and run on both VMs. Limits and
+  rejection fixtures pass; no unsupported script effects occur. Over 129
+  corpus sources, lifecycle checks retain exactly stable warm bytes across
+  20 further passes: default match/threaded 423,706/554,778 B; simple
+  match/threaded 423,686/554,758 B. Dropped contexts return to baseline.
+  T011 records the remaining latency-target gap; no optimization promoted.
+  These are seeded mutation runs, not coverage-guided fuzzing or Miri.
 
 ### T045 — Build the test and fixture infrastructure
 
@@ -671,6 +710,13 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: compile-fail tests prevent views spanning reentry; nested runs
   share budget; handles from another runtime are rejected; destruction and
   panics/faults follow the documented contract.
+- Carried from T010 (2026-11-08): reentry handles (`ScriptFn<'call>`) are
+  valid only during the host call that found them, so hosts look a script
+  function up by name on every call. Retained callback handles must not
+  reintroduce stale identity (see the
+  [ledger](implementation/vm-research.md#reentry-handle-identity-address-and-name-hash-abandoned--2026-11-08));
+  measure per-call lookup against retained handles on a callback-heavy
+  workload before choosing the retained representation.
 
 ### T025 — Build and document the Stage 1 editor corpus
 
@@ -1187,6 +1233,6 @@ a debugger with breakpoints (T055); a mandatory native tier (T043).
 
 ## Immediate next task
 
-**T009 — lower checked bodies into typed bytecode**, then **T010 — connect
-typed host calls and the runner**, which turns the 31 execution-pending
-fixtures into running programs. T003–T006 are complete.
+**T047 — finish structured diagnostic coverage and the generated catalog**,
+then **T013 — complete scalar representations and conversions**. T009, T010,
+and T012 are complete; T047 still gates the M0 exit.

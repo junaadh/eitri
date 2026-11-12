@@ -4,7 +4,7 @@ use eitri_check::{CheckScratch, Hosts, Input, check};
 use eitri_diag::Diagnostics;
 use eitri_syntax::{LexScratch, ModuleKind, ParseScratch, lex, parse};
 
-use crate::{LowerScratch, Program, host_signatures, lower};
+use crate::{LowerScratch, Program, host_signatures, lower, lower_simple};
 
 const TEST_MODULE: &str = "\
 pub fn emit(value: i64) -> void
@@ -17,6 +17,10 @@ pub fn reenter(value: i64) -> i64
 /// Compile `text` with the `test` host module, lower it, and verify every
 /// function; panics with the disassembly on any problem.
 fn compile(text: &str) -> Program {
+    compile_mode(text, false)
+}
+
+fn compile_mode(text: &str, simple: bool) -> Program {
     let mut interner = Interner::new();
     let mut hosts = Hosts::new();
     hosts.register("test", TEST_MODULE, &mut interner).unwrap();
@@ -51,7 +55,12 @@ fn compile(text: &str) -> Program {
     };
     let checked = check(&input, &mut diagnostics, &mut check_scratch);
     assert!(!diagnostics.has_errors(), "{text}");
-    let program = lower(&input, checked, &mut lower_scratch, false).unwrap();
+    let program = if simple {
+        lower_simple(&input, checked, &mut lower_scratch, true)
+    } else {
+        lower(&input, checked, &mut lower_scratch, false)
+    }
+    .unwrap();
     let signatures = program.signatures();
     let hosts = host_signatures(&hosts);
     let callees = Callees {
@@ -96,7 +105,9 @@ fn every_executable_fixture_lowers_and_verifies() {
         for entry in std::fs::read_dir(format!("{root}/{group}")).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_some_and(|e| e == "eit") {
-                compile(&std::fs::read_to_string(&path).unwrap());
+                let source = std::fs::read_to_string(&path).unwrap();
+                compile(&source);
+                compile_mode(&source, true);
                 count += 1;
             }
         }
@@ -106,6 +117,10 @@ fn every_executable_fixture_lowers_and_verifies() {
 
 #[test]
 fn long_chains_lower_iteratively() {
+    let compile = |text: &str| {
+        compile_mode(text, false);
+        compile_mode(text, true);
+    };
     compile(&format!("let x = 1{}", " + 1".repeat(100_000)));
     compile(&format!("let b = true{}", " && false".repeat(50_000)));
     compile(&format!(
@@ -153,4 +168,33 @@ fn large_functions_use_the_long_forms() {
         constants += &format!("x = {}\n", 1_000_000 + i);
     }
     assert!(listing(&compile(&constants), 0).contains("LDK_X"));
+}
+
+/// The retained baseline must actually omit the local instruction-selection
+/// shortcuts; otherwise a comparison would measure the same lowering twice.
+#[test]
+fn simple_lowering_materializes_operands_and_comparisons() {
+    let text =
+        "fn f(a: i64) -> i64 {\n    if a < 2 {\n        return a + 1\n    }\n    return a\n}";
+    let default = listing(&compile(text), 1);
+    let simple = compile_mode(text, true);
+    let baseline = listing(&simple, 1);
+    assert!(
+        default.contains("CBI.") && default.contains("ADDI.CHK.S"),
+        "{default}"
+    );
+    for instruction in ["MOV", "LDI", "CSET.LT", "TB.FALSE", "ADD.CHK.S"] {
+        assert!(
+            baseline.contains(instruction),
+            "missing {instruction}:\n{baseline}"
+        );
+    }
+    assert!(
+        !baseline.contains("CBI.") && !baseline.contains("ADDI.CHK.S"),
+        "{baseline}"
+    );
+    assert_eq!(
+        simple.bodies.as_ref().unwrap().len(),
+        simple.functions.len()
+    );
 }

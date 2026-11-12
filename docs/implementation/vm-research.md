@@ -1274,6 +1274,142 @@ tiering, both passes, and the split. Next passes, from the golden
 listings: copies into a single-variable call argument when the variable is
 not consecutive, and repeated loads of the same literal outside loops.
 
+### Reentry handle identity: address and name hash, abandoned — 2026-11-08
+
+**Question.** How can a host keep a `ScriptFn` (a script function it
+reenters) across host calls without ever reaching another program's
+function?
+
+**Tried.** A `ScriptFn` held only a function index, so a cached handle
+used while another program ran called that program's function at the same
+index (an audit reproduced it returning another function's `99`). The
+first fix stored the program's function-table address with the index,
+plus a hash of the function name for tables reused after their program is
+dropped. A second audit reproduced the stale case in 99 of 100 trials: the
+allocator reuses the address, and a new program with another `callback` at
+the same position matches both checks.
+
+**Reading.** Without process-global state (excluded by design) no runtime
+identity is guaranteed unique across a program's whole lifetime and its
+successors': counters restart per context, contexts can reuse addresses,
+and names repeat. Kept instead: `ScriptFn<'call>`, valid only during the
+host call that looked it up, which the borrow checker enforces (a
+`compile_fail` doctest) at no runtime cost. The price is a lookup by name
+on each host call; retained handles are T024's, and must be measured
+against that lookup before choosing a representation.
+
+### T009/T010/T012: retained simple lowering and semantic gate — 2026-11-12
+
+**Decision.** Retain `lower_simple` / `Context::compile_simple` as T009's
+explicit comparison baseline. It copies binding operands, uses register
+arithmetic, and materializes comparisons before testing them. It retains
+cheap destination passing and temporary reuse, and shares the bounded,
+iterative control-flow walks. Const specialization selects the lowering;
+there is no stored context mode, runtime mode lookup, or new scratch buffer.
+Both modes are O(source syntax) time/working memory. The simple mode may
+need more frame slots and code and can hit implementation limits earlier.
+No execution optimization is promoted by this work; the purpose is to keep
+a measurable baseline for later experiments.
+
+**Checks.** `cargo build --locked --workspace`, `cargo fmt --all --check`,
+`cargo clippy --locked --workspace --all-targets -- -D warnings`, and
+`cargo test --locked --workspace` pass. All 124 fixtures (0 pending) compare
+both lowerings on both interpreters against their expectations and the
+independent tree oracle; current hot-tier comparisons remain. The two new
+fixtures cover destination reads and ordered effects before a comparison
+faults. Seven lowering tests include iterative 100,000-link chains and
+verification of both modes. Existing `.eits` goldens are unchanged.
+
+Exact extended commands:
+
+```sh
+EITRI_DIFF_CASES=100000 cargo test --locked -p eitri --test differential -- --nocapture
+EITRI_FUZZ_CASES=1000000 cargo test --locked -p eitri --test fuzz -- --nocapture
+EITRI_FUZZ_CASES=1000000 cargo test --locked --release -p eitri --test fuzz -- --nocapture
+cargo test --locked -p eitri --test fixtures --test limits --test lifecycle --test reentry --test eits -- --nocapture
+```
+
+100,000 generated programs agree, with 887,041 host effects compared:
+43,433 success, 39,176 overflow, 7,759 division by zero, 5,050 budget,
+3,190 call-depth, and 1,392 missing-callback faults. Each debug/release
+mutation run passes one million inputs per target: 100,440 sources compile
+and agree across modes/VMs/oracle; 28,171 assembly inputs assemble and
+agree; 51,699 bytecode inputs verify and run on both VMs. These are seeded
+mutations, not coverage-guided fuzzing. No new unsafe; Miri was not rerun.
+Limits cover widened slots, far branches/constants, locals, and 64 nested
+host runs. Lifecycle over 129 sources has exactly stable warm live bytes
+across 20 further passes: default match/threaded 423,706/554,778 B, simple
+match/threaded 423,686/554,758 B. Context destruction returns to baseline.
+This closes T009, its dependent T010 gate, and T012; T047 remains open.
+
+**T011 rerun.** Base commit `5c37c1a4a7091d9656c0bd8fb8b3ea721645ff5f`
+with the existing documentation notes, then this uncommitted step. Apple M5,
+MacBook Pro Mac17,2, 10 cores (4 Super/6 Efficiency), 24 GB, macOS
+27.0.1 (26A434), AArch64. Pinned `nightly-2026-11-05`: rustc
+1.101.0-nightly (`2d20b42b8`, 2026-11-04), LLVM 23.1.5. Release workspace
+defaults, system allocator, no custom build flags. Lua 5.4.9 static library
+from `/opt/homebrew/opt/lua@5.4`, Apple clang 21.0.0, `-O2 -std=c11`.
+The harness's `sysctl` CPU field was empty in this environment; model/core
+information above was read with `system_profiler SPHardwareDataType`.
+
+```sh
+cargo bench -p eitri --bench source_to_result
+EITRI_THREADED=0 cargo bench -p eitri --bench source_to_result
+crates/eitri/benches/lua/run.sh
+```
+
+The first command was run before and after the code change. Commands ran
+sequentially, without concurrent tests. Five unchanged executable workload
+pairs, checked results on every run, 20,001 individually timed samples per
+cell after 1,000 warm-up runs. Fresh source is parsed/checked/lowered each
+time; no source cache or JIT. Host declarations are already registered;
+there are no source dependencies. Runtime creation/registration and file
+I/O are outside the target intervals; host work is the minimal result/id
+stub. Timer-pair p50/p99 0/42 ns, not subtracted. The harness also reports
+fresh runtimes, allocations, metadata, frames, hot tier, and repeated
+execution (10,000 executions, 5 processes). Frequency scaling/affinity were
+not controlled; hardware counters were not collected. These are local
+observations, not a controlled performance promotion.
+
+Reused runtimes, microseconds **p50 / p99** from individual CSV rows
+(total is compile plus first execution within each sample):
+
+| Workload | Before total | After compile | After first execution | After total | After match total | Lua total |
+|---|---|---|---|---|---|---|
+| module | 5.667 / 7.375 | 5.666 / 7.167 | 0.167 / 0.209 | 5.833 / 7.375 | 5.792 / 7.333 | 8.709 / 12.083 |
+| arithmetic | 9.833 / 12.417 | 1.458 / 1.834 | 8.375 / 10.584 | 9.833 / 12.458 | 12.209 / 16.042 | 17.125 / 21.542 |
+| branching | 20.084 / 25.250 | 2.875 / 3.625 | 18.000 / 22.916 | 20.875 / 26.250 | 30.541 / 37.250 | 37.333 / 46.416 |
+| calls | 13.292 / 16.666 | 1.083 / 1.375 | 12.167 / 15.334 | 13.250 / 16.708 | 18.125 / 22.917 | 16.000 / 20.084 |
+| host_calls | 6.250 / 7.917 | 0.791 / 1.000 | 5.500 / 6.917 | 6.250 / 7.917 | 7.625 / 9.750 | 13.166 / 16.666 |
+
+Default threaded allocations/bytes per reused run are unchanged:
+module 37/2,765 B; arithmetic 15/814 B; branching 15/1,251 B;
+calls 15/678 B; host_calls 7/448 B. Code bytes, metadata bytes, maximum
+frame slots, and retained warm scratch are unchanged as well:
+
+| Workload | Code B | Metadata B | Max frame slots | Warm scratch B |
+|---|---|---|---|---|
+| module | 344 | 1,571 | 19 | 25,249 |
+| arithmetic | 88 | 389 | 6 | 11,604 |
+| branching | 180 | 734 | 4 | 16,615 |
+| calls | 52 | 289 | 6 | 10,526 |
+| host_calls | 48 | 232 | 4 | 8,210 |
+
+**Reading.** The default source-to-result median changes range from about
+−0.3% to +3.9% in this single before/after pair; no statistical claim of a
+speedup or absence of regression is made. The small module still takes
+5.833 µs (7.375 µs p99), above the sub-microsecond-to-few-microseconds goal;
+compilation remains its largest measured component. The existing compile
+profiles remain the basis for future optimization, rather than weakening
+semantics. Simple-mode latency was not measured here; this adds the path
+for future equivalent-work comparisons, not an optimization claim.
+
+Raw before/after/threaded/match/Lua CSVs, complete benchmark output, and
+environment details are retained in `target/bench-results/t009-step1/`
+(and `/tmp/codex-eitri-step1/`). Full correctness output and the review
+report are `/tmp/codex-eitri-step1/*.log` and
+`/tmp/codex-eitri-step1.md`. No goldens were rewritten.
+
 ### R31: Where compilers use arenas
 
 V8 allocates parser AST nodes in a `Zone` and frees the tree in one step

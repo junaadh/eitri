@@ -1,0 +1,6 @@
+//! host: test
+import test from "test"
+test.emit(1)
+if test.id(2) < (9223372036854775807 + test.id(1)) {
+    test.emit(9)
+}
