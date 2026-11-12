@@ -669,10 +669,10 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   IDs. Host-binding snapshots/cache comparisons use these encodings; successful
   execution allocates nothing for signature validation. Compound constructors
   remain internal to the type crate's tests; no language/registration support
-  was added. Steps 2–3's nominal parts wait on
-  [Q1](open-questions.md#q1--identity-of-named-types-across-contexts); the
-  contradictory dynamic type-test sentence is tracked as
-  [Q2](open-questions.md#q2--exact-type-tests-on-dyn). T014 remains incomplete.
+  was added. The owner resolved named identity as stable (module path,
+  declaration name) plus recursively equal shape; steps 2–3's nominal parts
+  are unblocked but not implemented. The dynamic type-test sentence is corrected:
+  an i64 converted to dyn matches i64. T014 remains incomplete.
 
 - Step 2 landed: checked Frame/Heap/ExternC layout arithmetic in `eitri-types`,
   with test-only anonymous products, compact fixed-array Repeat trace descriptors,
@@ -681,23 +681,25 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   Unit tests cover padding, nested offsets, scalar roots, array stride/zero counts,
   overflow, deep graphs and target Rust `repr(C)` agreement; 512 deterministic
   generated shapes agree with an independent byte-offset calculator. No language,
-  registration, nominal type or VM changes. Nominal parts still await Q1; split
-  unions/dynamic recipes, helper roots, call-state maps, verifier obligations and
-  runtime publication remain for steps 3–7. Collection and aggregate execution
-  remain T015/T017 work; T014 is not complete.
+  registration, nominal type or VM changes. Nominal parts are now unblocked.
+  Anonymous split-union/dynamic work is recorded in step 3 below; helper roots,
+  call-state maps, verifier obligations and runtime publication remain later work.
+  Collection and aggregate execution remain T015/T017 work; T014 is not complete.
 
 - Step 3 (anonymous tagged values) landed: Optional/Result split-union layouts
   have explicit tags, separate reference/scalar partitions, per-case transfers
   and null-initialization plans. Compact CopyPlan/Repeat data composes through
   products and arrays without unrolling elements. Synthetic dynamic-root recipes
-  compose through products/arrays, but unions containing them remain unsupported
-  pending an inactive-state representation decision. Tests cover every anonymous
-  case, nested optional/result ordering, transitions, cleared inactive references,
+  compose through products/arrays and now through active-case union guards.
+  Tests cover every anonymous case, nested optional/result ordering, transitions, cleared inactive references,
   full i64 payload bits and an independent semantic label visitor. No nominal
-  enum, dyn behavior, language, registration or VM support was added. Q1/Q2 stay
-  open; the dyn inactive-state rule, helper-root scopes and steps 4–7 publication/
-  verifier work remain. T014 is still incomplete; real GC and aggregate execution
-  remain T015/T017 work.
+  enum, dyn language behavior, registration or VM support was added. The owner
+  resolved Q1/Q2 in the reference chapters. The dynamic representation gate is
+  active-case guards: tag first when tracing/copying, inactive pairs never read,
+  and tag last after payload initialization when publishing (no safepoint inside
+  in-place mutation). Nested dynamic copies and poisoned inactive-pair tests pass.
+  Helper-root scopes and steps 4–7 runtime publication/verifier work remain.
+  T014 is still incomplete; real GC and aggregate execution remain T015/T017 work.
 
 ### T015 — Implement allocation and non-moving collection
 

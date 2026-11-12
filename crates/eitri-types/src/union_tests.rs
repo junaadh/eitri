@@ -4,6 +4,7 @@ use crate::{ByteRange, CopyKind};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Cell {
     Uninitialized,
+    Poison,
     Scalar(u64),
     Reference(Option<u32>),
     Type(bool),
@@ -40,7 +41,22 @@ fn labels(value: &Value, out: &mut Vec<u32>) {
     }
 }
 fn copy(source: &[Cell], from: usize, dest: &mut [Cell], to: usize, count: usize) {
+    assert!(
+        !source[from..from + count].contains(&Cell::Poison),
+        "read inactive pair"
+    );
     dest[to..to + count].copy_from_slice(&source[from..from + count]);
+}
+#[derive(Clone, Copy)]
+enum Source {
+    Native(usize),
+    Packed(usize, usize),
+}
+fn tag(storage: &[Cell], offset: usize) -> usize {
+    let Cell::Scalar(n @ 0..=1) = storage[offset] else {
+        panic!("invalid tag")
+    };
+    n as usize
 }
 fn pack(
     store: &LayoutStore,
@@ -50,55 +66,91 @@ fn pack(
     refs: usize,
     scalars: usize,
 ) {
-    let mut stack = vec![(id, 0usize, refs, scalars)];
-    while let Some((id, source_base, refs, scalars)) = stack.pop() {
+    enum Task {
+        Value(LayoutId, Source, usize, usize),
+        Tag(usize, usize, usize),
+    }
+    let mut stack = vec![Task::Value(id, Source::Native(0), refs, scalars)];
+    while let Some(task) = stack.pop() {
+        let Task::Value(id, src, refs, scalars) = task else {
+            let Task::Tag(from, to, count) = task else {
+                unreachable!()
+            };
+            copy(source, from, dest, to, count);
+            continue;
+        };
         let plan = &store.get(id).unwrap().copy;
-        assert!(!plan.has_dynamic, "dynamic split-copy is undecided");
+        let scalar_source = match src {
+            Source::Native(n) | Source::Packed(_, n) => n,
+        };
+        let reference_source = match src {
+            Source::Native(n) | Source::Packed(n, _) => n,
+        };
         match &plan.kind {
-            CopyKind::Dynamic => panic!("dynamic split-copy is undecided"),
-            CopyKind::Scalar => copy(source, source_base, dest, scalars, plan.scalar_bytes),
-            CopyKind::Reference => copy(source, source_base, dest, refs, plan.reference_bytes),
-            CopyKind::Product(fields) => stack.extend(fields.iter().map(|f| {
-                (
-                    f.layout,
-                    source_base + f.source,
-                    refs + f.references,
-                    scalars + f.scalars,
-                )
-            })),
+            CopyKind::Dynamic | CopyKind::Scalar => {
+                copy(source, scalar_source, dest, scalars, plan.scalar_bytes)
+            }
+            CopyKind::Reference => copy(source, reference_source, dest, refs, plan.reference_bytes),
+            CopyKind::Product(fields) => {
+                for f in fields {
+                    let src = match src {
+                        Source::Native(n) => Source::Native(n + f.source),
+                        Source::Packed(r, s) => Source::Packed(r + f.references, s + f.scalars),
+                    };
+                    stack.push(Task::Value(
+                        f.layout,
+                        src,
+                        refs + f.references,
+                        scalars + f.scalars,
+                    ));
+                }
+            }
             CopyKind::Repeat {
                 count,
                 source_stride,
                 reference_stride,
                 scalar_stride,
                 element,
-            } => stack.extend((0..*count as usize).map(|n| {
-                (
-                    *element,
-                    source_base + n * source_stride,
-                    refs + n * reference_stride,
-                    scalars + n * scalar_stride,
-                )
-            })),
+            } => {
+                for n in 0..*count as usize {
+                    let src = match src {
+                        Source::Native(base) => Source::Native(base + n * source_stride),
+                        Source::Packed(r, s) => {
+                            Source::Packed(r + n * reference_stride, s + n * scalar_stride)
+                        }
+                    };
+                    stack.push(Task::Value(
+                        *element,
+                        src,
+                        refs + n * reference_stride,
+                        scalars + n * scalar_stride,
+                    ));
+                }
+            }
             CopyKind::Split {
                 reference_source,
-                scalars: moves,
+                tag: range,
+                scalar_source,
+                scalar_destination,
+                cases,
             } => {
-                copy(
-                    source,
-                    source_base + reference_source,
-                    dest,
-                    refs,
-                    plan.reference_bytes,
-                );
-                for transfer in moves {
-                    copy(
-                        source,
-                        source_base + transfer.source.offset,
-                        dest,
-                        scalars + transfer.destination,
-                        transfer.source.bytes,
-                    );
+                let (tag_source, r, s) = match src {
+                    Source::Native(n) => {
+                        (n + range.offset, n + reference_source, n + scalar_source)
+                    }
+                    Source::Packed(r, s) => (s, r, s + scalar_destination),
+                };
+                let active = tag(source, tag_source);
+                dest[refs..refs + plan.reference_bytes].fill(Cell::Reference(None));
+                // LIFO: publish only after the selected payload has copied.
+                stack.push(Task::Tag(tag_source, scalars, range.bytes));
+                if let Some(child) = cases[active] {
+                    stack.push(Task::Value(
+                        child,
+                        Source::Packed(r, s),
+                        refs,
+                        scalars + scalar_destination,
+                    ));
                 }
             }
         }
@@ -133,13 +185,18 @@ fn init(
 fn encode(store: &LayoutStore, id: LayoutId, value: &Value) -> Vec<Cell> {
     let layout = store.get(id).unwrap();
     let mut storage = vec![Cell::Uninitialized; layout.size];
+    if layout.copy.has_dynamic && layout.union.is_some() {
+        storage.fill(Cell::Poison);
+    }
     match value {
         Value::Scalar(n) => storage.fill(Cell::Scalar(*n)),
         Value::Reference(n) => storage.fill(Cell::Reference(Some(*n))),
         Value::Product(values) => {
             for (field, v) in layout.fields.iter().zip(values) {
                 let src = encode(store, field.layout, v);
-                copy(&src, 0, &mut storage, field.offset, src.len());
+                // Fixture assembly places opaque bytes, including poison; the
+                // plan interpreter below is what must never inspect/copy them.
+                storage[field.offset..field.offset + src.len()].copy_from_slice(&src);
             }
         }
         Value::Array(values) => {
@@ -155,7 +212,7 @@ fn encode(store: &LayoutStore, id: LayoutId, value: &Value) -> Vec<Cell> {
             assert_eq!(values.len(), count as usize);
             for (n, v) in values.iter().enumerate() {
                 let src = encode(store, element, v);
-                copy(&src, 0, &mut storage, n * source_stride, src.len());
+                storage[n * source_stride..n * source_stride + src.len()].copy_from_slice(&src);
             }
         }
         Value::Case(tag, payload) => {
@@ -178,14 +235,75 @@ fn encode(store: &LayoutStore, id: LayoutId, value: &Value) -> Vec<Cell> {
 }
 fn roots(store: &LayoutStore, storage: &[Cell]) -> Vec<u32> {
     let mut result = Vec::new();
-    let mut stack = vec![(store.root(), 0usize)];
+    let mut stack = vec![(store.root(), 0usize, None)];
     let mut reference = |offset: usize| match storage[offset] {
         Cell::Reference(Some(label)) => result.push(label),
         Cell::Reference(None) => {}
         other => panic!("scalar visited as reference: {other:?} at {offset}"),
     };
-    while let Some((id, base)) = stack.pop() {
+    while let Some((id, base, packed)) = stack.pop() {
+        if let Some((r, s)) = packed {
+            match &store.get(id).unwrap().copy.kind {
+                CopyKind::Dynamic => {
+                    let TraceDesc::Dynamic(recipe) = &store.get(id).unwrap().trace else {
+                        panic!("dynamic recipe")
+                    };
+                    match storage[s + recipe.type_slot as usize * 8] {
+                        Cell::Type(true) => reference(s + recipe.payload_slot as usize * 8),
+                        Cell::Type(false) => {}
+                        _ => panic!("read inactive pair"),
+                    }
+                }
+                CopyKind::Product(fields) => stack.extend(
+                    fields
+                        .iter()
+                        .map(|f| (f.layout, 0, Some((r + f.references, s + f.scalars)))),
+                ),
+                CopyKind::Repeat {
+                    count,
+                    reference_stride,
+                    scalar_stride,
+                    element,
+                    ..
+                } => stack.extend((0..*count as usize).map(|n| {
+                    (
+                        *element,
+                        0,
+                        Some((r + n * reference_stride, s + n * scalar_stride)),
+                    )
+                })),
+                CopyKind::Split {
+                    scalar_destination,
+                    cases,
+                    ..
+                } => {
+                    if let Some(child) = cases[tag(storage, s)] {
+                        stack.push((child, 0, Some((r, s + scalar_destination))));
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
         match &store.get(id).unwrap().trace {
+            TraceDesc::Guarded {
+                tag: range,
+                ordinary,
+                stride,
+                cases,
+            } => {
+                let active = tag(storage, base + range.offset);
+                for n in 0..ordinary.bytes / stride {
+                    reference(base + ordinary.offset + n * stride);
+                }
+                if let Some(case) = cases[active] {
+                    stack.push((
+                        case.layout,
+                        0,
+                        Some((base + case.references, base + case.scalars)),
+                    ));
+                }
+            }
             TraceDesc::None => {}
             TraceDesc::Reference => reference(base),
             TraceDesc::ReferencePartition {
@@ -198,13 +316,13 @@ fn roots(store: &LayoutStore, storage: &[Cell]) -> Vec<u32> {
                 }
             }
             TraceDesc::Product(fields) => {
-                stack.extend(fields.iter().map(|f| (f.layout, base + f.offset)))
+                stack.extend(fields.iter().map(|f| (f.layout, base + f.offset, None)))
             }
             TraceDesc::Repeat {
                 count,
                 stride,
                 element,
-            } => stack.extend((0..*count as usize).map(|n| (*element, base + n * stride))),
+            } => stack.extend((0..*count as usize).map(|n| (*element, base + n * stride, None))),
             TraceDesc::Dynamic(recipe) => match storage[base + recipe.type_slot as usize * 8] {
                 Cell::Type(true) => reference(base + recipe.payload_slot as usize * 8),
                 Cell::Type(false) => {}
@@ -365,7 +483,7 @@ fn transitions_clear_all_inactive_references_and_preserve_full_scalar_range() {
 }
 
 #[test]
-fn dynamic_recipes_compose_but_no_union_inactive_rule_is_selected() {
+fn dynamic_recipes_compose_through_active_cases() {
     let nodes = [
         Shape::Dynamic,
         Shape::Scalar(ScalarKind::I64),
@@ -383,12 +501,21 @@ fn dynamic_recipes_compose_but_no_union_inactive_rule_is_selected() {
                 Value::Product(vec![Value::Scalar(7), Value::Dynamic(false, 7)]),
             ]),
         );
-        for root in [4, 5] {
-            assert!(matches!(
-                LayoutStore::build(nodes.len(), root, domain, |id| Ok(nodes[id])),
-                Err(LayoutError::Unsupported)
-            ));
-        }
+        let optional = build(&nodes, 4, domain);
+        check(&optional, &Value::Case(0, None));
+        check(&optional, &some(Value::Dynamic(true, 7)));
+        let result = build(&nodes, 5, domain);
+        check(&result, &case(0, Value::Scalar(7)));
+        check(
+            &result,
+            &case(
+                1,
+                Value::Array(vec![
+                    Value::Product(vec![Value::Scalar(7), Value::Dynamic(true, 8)]),
+                    Value::Product(vec![Value::Scalar(7), Value::Dynamic(false, 8)]),
+                ]),
+            ),
+        );
     }
 }
 
@@ -429,4 +556,62 @@ fn large_union_arrays_retain_only_graph_sized_plans() {
             .len(),
         2
     );
+}
+
+#[test]
+fn dynamic_transitions_and_nested_copies_never_read_inactive_garbage() {
+    let nodes = [
+        Shape::Dynamic,
+        Shape::Scalar(ScalarKind::I64),
+        Shape::ManagedReference(0),
+        Shape::Optional(0),
+        Shape::Product(&[1, 2, 3]),
+        Shape::Result(4, 1),
+        Shape::Optional(5),
+        Shape::Array(2, 6),
+        Shape::Result(7, 1),
+        Shape::Optional(8),
+    ];
+    let active = Value::Array(vec![
+        some(case(
+            0,
+            Value::Product(vec![
+                Value::Scalar(13),
+                Value::Reference(12),
+                some(Value::Dynamic(true, 13)),
+            ]),
+        )),
+        some(case(1, Value::Scalar(13))),
+    ]);
+    for domain in [StorageDomain::Frame, StorageDomain::Heap] {
+        let store = build(&nodes, 8, domain);
+        let layout = store.get(store.root()).unwrap();
+        let union = layout.union.as_ref().unwrap();
+        let mut storage = vec![Cell::Poison; layout.size];
+        for tag in [0, 1, 0, 1] {
+            let value = if tag == 0 {
+                active.clone()
+            } else {
+                Value::Scalar(13)
+            };
+            let source = encode(&store, union.cases[tag].payload.unwrap(), &value);
+            init(&store, store.root(), tag, Some(&source), &mut storage);
+            if tag == 1 {
+                // The scalar case occupies only its eight bytes. All remaining
+                // scalar/dynamic bytes are inactive and would fault if read.
+                storage[union.scalars.offset + 8..union.scalars.offset + union.scalars.bytes]
+                    .fill(Cell::Poison);
+            }
+            assert_eq!(storage[union.tag.offset], Cell::Scalar(tag as u64));
+            let mut expected = Vec::new();
+            labels(&value, &mut expected);
+            expected.sort_unstable();
+            assert_eq!(roots(&store, &storage), expected);
+        }
+        let outer = build(&nodes, 9, domain);
+        check(&outer, &some(case(0, active.clone())));
+        // Copying a nested scalar case must not bulk-copy its poisoned pairs.
+        check(&outer, &some(case(1, Value::Scalar(13))));
+        check(&outer, &Value::Case(0, None));
+    }
 }

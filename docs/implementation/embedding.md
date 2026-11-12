@@ -114,6 +114,18 @@ Bindings can be written by hand, or generated: a Rust macro can produce the
 declaration file and the bindings from annotated Rust items. The declaration
 file stays the canonical form, because every host language can produce one.
 
+### Named declaration compatibility
+
+Registration, runtime templates and artifact binding use the stable named-type
+key **(module path, declaration name)**. A same-key pair is compatible only when
+its shapes are structurally equal: kind, ordered fields/cases/payloads and their
+types, recursively using this same rule. A same-key, different-shape pair is
+rejected with a typed error. Context-local IDs never establish compatibility;
+different keys are different nominal declarations. See
+[Declaration identity](../language/structs-classes-enums.md#declaration-identity-across-contexts).
+This is the required rule when named-type support lands; the current scalar
+registration API does not yet implement named declarations.
+
 ### Import resolution
 
 - An import path names either a registered host module or an Eitri source

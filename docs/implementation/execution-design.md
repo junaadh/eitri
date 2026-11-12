@@ -321,6 +321,24 @@ needs both ordinary reference slots and **dynamic root recipes** identifying
 reference bitmap alone does not encode these. Heap descriptors need the
 same distinction. Split unions initialize inactive reference positions. [D12]
 
+The initial dynamic inactive-state representation uses **active-case guards**.
+Union tracing reads the tag first. Ordinary reference partitions remain valid in
+all cases (inactive positions are initialized null); per-case dynamic recipes
+visit only the selected case's type/payload pairs, including pairs nested in
+products, arrays and unions. Inactive dynamic bytes are unspecified and are never
+read, copied as active pairs or interpreted as type IDs. No sentinel type ID is
+required. Copy plans select the source tag before traversing its active payload,
+so nested copies skip inactive pairs too; Repeat plans remain compact.
+
+Construction/transitions clear ordinary references, transfer initialized active
+payloads, and **publish the tag last**, so an observable case always has its
+initialized payload. In-place transitions permit no safepoint between these
+steps: tag-last alone does not make an old tag safe during a partial overwrite.
+Helpers must stage/root construction or otherwise exclude the changing value
+until publication; implementing those VM/helper root scopes remains later T014
+work. The current type crate supplies descriptors and tested plans, not a live
+collector or concurrent publication protocol.
+
 At allocation safepoints, publish the pre-instruction map before allocating;
 temporaries in helpers are explicit roots until stored in a frame. Call maps
 exclude uninitialized return slots and describe the suspended caller.

@@ -58,8 +58,9 @@ match value {                            // type patterns
 }
 ```
 
-- A type test matches only the exact type. An `i64` inside a `dyn` doesn't
-  match `i64`.
+- A type test matches only the exact type. An `i64` inside a `dyn` matches
+  `i64`, and does not match a different scalar type such as `i8` or `u64`.
+  Converting `42` of type `i64` to `dyn` therefore matches an `i64` pattern.
 - A `dyn` can hold any type, so a `match` on `dyn` always needs a catch-all
   arm.
 - There is no unchecked cast. A failed test takes the `else` branch or the

@@ -12,17 +12,12 @@ pub struct ByteRange {
 /// ```compile_fail
 /// let _ = eitri_types::DynamicRoot { type_slot: 0, payload_slot: 1 };
 /// ```
-/// No inactive dynamic type/payload encoding is selected here.
+/// Inactive pairs have unspecified bytes and are skipped by case guards.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DynamicRoot {
     pub type_slot: u32,
     pub payload_slot: u32,
-}
-#[derive(Debug)]
-pub struct ScalarTransfer {
-    pub source: ByteRange,
-    pub destination: usize,
 }
 #[derive(Debug)]
 pub struct Transfer {
@@ -33,7 +28,7 @@ pub struct Transfer {
 }
 #[derive(Debug)]
 pub enum CopyKind {
-    /// No split-copy rule is supplied for dynamic type/payload storage yet.
+    /// Copy this initialized pair only when selected by enclosing case guards.
     Dynamic,
     Scalar,
     Reference,
@@ -45,12 +40,20 @@ pub enum CopyKind {
         scalar_stride: usize,
         element: LayoutId,
     },
+    /// Read tag before payload. Clear destination ordinary references, then
+    /// traverse only cases[tag] in packed source form; publish copied tag last.
+    /// Native source offsets are below. In packed form tag is at scalar offset
+    /// zero and payload at scalar_destination; references start at offset zero.
+    /// Never bulk-copy the maximum scalar/dynamic partition across cases.
     Split {
         reference_source: usize,
-        scalars: [ScalarTransfer; 2],
+        tag: ByteRange,
+        scalar_source: usize,
+        scalar_destination: usize,
+        cases: [Option<LayoutId>; 2],
     },
 }
-/// For has_dynamic=false, describes packing source values into reference/scalar
+/// Describes packing source values into ordinary-reference and scalar/dynamic
 /// destinations. Consumers must provide non-overlapping source/destination
 /// storage. Active values and reference positions must be initialized. Scalar
 /// spans may include padding/inactive bytes: an eventual executor must copy
@@ -62,15 +65,16 @@ pub struct CopyPlan {
     pub reference_bytes: usize,
     pub scalar_bytes: usize,
     pub scalar_alignment: usize,
-    /// If true, split-copy execution is unsupported: dynamic payloads must not
-    /// be treated as ordinary scalars or references using these byte counts.
-    /// Trace recipes remain available independently of a split-copy decision.
+    /// Dynamic pairs require guarded tracing/copying, not ordinary scalar
+    /// interpretation. Split chooses the active child before copying its pair.
     pub has_dynamic: bool,
     pub kind: CopyKind,
 }
 /// Clear the entire reference partition to initialized null BEFORE transferring
 /// the active payload, then write the tag. Inactive positions remain null.
-/// These are plan data, not a publication/GC protocol or runtime constructor.
+/// Publish the tag last: a tracer observing a case must see initialized active
+/// payloads. No safepoint may occur inside an in-place transition; helper/root
+/// publication around construction remains later VM work. These are plan data.
 #[derive(Debug)]
 pub struct InitPlan {
     pub null_references: ByteRange,
@@ -175,12 +179,10 @@ pub(crate) fn union<'a>(
         return Err(LayoutError::Unsupported);
     }
     let (mut refs, mut scalars, mut scalar_align) = (0, 0, 1);
+    let mut has_dynamic = false;
     for id in cases.into_iter().flatten() {
         let copy = &child(id)?.copy;
-        // Inactive dynamic payloads need a representation decision, not a guess.
-        if copy.has_dynamic {
-            return Err(LayoutError::Unsupported);
-        }
+        has_dynamic |= copy.has_dynamic;
         refs = refs.max(copy.reference_bytes);
         scalars = scalars.max(copy.scalar_bytes);
         scalar_align = scalar_align.max(copy.scalar_alignment);
@@ -219,19 +221,13 @@ pub(crate) fn union<'a>(
         reference_bytes: refs,
         scalar_bytes: add(scalar_payload, scalars.bytes)?,
         scalar_alignment: scalar_align.max(if domain == StorageDomain::Frame { 8 } else { 1 }),
-        has_dynamic: false,
+        has_dynamic,
         kind: CopyKind::Split {
             reference_source: references.offset,
-            scalars: [
-                ScalarTransfer {
-                    source: tag,
-                    destination: 0,
-                },
-                ScalarTransfer {
-                    source: scalars,
-                    destination: scalar_payload,
-                },
-            ],
+            tag,
+            scalar_source: scalars.offset,
+            scalar_destination: scalar_payload,
+            cases: cases.map(|id| id.map(|id| LayoutId(id as u32))),
         },
     };
     let make_case = |tag: u8, id: Option<usize>| CaseLayout {
@@ -254,7 +250,28 @@ pub(crate) fn union<'a>(
         alignment,
         fields: Vec::<FieldLayout>::new(),
         copy,
-        trace: if refs == 0 {
+        trace: if has_dynamic {
+            TraceDesc::Guarded {
+                tag,
+                ordinary: references,
+                stride: reference_size,
+                cases: std::array::from_fn(|n| {
+                    cases[n]
+                        .payload
+                        .filter(|&id| {
+                            child(id.0 as usize)
+                                .expect("validated child")
+                                .copy
+                                .has_dynamic
+                        })
+                        .map(|layout| crate::CaseDynamicRoots {
+                            layout,
+                            references: references.offset,
+                            scalars: scalars.offset,
+                        })
+                }),
+            }
+        } else if refs == 0 {
             TraceDesc::None
         } else {
             TraceDesc::ReferencePartition {

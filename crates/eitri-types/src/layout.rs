@@ -30,6 +30,14 @@ pub struct FieldLayout {
 /// conditional type/payload recipe. Extern pointers/host identities are untraced.
 #[derive(Debug)]
 pub enum TraceDesc {
+    /// Ordinary roots are unconditional (inactive ones null). Dynamic recipes
+    /// are reached only through the selected case's packed payload layout.
+    Guarded {
+        tag: crate::ByteRange,
+        ordinary: crate::ByteRange,
+        stride: usize,
+        cases: [Option<CaseDynamicRoots>; 2],
+    },
     Dynamic(DynamicRoot),
     ReferencePartition {
         offset: usize,
@@ -44,6 +52,15 @@ pub enum TraceDesc {
         stride: usize,
         element: LayoutId,
     },
+}
+/// Entry to a case's packed payload trace. Follow its copy-plan shape for
+/// offsets, visiting Dynamic leaves and selecting nested Split tags; ordinary
+/// references are handled separately by the enclosing Guarded descriptor.
+#[derive(Clone, Copy, Debug)]
+pub struct CaseDynamicRoots {
+    pub layout: LayoutId,
+    pub references: usize,
+    pub scalars: usize,
 }
 #[derive(Debug)]
 pub struct Layout {

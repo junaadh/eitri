@@ -3,12 +3,12 @@ use eitri_base::FxHashMap;
 
 mod split;
 pub use split::{
-    ByteRange, CaseLayout, CopyKind, CopyPlan, DynamicRoot, InitPlan, ScalarTransfer, Transfer,
-    UnionLayout,
+    ByteRange, CaseLayout, CopyKind, CopyPlan, DynamicRoot, InitPlan, Transfer, UnionLayout,
 };
 mod layout;
 pub use layout::{
-    FieldLayout, Layout, LayoutError, LayoutId, LayoutStore, StorageDomain, TraceDesc,
+    CaseDynamicRoots, FieldLayout, Layout, LayoutError, LayoutId, LayoutStore, StorageDomain,
+    TraceDesc,
 };
 
 /// A local index: meaningful only with the store that issued it.

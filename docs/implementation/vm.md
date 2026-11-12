@@ -65,10 +65,15 @@ frame size, compile time, and suspended coroutines.
 - **Flattened structs.** A struct in a frame occupies several slots, each
   statically a reference or a scalar, so the stack map covers it.
 - **Split unions.** Enums with payloads, and `E!T`, lay out their cases so
-  that every slot is a reference slot in all cases or a scalar slot in all
-  cases. Unused reference slots hold `null`. Tracing never needs the tag.
-- **One tag-aware case: `dyn`.** A `dyn` is a type ID plus one word, and the
-  tracer checks the type ID to see whether the word is a reference.
+  that ordinary reference positions never hold scalars. Unused ordinary
+  reference slots hold `null`, so tracing those positions needs no tag.
+  Dynamic pairs in the remaining partition use the case guards below.
+- **Dynamic recipes.** A `dyn` is a type ID plus one word; its type determines
+  whether the payload is a reference. In unions the tracer reads the union tag
+  first and follows only the active case's dynamic recipes. Inactive pairs are
+  unspecified and never read. Construction publishes the tag after initializing
+  the active payload, with no safepoint during an in-place transition. See
+  [publication details](execution-design.md#roots-faults-and-budgets-across-tiers).
 - **Heap objects** carry a pointer to a per-type descriptor listing the
   offsets of their references, generated once per type.
 - **Suspended coroutines** are scanned frame by frame, using the stack map at

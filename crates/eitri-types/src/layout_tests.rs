@@ -24,6 +24,7 @@ fn references(store: &LayoutStore) -> Vec<usize> {
     let mut stack = vec![(store.root(), 0usize)];
     while let Some((id, base)) = stack.pop() {
         match &store.get(id).unwrap().trace {
+            TraceDesc::Guarded { .. } => panic!("case-aware visitor required"),
             TraceDesc::Dynamic(_) => panic!("dynamic-specific visitor required"),
             TraceDesc::ReferencePartition {
                 offset,

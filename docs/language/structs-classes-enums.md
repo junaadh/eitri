@@ -1,5 +1,20 @@
 # Structs, classes, and enums
 
+## Declaration identity across contexts
+
+A named declaration's stable key is **(module path, declaration name)**.
+Declarations with the same key denote the same nominal type across contexts
+when their shapes are structurally equal: the same declaration kind, the same
+fields/cases/payloads in order, and equal field and payload types by this same
+rule, recursively. Different keys do not denote the same nominal type merely
+because their fields happen to have the same shape. Context-local type IDs never
+determine cross-context identity. Transparent aliases retain their existing
+meaning rather than creating a new nominal declaration.
+
+Registration, artifact binding and runtime templates must reject a same-key,
+different-shape pair with a typed error. This rule specifies type identity, not
+object-instance identity or a global type registry.
+
 ## Structs
 
 A `struct` is a value type. Assignment and argument passing copy it, and
