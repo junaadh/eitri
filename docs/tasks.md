@@ -707,6 +707,11 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   Tests cover three distinct root shapes, poisoned inactive pairs and a
   1,000-case descriptor. Named types and enum declarations remain for 9b/9c.
 
+- Named-product declaration graph step 9b1: two-phase declarations and iterative
+  inline-cycle validation, plus synthetic named-product layout, are implemented.
+  Cross-store shape equality and portable recursive encoding remain for 9b2/9b3;
+  named enums, language and registration support remain later work.
+
 ### T015 — Implement allocation and non-moving collection
 
 - [ ] Depends on: T014.

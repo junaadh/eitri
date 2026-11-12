@@ -1,6 +1,8 @@
 //! Context-local canonical types; owned signatures compare across stores.
 use eitri_base::FxHashMap;
 
+mod declarations;
+pub use declarations::{DeclError, DeclId, DeclKey, Declarations, FieldType};
 mod split;
 pub use split::{
     ByteRange, CaseLayout, CopyKind, CopyPlan, DynamicRoot, InitPlan, Transfer, UnionLayout,

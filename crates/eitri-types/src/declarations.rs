@@ -1,0 +1,286 @@
+//! Caller-owned named-product graph. Constructors remain internal until T017.
+use crate::{TypeId, TypeStore};
+use eitri_base::FxHashMap;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DeclKey {
+    pub module: String,
+    pub name: String,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DeclId(pub(crate) u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldType {
+    Type(TypeId),
+    Named(DeclId),
+    Reference(DeclId),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeclError {
+    DuplicateKey(DeclKey),
+    UnknownDecl(DeclId),
+    UnknownType(TypeId),
+    AlreadyDefined(DeclId),
+    DuplicateField(String),
+    Undefined(DeclId),
+    InlineCycle { keys: Vec<DeclKey> },
+    Layout(crate::LayoutError),
+    TooMany,
+}
+struct Declaration {
+    key: DeclKey,
+    fields: Option<Vec<(String, FieldType)>>,
+}
+#[derive(Default)]
+pub struct Declarations {
+    declarations: Vec<Declaration>,
+    keys: FxHashMap<DeclKey, DeclId>,
+}
+
+#[allow(dead_code)] // Internal construction until the language feature lands.
+impl Declarations {
+    pub(crate) fn declare(&mut self, key: DeclKey) -> Result<DeclId, DeclError> {
+        if self.keys.contains_key(&key) {
+            return Err(DeclError::DuplicateKey(key));
+        }
+        let id = DeclId(u32::try_from(self.declarations.len()).map_err(|_| DeclError::TooMany)?);
+        self.declarations.push(Declaration {
+            key: key.clone(),
+            fields: None,
+        });
+        self.keys.insert(key, id);
+        Ok(id)
+    }
+    pub(crate) fn define(
+        &mut self,
+        id: DeclId,
+        fields: Vec<(String, FieldType)>,
+    ) -> Result<(), DeclError> {
+        let decl = self
+            .declarations
+            .get(id.0 as usize)
+            .ok_or(DeclError::UnknownDecl(id))?;
+        if decl.fields.is_some() {
+            return Err(DeclError::AlreadyDefined(id));
+        }
+        let mut names = eitri_base::FxHashSet::default();
+        for (name, ty) in &fields {
+            if !names.insert(name) {
+                return Err(DeclError::DuplicateField(name.clone()));
+            }
+            if let FieldType::Named(target) | FieldType::Reference(target) = ty
+                && self.declarations.get(target.0 as usize).is_none()
+            {
+                return Err(DeclError::UnknownDecl(*target));
+            }
+        }
+        self.declarations[id.0 as usize].fields = Some(fields);
+        Ok(())
+    }
+    /// O(declarations + fields) time and space, with an explicit DFS stack.
+    pub(crate) fn check(&self) -> Result<(), DeclError> {
+        for (n, decl) in self.declarations.iter().enumerate() {
+            if decl.fields.is_none() {
+                return Err(DeclError::Undefined(DeclId(n as u32)));
+            }
+        }
+        let mut state = vec![0u8; self.declarations.len()];
+        let mut path: Vec<usize> = Vec::new();
+        let mut stack = Vec::new();
+        for root in 0..state.len() {
+            if state[root] != 0 {
+                continue;
+            }
+            stack.push((root, 0usize));
+            state[root] = 1;
+            path.push(root);
+            while let Some((id, next)) = stack.last_mut() {
+                let fields = self.declarations[*id]
+                    .fields
+                    .as_ref()
+                    .expect("checked above");
+                if *next == fields.len() {
+                    state[*id] = 2;
+                    stack.pop();
+                    path.pop();
+                    continue;
+                }
+                let ty = fields[*next].1;
+                *next += 1;
+                if let FieldType::Named(child) = ty {
+                    let child = child.0 as usize;
+                    if state[child] == 1 {
+                        let start = path.iter().position(|&n| n == child).expect("active path");
+                        return Err(DeclError::InlineCycle {
+                            keys: path[start..]
+                                .iter()
+                                .map(|&n| self.declarations[n].key.clone())
+                                .collect(),
+                        });
+                    }
+                    if state[child] == 0 {
+                        state[child] = 1;
+                        stack.push((child, 0));
+                        path.push(child);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn layout(
+        &self,
+        types: &TypeStore,
+        root: DeclId,
+        domain: crate::StorageDomain,
+    ) -> Result<crate::LayoutStore, DeclError> {
+        self.check()?;
+        if self.declarations.get(root.0 as usize).is_none() {
+            return Err(DeclError::UnknownDecl(root));
+        }
+        for decl in &self.declarations {
+            for (_, ty) in decl.fields.as_ref().expect("checked") {
+                if let FieldType::Type(id) = ty
+                    && types.nodes.get(id.0 as usize).is_none()
+                {
+                    return Err(DeclError::UnknownType(*id));
+                }
+            }
+        }
+        crate::layout::named_layout(types, self, root, domain).map_err(DeclError::Layout)
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.declarations.len()
+    }
+    pub(crate) fn fields(&self, id: usize) -> &[(String, FieldType)] {
+        self.declarations[id].fields.as_deref().expect("checked")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ScalarKind, StorageDomain, TraceDesc, TypeDesc};
+    fn key(n: &str) -> DeclKey {
+        DeclKey {
+            module: "m".into(),
+            name: n.into(),
+        }
+    }
+    fn field(n: &str, t: FieldType) -> (String, FieldType) {
+        (n.into(), t)
+    }
+    #[test]
+    fn declaration_errors_and_inline_cycles() {
+        let mut g = Declarations::default();
+        let a = g.declare(key("A")).unwrap();
+        assert_eq!(g.declare(key("A")), Err(DeclError::DuplicateKey(key("A"))));
+        assert_eq!(g.check(), Err(DeclError::Undefined(a)));
+        assert_eq!(
+            g.define(DeclId(99), vec![]),
+            Err(DeclError::UnknownDecl(DeclId(99)))
+        );
+        assert_eq!(
+            g.define(
+                a,
+                vec![
+                    field("x", FieldType::Named(a)),
+                    field("x", FieldType::Named(a))
+                ]
+            ),
+            Err(DeclError::DuplicateField("x".into()))
+        );
+        g.define(a, vec![field("x", FieldType::Named(a))]).unwrap();
+        assert_eq!(g.define(a, vec![]), Err(DeclError::AlreadyDefined(a)));
+        assert_eq!(
+            g.check(),
+            Err(DeclError::InlineCycle {
+                keys: vec![key("A")]
+            })
+        );
+        let mut g = Declarations::default();
+        let a = g.declare(key("A")).unwrap();
+        let b = g.declare(key("B")).unwrap();
+        g.define(a, vec![field("b", FieldType::Named(b))]).unwrap();
+        g.define(b, vec![field("a", FieldType::Named(a))]).unwrap();
+        assert_eq!(
+            g.check(),
+            Err(DeclError::InlineCycle {
+                keys: vec![key("A"), key("B")]
+            })
+        );
+    }
+    #[test]
+    fn references_and_inline_layouts() {
+        let mut types = TypeStore::default();
+        let i = types.intern(TypeDesc::Scalar(ScalarKind::I64)).unwrap();
+        let mut g = Declarations::default();
+        let a = g.declare(key("A")).unwrap();
+        let b = g.declare(key("B")).unwrap();
+        let c = g.declare(key("C")).unwrap();
+        g.define(
+            a,
+            vec![
+                field("value", FieldType::Type(i)),
+                field("next", FieldType::Reference(a)),
+                field("b", FieldType::Reference(b)),
+            ],
+        )
+        .unwrap();
+        g.define(b, vec![field("a", FieldType::Reference(a))])
+            .unwrap();
+        g.define(
+            c,
+            vec![
+                field("nested", FieldType::Named(a)),
+                field("other", FieldType::Type(i)),
+            ],
+        )
+        .unwrap();
+        g.check().unwrap();
+        let layout = g.layout(&types, c, StorageDomain::Frame).unwrap();
+        let top = layout.get(layout.root()).unwrap();
+        let nested = layout.get(top.fields[0].layout).unwrap();
+        assert_eq!(
+            nested.fields.iter().map(|f| f.offset).collect::<Vec<_>>(),
+            vec![0, 8, 16]
+        );
+        assert_eq!(top.fields[1].offset, 24);
+        let nodes = [
+            crate::layout::Shape::Scalar(ScalarKind::I64),
+            crate::layout::Shape::ManagedReference(0),
+            crate::layout::Shape::Product(&[0, 1, 1]),
+            crate::layout::Shape::Product(&[2, 0]),
+        ];
+        let anonymous =
+            crate::LayoutStore::build(nodes.len(), 3, StorageDomain::Frame, |id| Ok(nodes[id]))
+                .unwrap();
+        let expected = anonymous.get(anonymous.root()).unwrap();
+        assert_eq!(
+            (top.size, top.alignment),
+            (expected.size, expected.alignment)
+        );
+        assert_eq!(
+            top.fields.iter().map(|f| f.offset).collect::<Vec<_>>(),
+            expected.fields.iter().map(|f| f.offset).collect::<Vec<_>>()
+        );
+        assert!(matches!(nested.trace, TraceDesc::Product(_)));
+        assert!(matches!(
+            layout.get(nested.fields[1].layout).unwrap().trace,
+            TraceDesc::Reference
+        ));
+    }
+    #[test]
+    fn deep_chain_uses_no_recursion() {
+        let mut g = Declarations::default();
+        let ids: Vec<_> = (0..10_000)
+            .map(|i| g.declare(key(&i.to_string())).unwrap())
+            .collect();
+        for pair in ids.windows(2) {
+            g.define(pair[0], vec![field("next", FieldType::Named(pair[1]))])
+                .unwrap();
+        }
+        g.define(*ids.last().unwrap(), vec![]).unwrap();
+        g.check().unwrap();
+    }
+}

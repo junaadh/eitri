@@ -147,7 +147,7 @@ impl LayoutStore {
         self.layouts.get(id.0 as usize)?.as_ref()
     }
 
-    fn build<'a>(
+    pub(crate) fn build<'a>(
         count: usize,
         root: usize,
         domain: StorageDomain,
@@ -360,3 +360,72 @@ mod tests;
 #[cfg(test)]
 #[path = "union_tests.rs"]
 mod union_tests;
+
+#[allow(dead_code)]
+pub(crate) fn named_layout(
+    types: &TypeStore,
+    decls: &crate::Declarations,
+    root: crate::DeclId,
+    domain: StorageDomain,
+) -> Result<LayoutStore, LayoutError> {
+    let base = types.nodes.len();
+    let refs_base = base.checked_add(decls.len()).ok_or(LayoutError::Overflow)?;
+    let mut products = Vec::with_capacity(decls.len());
+    let mut refs = Vec::new();
+    for n in 0..decls.len() {
+        let mut fields = Vec::new();
+        for (_, ty) in decls.fields(n) {
+            fields.push(match *ty {
+                crate::FieldType::Type(id) => {
+                    if types.nodes.get(id.0 as usize).is_none() {
+                        return Err(LayoutError::InvalidId);
+                    }
+                    id.0 as usize
+                }
+                crate::FieldType::Named(id) => base
+                    .checked_add(id.0 as usize)
+                    .ok_or(LayoutError::Overflow)?,
+                crate::FieldType::Reference(id) => {
+                    let index = refs_base
+                        .checked_add(refs.len())
+                        .ok_or(LayoutError::Overflow)?;
+                    refs.push(
+                        base.checked_add(id.0 as usize)
+                            .ok_or(LayoutError::Overflow)?,
+                    );
+                    index
+                }
+            });
+        }
+        products.push(fields);
+    }
+    let count = refs_base
+        .checked_add(refs.len())
+        .ok_or(LayoutError::Overflow)?;
+    LayoutStore::build(
+        count,
+        base.checked_add(root.0 as usize)
+            .ok_or(LayoutError::Overflow)?,
+        domain,
+        |id| {
+            if id < base {
+                return Ok(match types.nodes[id].0 {
+                    TypeDesc::Scalar(kind) => Shape::Scalar(kind),
+                    TypeDesc::Void => Shape::Void,
+                    TypeDesc::FixedArray { count, element } => {
+                        Shape::Array(count, element.0 as usize)
+                    }
+                    TypeDesc::Optional(child) => Shape::Optional(child.0 as usize),
+                    TypeDesc::Result { error, value } => {
+                        Shape::Result(error.0 as usize, value.0 as usize)
+                    }
+                });
+            }
+            if id < refs_base {
+                Ok(Shape::Product(&products[id - base]))
+            } else {
+                Ok(Shape::ManagedReference(refs[id - refs_base]))
+            }
+        },
+    )
+}
