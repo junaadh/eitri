@@ -52,6 +52,7 @@ codes! {
         /// The message names the unsupported feature.
         Unsupported = 1: "A language feature outside this slice. The message names the feature",
         Limit = 2: "An implementation limit from [Resources](#resources)",
+        HostBindingMismatch = 3: "An artifact host index has a different binding in the destination registry",
     }
     "lexer and parser" {
         Lexical = 101: "Unexpected character, malformed literal, or unterminated comment or literal",

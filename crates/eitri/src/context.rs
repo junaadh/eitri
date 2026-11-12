@@ -4,7 +4,7 @@ use eitri_base::{IndexVec, Interner, SourceId, Span};
 use eitri_bytecode::ir::Insn;
 use eitri_bytecode::text::{self, HostDecl, PrintOptions};
 use eitri_bytecode::{CallSite, CallTarget, Callees, FunctionId};
-use eitri_check::{CheckScratch, HostFnId, Hosts, Input};
+use eitri_check::{CheckScratch, HostFnId, Hosts, Input, Ty};
 use eitri_diag::{Code, Diagnostic, Diagnostics, Label};
 use eitri_lower::{LowerScratch, Program};
 use eitri_syntax::{LexScratch, ModuleKind, ParseScratch};
@@ -19,6 +19,8 @@ pub const DEFAULT_TIER_THRESHOLD: u32 = 100;
 /// Why [`Context::optimize`] did not run.
 #[derive(Clone, Debug)]
 pub enum OptimizeError {
+    /// The destination registry differs at a host index used by this artifact.
+    HostBindings(FaultReport),
     /// The source no longer compiles in this context.
     Compile(Vec<Diagnostic>),
     /// The source compiles to code other than the program being optimized:
@@ -86,9 +88,12 @@ impl RunError {
     }
 }
 
-/// A fault and its trace, innermost first.
+/// A pre-execution binding rejection, or a runtime fault and its trace
+/// (innermost first). Binding rejections carry a code and an empty trace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FaultReport {
+    /// A typed pre-execution rejection; runtime faults have no diagnostic code.
+    pub code: Option<Code>,
     pub message: String,
     pub trace: Vec<TraceFrame>,
 }
@@ -106,7 +111,10 @@ impl FaultReport {
     /// label, each active call a secondary one, a host function a note.
     /// A run of identical frames (deep recursion) becomes one label.
     pub fn diagnostic(&self) -> Diagnostic {
-        let mut diagnostic = Diagnostic::fault(self.message.as_str());
+        let mut diagnostic = match self.code {
+            Some(code) => Diagnostic::error(code, self.message.as_str()),
+            None => Diagnostic::fault(self.message.as_str()),
+        };
         let mut innermost = true;
         for run in self.trace.chunk_by(|a, b| a == b) {
             let frame = &run[0];
@@ -194,6 +202,8 @@ impl Context {
         compiled: &mut Compiled,
         source: &str,
     ) -> Result<eitri_bytecode::opt::Report, OptimizeError> {
+        self.check_bindings(compiled)
+            .map_err(OptimizeError::HostBindings)?;
         let keep = std::mem::replace(&mut self.keep_ir, true);
         let fresh = self.compile(source);
         self.keep_ir = keep;
@@ -217,6 +227,8 @@ impl Context {
         &mut self,
         compiled: &mut Compiled,
     ) -> Result<eitri_bytecode::opt::Report, OptimizeError> {
+        self.check_bindings(compiled)
+            .map_err(OptimizeError::HostBindings)?;
         let bodies = compiled.program.bodies.take().ok_or(OptimizeError::NoIr)?;
         let mut report = eitri_bytecode::opt::Report::default();
         let functions = &mut compiled.program.functions;
@@ -373,13 +385,41 @@ impl Context {
         if cfg!(debug_assertions) {
             verify(&program, &self.hosts)?;
         }
-        Ok(Compiled::new(program))
+        Ok(Compiled::new(program, &self.hosts, &self.interner))
     }
 
-    /// Execute compiled top-level code once. `compiled` must come from this
-    /// context, since host calls are numbered by its registry. Host calls go
-    /// to `host`, by [`Context::host_index`].
+    fn check_bindings(&self, compiled: &Compiled) -> Result<(), FaultReport> {
+        for binding in &compiled.host_bindings {
+            let matches = (binding.index as usize) < self.hosts.function_count() && {
+                let function = self.hosts.function(HostFnId::from_u32(binding.index));
+                self.hosts.module(function.module).path == binding.module
+                    && self.interner.resolve(function.name) == binding.name
+                    && function.params == binding.params
+                    && function.ret == binding.ret
+            };
+            if !matches {
+                return Err(FaultReport {
+                    code: Some(Code::HostBindingMismatch),
+                    message: format!(
+                        "host binding at index {} does not match `{}.{}`",
+                        binding.index, binding.module, binding.name
+                    ),
+                    trace: Vec::new(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Execute compiled top-level code once. Every host index used by the
+    /// artifact must have the same module, function name and checked signature
+    /// in this registry. Otherwise returns [`Code::HostBindingMismatch`] before
+    /// execution or changing the run count. Host calls go to `host`, by
+    /// [`Context::host_index`]. Validation allocates nothing on success and is
+    /// O(bindings used), including comparison of their name bytes and parameters.
+    /// Reentry borrows this validated program and registry for the whole run.
     pub fn execute(&mut self, compiled: &Compiled, host: &mut dyn Host) -> Result<(), FaultReport> {
+        self.check_bindings(compiled)?;
         compiled.runs.set(compiled.runs.get().saturating_add(1));
         let program = &compiled.program;
         let run = if self.threaded {
@@ -503,14 +543,16 @@ impl Context {
                 return Err(vec![diagnostic]);
             }
         }
-        Ok(Compiled::new(program))
+        Ok(Compiled::new(program, &self.hosts, &self.interner))
     }
 
     /// `compiled` as `.eits` text, with host functions named by this
     /// context's registry; [`Context::assemble`] turns it back into the
     /// same code. `None` when `compiled` kept no logical instructions: it
-    /// was compiled without [`Context::set_keep_ir`].
+    /// was compiled without [`Context::set_keep_ir`]. Also returns `None` if
+    /// this registry does not match the artifact's used host bindings.
     pub fn disassemble(&self, compiled: &Compiled, options: PrintOptions) -> Option<String> {
+        self.check_bindings(compiled).ok()?;
         let bodies = compiled.program.bodies.as_ref()?;
         let signatures = eitri_lower::host_signatures(&self.hosts);
         let hosts: Vec<HostDecl> = signatures
@@ -607,16 +649,54 @@ impl Context {
 /// of the context's scratch, so it can be executed any number of times.
 pub struct Compiled {
     program: Program,
+    host_bindings: Vec<HostBinding>,
     /// Executions so far, for [`Context::should_optimize`]. A `Cell`: the
     /// count changes while the code is shared for execution.
     runs: Cell<u32>,
     optimized: bool,
 }
 
+/// Only referenced host indexes, sorted and deduplicated. Owned spellings
+/// survive interner resets and destruction of the compiling context.
+struct HostBinding {
+    index: u32,
+    module: String,
+    name: String,
+    params: Vec<Ty>,
+    ret: Ty,
+}
+
 impl Compiled {
-    fn new(program: Program) -> Self {
+    fn new(program: Program, hosts: &Hosts, interner: &Interner) -> Self {
+        // S call sites: O(S log S) time and O(S) temporary space; retained
+        // metadata is O(U + name bytes + parameter types) for U used indexes.
+        let mut indices: Vec<u32> = program
+            .functions
+            .iter()
+            .flat_map(|f| &f.sites)
+            .filter_map(|site| match site.target {
+                CallTarget::Host(index) => Some(index),
+                CallTarget::Script(_) => None,
+            })
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        let host_bindings = indices
+            .into_iter()
+            .map(|index| {
+                let function = hosts.function(HostFnId::from_u32(index));
+                HostBinding {
+                    index,
+                    module: hosts.module(function.module).path.clone(),
+                    name: interner.resolve(function.name).to_owned(),
+                    params: function.params.clone(),
+                    ret: function.ret,
+                }
+            })
+            .collect();
         Compiled {
             program,
+            host_bindings,
             runs: Cell::new(0),
             optimized: false,
         }
@@ -648,22 +728,33 @@ impl Compiled {
 
     /// Bytes of everything else the functions carry: constants, call
     /// sites, literal types, instruction-start bits, source spans, names,
-    /// and signatures (heap parts only).
+    /// signatures, and recorded host bindings (heap parts only).
     pub fn metadata_bytes(&self) -> usize {
-        self.program
-            .functions
-            .iter()
-            .map(|f| {
-                size_of_val(&*f.consts)
-                    + size_of_val(&*f.sites)
-                    + size_of_val(&*f.literal_types)
-                    + size_of_val(&*f.starts)
-                    + size_of_val(&*f.spans)
-                    + f.name.len()
-                    + f.signature.params.len()
-                    + f.signature.results.len()
-            })
-            .sum()
+        self.host_bindings.capacity() * size_of::<HostBinding>()
+            + self
+                .host_bindings
+                .iter()
+                .map(|binding| {
+                    binding.module.capacity()
+                        + binding.name.capacity()
+                        + binding.params.capacity() * size_of::<Ty>()
+                })
+                .sum::<usize>()
+            + self
+                .program
+                .functions
+                .iter()
+                .map(|f| {
+                    size_of_val(&*f.consts)
+                        + size_of_val(&*f.sites)
+                        + size_of_val(&*f.literal_types)
+                        + size_of_val(&*f.starts)
+                        + size_of_val(&*f.spans)
+                        + f.name.len()
+                        + f.signature.params.len()
+                        + f.signature.results.len()
+                })
+                .sum::<usize>()
     }
 
     /// The largest frame, in 8-byte slots.
@@ -720,5 +811,9 @@ fn report(program: &Program, fault: Fault, hosts: &Hosts, interner: &Interner) -
         eitri_vm::FaultKind::Host(message) => message,
         kind => kind.message().to_owned(),
     };
-    FaultReport { message, trace }
+    FaultReport {
+        code: None,
+        message,
+        trace,
+    }
 }

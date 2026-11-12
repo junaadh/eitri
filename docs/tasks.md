@@ -1208,10 +1208,16 @@ data. These tasks do not authorize replacing the correctness baseline first.
   lowering, numeric, literal, frame-layout, or VM behavior changed.
   Remaining risks are explicitly recorded: no M0 memory/compiler-work quota,
   deterministic hash flooding, verifier block-by-frame growth, inspection-only
-  huge input/index limits, assembly span narrowing, trusted host result bits,
-  and the same-context artifact contract. Frame growth before call-limit checks
-  is left for coordination with T013/T014. T064 remains continuous; this is an
-  M0 review with recorded limitations, not a complete denial-of-service sandbox.
+  huge input/index limits, assembly span narrowing and trusted host result bits.
+  Finding 4 is fixed by enforcing same bindings: artifacts record only used host indexes with owned module/function
+  names and checked signatures; execution rejects registry mismatches with
+  typed E0003 before effects or run-count changes. Identically bound contexts
+  remain compatible (T023). Validation allocates nothing on success and costs
+  O(used bindings), including name bytes and signature parameters. Regression
+  tests cover mismatches and cross-context success for source/simple/assembly,
+  both interpreters and optimized artifacts. Frame growth before call-limit
+  checks is left for coordination with T013/T014. T064 remains continuous; this
+  is an M0 review with recorded limitations, not a complete denial-of-service sandbox.
 - M0 checks: locked workspace build, formatting check, Clippy with warnings
   denied, and workspace tests pass. Focused security (6), limits (5), fixture,
   diagnostics, lifecycle and verifier-memory tests pass. Seeded release fuzzing

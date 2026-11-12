@@ -33,6 +33,21 @@ match rt.run("init.eit", &std::fs::read_to_string("init.eit")?) {
 }
 ```
 
+## Current compiled artifacts
+
+The current `Context::compile`, `compile_simple` and `assemble` APIs produce
+owned artifacts. `Context::execute` requires **same bindings**, not same
+context: every host index used by an artifact must name the same module,
+function and checked signature in the destination registry. Other registrations
+are irrelevant. Compatible contexts can therefore share artifacts (T023 runtime
+templates), including after the original context is dropped. A mismatch returns
+`FaultReport` with typed `code: Some(Code::HostBindingMismatch)` (`E0003`) before
+execution, host calls or run-count changes. Runtime faults have `code: None`.
+The successful check takes O(used bindings), including name bytes and signature
+parameters, and allocates nothing. Host reentry stays within the validated
+program and borrowed registry. Optimization also rejects mismatched bindings;
+disassembly returns `None` for them.
+
 ## Threading
 
 `Runtime` is **thread-bound** in the first version: it is neither `Send` nor

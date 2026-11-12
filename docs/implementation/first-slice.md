@@ -270,6 +270,7 @@ memory (checked by T012).
 |---|---|
 | `E0001` | A language feature outside this slice. The message names the feature |
 | `E0002` | An implementation limit from [Resources](#resources) |
+| `E0003` | An artifact host index has a different binding in the destination registry |
 | `E0101` | Unexpected character, malformed literal, or unterminated comment or literal |
 | `E0102` | Syntax error: expected one thing, found another |
 | `E0201` | Unknown name |

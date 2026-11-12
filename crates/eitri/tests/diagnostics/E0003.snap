@@ -1,0 +1,13 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            HostBindingMismatch,
+        ),
+        message: "host binding at index 0 does not match `a.effect`",
+        labels: [],
+        notes: [],
+    },
+]
+
+error[E0003]: host binding at index 0 does not match `a.effect`

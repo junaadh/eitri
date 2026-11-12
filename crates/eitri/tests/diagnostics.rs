@@ -7,6 +7,13 @@ use std::{fs, path::Path};
 use eitri::Context;
 use eitri_diag::{Code, Diagnostic, Files, RenderOptions, Renderer, Severity};
 
+struct NoHost;
+impl eitri::Host for NoHost {
+    fn call(&mut self, _: &mut eitri::Call<'_, '_>, _: u32) -> Result<(), eitri::HostError> {
+        panic!("a rejected artifact must never call the host")
+    }
+}
+
 fn rejected(result: Result<eitri::Compiled, Vec<Diagnostic>>) -> Vec<Diagnostic> {
     match result {
         Err(diagnostics) => diagnostics,
@@ -37,11 +44,16 @@ fn every_supported_code_has_a_structured_and_terminal_snapshot() {
             Code::ArgumentCount => Some("reject/argument_count.eit"),
             Code::IfWithoutElse => Some("reject/if_value_without_else.eit"),
             Code::MissingReturn => Some("reject/missing_return.eit"),
-            Code::Limit | Code::AsmSyntax | Code::AsmMismatch | Code::AsmRejected => None,
+            Code::HostBindingMismatch
+            | Code::Limit
+            | Code::AsmSyntax
+            | Code::AsmMismatch
+            | Code::AsmRejected => None,
         };
         let (name, source) = match fixture {
             Some(path) => (path.to_owned(), fs::read_to_string(root.join("fixtures").join(path)).unwrap()),
             None => match code {
+                Code::HostBindingMismatch => ("binding.eit".into(), "import a from \"a\"\na.effect()\n".into()),
                 Code::Limit => ("nesting.eit".into(), format!("let x = {}1{}\n", "(".repeat(257), ")".repeat(257))),
                 Code::AsmSyntax => ("syntax.eits".into(), "bogus\n".into()),
                 Code::AsmMismatch => ("mismatch.eits".into(), "define void @<module>() frame(1) {\n    %r0 = ldi i64 100000\n    ret\n}\n".into()),
@@ -50,7 +62,19 @@ fn every_supported_code_has_a_structured_and_terminal_snapshot() {
             },
         };
         let mut context = Context::new();
-        let diagnostics = if name.ends_with(".eits") {
+        let diagnostics = if code == Code::HostBindingMismatch {
+            context
+                .register_host_module("a", "pub fn effect() -> void\n")
+                .unwrap();
+            let compiled = context.compile(&source).unwrap();
+            let mut other = Context::new();
+            vec![
+                other
+                    .execute(&compiled, &mut NoHost)
+                    .unwrap_err()
+                    .diagnostic(),
+            ]
+        } else if name.ends_with(".eits") {
             rejected(context.assemble(&source))
         } else {
             let diagnostics = rejected(context.compile(&source));

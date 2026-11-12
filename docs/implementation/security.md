@@ -17,9 +17,21 @@ registry and verifies every function before returning executable code.
 
 The embedding Rust host is trusted: it controls registration, limits, host
 implementations, compiled artifacts, and raw scalar argument/result slots.
-`Context::execute` requires code from the same context; this is documented,
-but is not enforced by a runtime identity. Passing code between registries
-can dispatch the wrong host index. Do not pass artifacts between contexts.
+Finding 4 is fixed: `Context::execute` enforces **same bindings**, rather
+than same context. An artifact owns the module path, function name and checked
+signature for each host index its code uses, sorted and deduplicated. Before
+execution, the destination registry must match every recorded index; a missing
+or different binding returns typed `Code::HostBindingMismatch` (`E0003`) in
+`FaultReport::code`, with no host calls, execution or run-count change.
+Identically bound contexts can share artifacts, as required by T023 templates;
+unreferenced registrations do not matter. Validation allocates nothing on
+success and takes O(used bindings), including name-byte and parameter comparisons.
+Compilation collects S call sites in O(S log S) time and O(S) temporary space;
+retained binding storage is O(used bindings + name bytes + parameter types).
+Reentry borrows the already validated program and registry, so it cannot switch
+bindings. Optimization and disassembly also reject incompatible registries.
+The security tests cover wrong module/name/signature, missing indexes, matching
+registries, dropped origin contexts, both lowerings, assembly and both tiers.
 The low-level bytecode/VM APIs likewise require callers to validate code;
 unverified execution can panic or abort. They are not an untrusted loader.
 
@@ -91,8 +103,9 @@ Follow-up work:
 - T064: bound verification state/work and compiler hash-collision work;
   validate source-size/index-width handling in `.eits`. Huge-input and
   distinct-index limits remain inspection-only in this review.
-- T010/T024/T064: enforce or strengthen the same-context compiled-artifact
-  contract and host scalar result validation before broadening host values.
+- T010/T024/T064: strengthen host scalar result validation before broadening
+  host values. The compiled-artifact binding mismatch (finding 4) is fixed
+  by the same-bindings check described above.
 - T013/T014 coordination finding: threaded `CALL.SCRIPT` grows frame/slot
   storage before checking fuel/depth; a refused call can therefore allocate.
   Record frame-byte/growth policy with the other agent rather than changing
@@ -140,5 +153,7 @@ interrupted in expensive scalar-classifier/parser stress cases; these were
 not passing full runs. The native workspace suite includes those cases.
 Raw command output for this review is retained with the T064 handoff report
 at `/tmp/codex-eitri-par-T064.md` and its neighboring logs. No production
-execution-path change was made, so no new latency/memory improvement is
-claimed and the performance harness rerun is not required for this change.
+execution-path change was made in the original review. The finding 4 fix adds
+binding metadata and validation; its check results and performance samples are
+recorded separately in `/tmp/orchestra/eitri-2-done.md`. No latency or memory
+improvement is claimed.

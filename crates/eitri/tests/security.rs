@@ -176,3 +176,84 @@ fn caught_reentry_fault_does_not_reset_budget() {
         assert_eq!(fault.message, "execution budget exhausted");
     }
 }
+
+#[test]
+fn foreign_artifact_is_rejected_before_host_dispatch() {
+    let mut a = Context::new();
+    a.register_host_module("a", "pub fn effect() -> void\n")
+        .unwrap();
+    let compiled = a.compile("import a from \"a\"\na.effect()\n").unwrap();
+    let mut b = Context::new();
+    b.register_host_module("b", "pub fn unrelated() -> void\n")
+        .unwrap();
+    assert_eq!(a.host_index("a", "effect"), b.host_index("b", "unrelated"));
+    let mut host = Calls::default();
+    let error = b.execute(&compiled, &mut host).unwrap_err();
+    assert_eq!(error.code, Some(Code::HostBindingMismatch));
+    assert_eq!(error.diagnostic().code, Some(Code::HostBindingMismatch));
+    assert!(error.trace.is_empty());
+    assert_eq!(host.0, 0);
+    assert_eq!(compiled.runs(), 0);
+    a.execute(&compiled, &mut host).unwrap();
+    assert_eq!(host.0, 1);
+}
+
+#[test]
+fn artifacts_require_same_used_bindings_not_same_context() {
+    let source = "import a from \"a\"\na.effect()\na.effect()\n";
+    let mut a = Context::new();
+    a.set_keep_ir(true);
+    a.register_host_module("a", "pub fn effect() -> void\n")
+        .unwrap();
+    a.register_host_module("unused", "pub fn other() -> void\n")
+        .unwrap();
+    let normal = a.compile(source).unwrap();
+    let simple = a.compile_simple(source).unwrap();
+    let text = a
+        .disassemble(&normal, eitri::PrintOptions::default())
+        .unwrap();
+    let assembled = a.assemble(&text).unwrap();
+    let mut b = Context::new();
+    b.register_host_module("a", "pub fn effect() -> void\n")
+        .unwrap();
+    let mut wrong = Context::new();
+    wrong
+        .register_host_module("a", "pub fn effect(x: i64) -> void\n")
+        .unwrap();
+    let mut wrong_result = Context::new();
+    wrong_result
+        .register_host_module("a", "pub fn effect() -> i64\n")
+        .unwrap();
+    let mut wrong_name = Context::new();
+    wrong_name
+        .register_host_module("a", "pub fn other() -> void\n")
+        .unwrap();
+    let mut empty = Context::new();
+    let mut host = Calls::default();
+    // Metadata is owned: it remains valid after the compiling context dies.
+    drop(a);
+    for mut compiled in [normal, simple, assembled] {
+        for optimized in [false, true] {
+            if optimized {
+                b.optimize_kept(&mut compiled).unwrap();
+            }
+            for threaded in [false, true] {
+                b.set_threaded(threaded);
+                let before = host.0;
+                b.execute(&compiled, &mut host).unwrap();
+                assert_eq!(host.0, before + 2);
+                let runs = compiled.runs();
+                for context in [&mut wrong, &mut wrong_result, &mut wrong_name, &mut empty] {
+                    context.set_threaded(threaded);
+                    let error = context.execute(&compiled, &mut host).unwrap_err();
+                    assert_eq!(error.code, Some(Code::HostBindingMismatch));
+                    assert_eq!(compiled.runs(), runs);
+                    assert_eq!(host.0, before + 2);
+                }
+            }
+        }
+    }
+    // Code without host calls imposes no registry requirement.
+    let plain = b.compile("let x = 1\n").unwrap();
+    empty.execute(&plain, &mut host).unwrap();
+}
