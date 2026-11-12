@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            AssignToImmutable,
+        ),
+        message: "cannot assign to `x`: it is not a `var` binding",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 10,
+                    end: 11,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0303]: cannot assign to `x`: it is not a `var` binding
+  ╭─ reject/assign_to_let.eit:2:1
+  │
+2 │ x = 2
+  │ ^

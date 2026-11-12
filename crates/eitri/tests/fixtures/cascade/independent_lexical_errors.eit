@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+test.emit(99)
+$
+let intact = 1
+$
+let later = unknown

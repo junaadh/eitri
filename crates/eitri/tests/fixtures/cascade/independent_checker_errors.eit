@@ -1,0 +1,11 @@
+//! host: test
+import test from "test"
+test.emit(99)
+let bad: i64 = true
+let reuse = bad + 1
+let first = unknown
+let second = unknown + 1
+let fixed = 1
+fixed = 2
+fn needs() -> i64 {
+}

@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            Lexical,
+        ),
+        message: "malformed integer literal",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 8,
+                    end: 13,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0101]: malformed integer literal
+  ╭─ reject/malformed_literal.eit:1:9
+  │
+1 │ let x = 0b102
+  │         ^^^^^

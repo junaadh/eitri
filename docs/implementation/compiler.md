@@ -152,3 +152,17 @@ for them.
 
 The host receives the same diagnostics as structured data: severity, code,
 message, and source ranges.
+
+For M0, the [diagnostic catalog](first-slice.md#diagnostic-codes) is generated
+from `eitri_diag::Code::ALL`; E0204 remains reserved for T022. Tests snapshot
+actual diagnostics for every supported code as both structured host data and
+default terminal text. Separate renderer snapshots cover the display options.
+The existing source fixtures cover individual mistakes and cascades; combined
+lexical, parser, and checker cases assert independent errors once, in source
+order, and zero host effects even after an earlier host-call statement.
+
+The context retains at most 100 diagnostics for a submission. Boundary tests
+exercise 99, 100, 101, and 300 independent mistakes in each frontend stage and
+then compile valid source in the same context. The cap bounds stored reports;
+it does not limit source size or claim that scanning/checking stops at the
+100th error. Rendering and recovery remain off the successful execution path.

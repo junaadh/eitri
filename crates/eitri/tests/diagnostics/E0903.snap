@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            AsmRejected,
+        ),
+        message: "`<module>` is rejected by the verifier: pc 0: slot r0 may be read before it is written",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 39,
+                    end: 63,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0903]: `<module>` is rejected by the verifier: pc 0: slot r0 may be read before it is written
+  ╭─ uninitialized.eits:2:5
+  │
+2 │     %r0 = add.chk.s %r0, %r0
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^

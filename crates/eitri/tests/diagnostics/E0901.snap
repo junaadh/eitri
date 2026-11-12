@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            AsmSyntax,
+        ),
+        message: "expected `declare` or `define`, found `bogus`",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 0,
+                    end: 5,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0901]: expected `declare` or `define`, found `bogus`
+  ╭─ syntax.eits:1:1
+  │
+1 │ bogus
+  │ ^^^^^

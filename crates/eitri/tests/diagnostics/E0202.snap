@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            DuplicateName,
+        ),
+        message: "duplicate function `f`",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 22,
+                    end: 23,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0202]: duplicate function `f`
+  ╭─ reject/duplicate_function.eit:3:4
+  │
+3 │ fn f() -> void {
+  │    ^

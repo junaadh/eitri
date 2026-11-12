@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            TypeMismatch,
+        ),
+        message: "type mismatch: expected `i64`, found `bool`",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 27,
+                    end: 32,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0301]: type mismatch: expected `i64`, found `bool`
+  ╭─ reject/argument_type.eit:3:3
+  │
+3 │ f(false)
+  │   ^^^^^

@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            UnresolvedImport,
+        ),
+        message: "unresolved import `test`",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 17,
+                    end: 23,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0205]: unresolved import `test`
+  ╭─ reject/unregistered_import.eit:1:18
+  │
+1 │ import test from "test"
+  │                  ^^^^^^

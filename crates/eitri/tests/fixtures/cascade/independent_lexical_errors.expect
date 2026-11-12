@@ -1,0 +1,2 @@
+error[E0101] 53..54: unexpected character `$`
+error[E0101] 70..71: unexpected character `$`

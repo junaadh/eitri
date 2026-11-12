@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            TypeNameAsName,
+        ),
+        message: "`i64` is a type name and cannot be used as a name",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 4,
+                    end: 7,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0203]: `i64` is a type name and cannot be used as a name
+  ╭─ reject/type_name_as_binding.eit:1:5
+  │
+1 │ let i64 = 1
+  │     ^^^

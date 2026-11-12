@@ -9,7 +9,7 @@ program the slice already accepts.
 
 The [fixture corpus](../../crates/eitri/tests/fixtures/) is the executable
 form of this chapter. Fixtures for behavior that does not execute yet carry
-a `pending` directive (see the [root README](../../README.md#fixture-harness)).
+a `pending` directive (see the [root README](../../README.md#fixtures)).
 
 ## Types
 
@@ -238,6 +238,8 @@ memory (checked by T012).
 
 ## Diagnostic codes
 
+<!-- BEGIN GENERATED DIAGNOSTIC CATALOG -->
+
 | Code | Meaning |
 |---|---|
 | `E0001` | A language feature outside this slice. The message names the feature |
@@ -258,11 +260,18 @@ memory (checked by T012).
 | `E0902` | `.eits` that contradicts its program: an unknown or duplicate name, a mismatched type, slot, frame size, or encoding, or an unregistered host function |
 | `E0903` | Bytecode the verifier rejects |
 
+<!-- END GENERATED DIAGNOSTIC CATALOG -->
+
 `E0204` is reserved for the initialization-order diagnostic in
 [Compiler: diagnostics](compiler.md#diagnostics). The single source of
-truth is the `Code` catalog in `crates/eitri-diag/src/codes.rs`; a test keeps
-this table identical to it, and T047 generates the published catalog from
-it.
+truth is the `Code` catalog in `crates/eitri-diag/src/codes.rs`. The marked
+table is generated from `Code::ALL`; ordinary tests check it without writing.
+To regenerate it explicitly, then review the diff:
+
+```sh
+cargo run --locked -p eitri-diag --example diagnostic_catalog -- --write
+cargo run --locked -p eitri-diag --example diagnostic_catalog -- --check
+```
 
 ## Error reporting and cascades
 

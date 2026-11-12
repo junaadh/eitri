@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            Syntax,
+        ),
+        message: "comparison operators cannot be chained",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 14,
+                    end: 15,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0102]: comparison operators cannot be chained
+  ╭─ reject/chained_comparison.eit:1:15
+  │
+1 │ let x = 1 < 2 < 3
+  │               ^

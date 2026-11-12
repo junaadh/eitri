@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            ArgumentCount,
+        ),
+        message: "`add` takes 2 arguments, found 1",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 59,
+                    end: 65,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0304]: `add` takes 2 arguments, found 1
+  ╭─ reject/argument_count.eit:4:9
+  │
+4 │ let x = add(1)
+  │         ^^^^^^

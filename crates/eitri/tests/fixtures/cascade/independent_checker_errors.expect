@@ -1,0 +1,4 @@
+error[E0301] 68..72: type mismatch: expected `i64`, found `bool`
+error[E0201] 105..112: unknown name `unknown`
+error[E0303] 152..157: cannot assign to `fixed`: it is not a `var` binding
+error[E0402] 165..170: function `needs` may finish without returning a value

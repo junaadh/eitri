@@ -480,6 +480,7 @@ cargo test --locked --workspace
 cargo test --locked -p eitri --test fixtures
 cargo test --locked -p eitri --test differential
 cargo test --locked -p eitri --test eits
+python3 tools/check_doc_links.py
 ```
 
 The golden `.eits` listings of the benchmark workloads
@@ -489,6 +490,29 @@ update:
 ```sh
 EITRI_BLESS=1 cargo test --locked -p eitri --test eits golden
 ```
+
+T047's diagnostic snapshots (`crates/eitri/tests/diagnostics/`) cover every
+supported code using actual frontend/assembler diagnostics. They record the
+structured host data and terminal rendering; source cases reuse the fixture
+corpus. Existing renderer tests separately cover ASCII, colors, multiple
+files, notes, and layout boundaries. Normal tests never rewrite snapshots.
+Update explicitly, then review every changed snapshot:
+
+```sh
+EITRI_BLESS=1 cargo test --locked -p eitri --test diagnostics every_supported_code
+```
+
+The diagnostic catalog in the first-slice chapter is generated from
+`eitri_diag::Code::ALL`. To update or check it without rewriting other text:
+
+```sh
+cargo run --locked -p eitri-diag --example diagnostic_catalog -- --write
+cargo run --locked -p eitri-diag --example diagnostic_catalog -- --check
+```
+
+`python3 tools/check_doc_links.py` checks local Markdown targets and heading
+fragments in AGENTS.md, README.md, and the documentation tree. It skips fenced
+examples and external URLs; it does not fetch network resources.
 
 Stress the differential test with more random programs, or rerun one case
 and print its source:

@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+test.emit(99)
+let first = 1 +
+let intact = 2
+let second = 3 +
+let next = 4

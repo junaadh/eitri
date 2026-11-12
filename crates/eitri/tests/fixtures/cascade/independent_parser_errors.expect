@@ -1,0 +1,2 @@
+error[E0102] 69..72: expected an expression, found `let`
+error[E0102] 101..104: expected an expression, found `let`

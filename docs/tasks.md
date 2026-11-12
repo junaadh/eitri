@@ -1,6 +1,6 @@
 # Implementation tasks
 
-Status: T001–T012, T045, and T046 are complete; T047 is in progress.
+Status: T001–T012 and T045–T047 are complete; the M0 gate is closed.
 Source now runs end to end: lex, parse, check, lower, verify (debug builds),
 and interpret.
 Unchecked boxes describe work still to do. This is the executable work breakdown for the
@@ -563,7 +563,7 @@ concurrent implementation.
 
 ### T047 — Implement structured diagnostics and error recovery
 
-- [ ] Depends on: T008.
+- [x] Depends on: T008.
 - Refs: [Compiler: diagnostics](implementation/compiler.md#diagnostics).
 - Give each diagnostic a stable code (`E0204`), severity, message, and
   source ranges; render the documented terminal form and hand the host the
@@ -589,6 +589,35 @@ concurrent implementation.
   lexer, parser, and checker, with the cascade rules in the first-slice
   chapter and 22 `cascade/` fixtures of half-typed programs. Remaining:
   snapshot coverage of every code and the generated catalog.
+
+- Completed 2026-11-12 (step 2, with T065): snapshots of real compiler and
+  assembler diagnostics cover all 17 supported codes, including severity,
+  messages, source labels/ranges, and default terminal output. Source cases
+  reuse T045 fixtures; E0204 stays reserved for T022. The snapshot test
+  rejects drift and orphan files; updates require explicit `EITRI_BLESS=1`.
+  Three new combined-error fixtures exercise lexical, parser, and checker
+  recovery in source order with no duplicate cascades or prior host effects.
+  Boundary tests store at most 100 reports for 1/99/100/101/300 independent
+  mistakes per stage and successfully reuse the context afterwards.
+- Checks: `cargo build --locked --workspace`, `cargo fmt --all --check`,
+  `cargo clippy --locked --workspace --all-targets -- -D warnings`, and
+  `cargo test --locked --workspace` pass. Focused renderer/catalog tests
+  and `cargo test --locked -p eitri --test diagnostics --test fixtures
+  --test lifecycle -- --nocapture` pass: 17 code snapshots, 127 fixtures
+  (0 pending), and stable lifecycle storage. The 21 existing renderer
+  snapshots still cover display variants and layout boundaries.
+- The first-slice catalog is generated from `Code::ALL` with
+  `cargo run --locked -p eitri-diag --example diagnostic_catalog -- --write`;
+  its `--check` mode and ordinary tests detect drift without writing.
+  Generator tests enforce one marker pair and preserve surrounding text.
+  Deliberately stale catalog/snapshot controls fail as expected, then are
+  restored. `python3 tools/check_doc_links.py` passes for local Markdown
+  targets/fragments; one stale README fixture anchor was corrected. See the
+  [T047/T065 ledger](implementation/vm-research.md#t047t065-diagnostic-snapshots-generated-catalog-and-m0-documentation--2026-11-12).
+  No compiler/runtime/renderer implementation, supported syntax, diagnostic
+  code, or message changed. T011 was not rerun because the source-to-result
+  path is unchanged; the T009/T010/T012 baseline remains the latest result.
+  No new unsafe or dependency; no open specification question was needed.
 
 **M0 exit:** a usable measured scalar slice. Completing all 163 operations,
 the collector, the editor config, or a native backend is not an M0 dependency.
@@ -1160,6 +1189,16 @@ data. These tasks do not authorize replacing the correctness baseline first.
 - Done when (each milestone exit): no chapter describes behavior the
   implementation contradicts, and the internal link check passes.
 
+- M0 exit check 2026-11-12 (T047 step 2): the diagnostic catalog now has
+  explicit generation/check commands and snapshot updates require review.
+  M0 diagnostic/recovery documentation reflects the existing implementation;
+  `python3 tools/check_doc_links.py` checks local inline Markdown links and
+  ATX-heading fragments across AGENTS.md, README.md, and docs. External URLs
+  and fenced examples are excluded. The checker catches deliberately broken
+  target/fragment controls and accepts duplicate-heading fragments. T065
+  remains continuous for later milestones; no future language features are
+  claimed implemented by this gate.
+
 ## Traceability
 
 ### Ledger decisions and experiments
@@ -1233,6 +1272,5 @@ a debugger with breakpoints (T055); a mandatory native tier (T043).
 
 ## Immediate next task
 
-**T047 — finish structured diagnostic coverage and the generated catalog**,
-then **T013 — complete scalar representations and conversions**. T009, T010,
-and T012 are complete; T047 still gates the M0 exit.
+**T013 — complete scalar representations and conversions**. The M0 gate,
+including T047's diagnostic coverage and generated catalog, is complete.

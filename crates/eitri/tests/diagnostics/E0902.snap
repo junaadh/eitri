@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            AsmMismatch,
+        ),
+        message: "this value loads with `ldk`, not `ldi`",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 53,
+                    end: 59,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0902]: this value loads with `ldk`, not `ldi`
+  ╭─ mismatch.eits:2:19
+  │
+2 │     %r0 = ldi i64 100000
+  │                   ^^^^^^

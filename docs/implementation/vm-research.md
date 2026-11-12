@@ -1410,6 +1410,62 @@ environment details are retained in `target/bench-results/t009-step1/`
 report are `/tmp/codex-eitri-step1/*.log` and
 `/tmp/codex-eitri-step1.md`. No goldens were rewritten.
 
+### T047/T065: diagnostic snapshots, generated catalog, and M0 documentation — 2026-11-12
+
+**Scope and decision.** Close T047's remaining coverage/catalog checks using
+actual diagnostics and explicit documentation generation. Runtime/compiler/
+renderer implementations, accepted syntax, code assignments, and messages
+are unchanged. There is no additional success-path work, state, scratch,
+unsafe code, or dependency. `E0204` remains reserved for T022; this does not
+implement T023's declaration-validation mode or any future declaration type.
+
+**Checks.** Seventeen reviewed snapshots cover every supported code's
+structured host data and terminal rendering. Thirteen reuse the existing
+source fixture corpus; one generated nesting-limit source and three invalid
+`.eits` inputs exercise implementation-limit and assembler/verifier codes.
+Missing/drifted/orphan snapshots fail; updates require the documented
+`EITRI_BLESS=1` command. Existing renderer snapshots cover Unicode/ASCII,
+colors, short/medium styles, notes, multiple files, multiline labels, and
+source-boundary cases. Three combined source fixtures report independent
+lexical/parser/checker mistakes once, in source order, with zero host effects.
+Existing cascade fixtures still pass. Additional tests check stored reports
+at 1/99/100/101/300 errors in each stage and valid compilation after reuse.
+This is regression coverage, not a proof of cascade freedom for every input.
+
+The catalog generator reads `Code::ALL` and updates only the marked section
+of the first-slice chapter. Ordinary tests and `--check` are read-only;
+`--write` is explicit. Tests cover stale content, marker validation,
+idempotence, and preserved surrounding text. A local link checker was added
+for T065's M0-exit check; it validates inline Markdown file/heading links,
+including duplicate headings, excluding fenced examples and external URLs.
+It found one stale README fixture fragment, now corrected. It is not a full
+Markdown parser or a network URL check. Negative controls deliberately stale
+the catalog and one snapshot and break links; each is rejected as expected,
+then the modified tracked files are restored byte-for-byte.
+
+Exact passing commands:
+
+```sh
+cargo build --locked --workspace
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+cargo test --locked -p eitri-diag --test catalog --test render -- --nocapture
+cargo test --locked -p eitri --test diagnostics --test fixtures --test lifecycle -- --nocapture
+cargo run --locked -p eitri-diag --example diagnostic_catalog -- --check
+python3 tools/check_doc_links.py
+```
+
+The catalog contains 17 codes; all 127 source fixtures pass with 0 pending.
+Full command output, snapshot-generation and expected-failure control logs,
+and the review summary are in `/tmp/codex-eitri-step2/` and
+`/tmp/codex-eitri-step2.md`. Base commit: `3ac033c` (step 1).
+T011 was not rerun: changes are confined to tests, documentation, and
+explicit development tools, with no source-to-result-path implementation
+change. No new performance or allocation result is claimed; step 1 remains
+the latest measured baseline, including its missed small-module target.
+No coverage-guided fuzzer, Miri, or sanitizer was run for this step.
+
 ### R31: Where compilers use arenas
 
 V8 allocates parser AST nodes in a `Zone` and frees the tree in one step

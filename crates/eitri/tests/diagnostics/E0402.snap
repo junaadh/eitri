@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            MissingReturn,
+        ),
+        message: "function `f` may finish without returning a value",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 3,
+                    end: 4,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0402]: function `f` may finish without returning a value
+  ╭─ reject/missing_return.eit:1:4
+  │
+1 │ fn f(n: i64) -> i64 {
+  │    ^

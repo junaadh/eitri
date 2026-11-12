@@ -1,30 +1,38 @@
-//! The code catalog and the specification's code table must agree, so the
-//! documentation stays true as codes are added.
+//! Generation is explicit; ordinary tests only check for drift.
 
-use eitri_diag::Code;
+#[path = "../tools/catalog.rs"]
+mod catalog;
 
 #[test]
-fn catalog_matches_the_first_slice_table() {
-    let path = concat!(
+fn generated_catalog_matches_the_first_slice() {
+    let doc = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../docs/implementation/first-slice.md"
+    ))
+    .unwrap();
+    assert_eq!(
+        doc,
+        catalog::replace(&doc).unwrap(),
+        "run cargo run --locked -p eitri-diag --example diagnostic_catalog -- --write and review"
     );
-    let doc = std::fs::read_to_string(path).unwrap();
-    let section = doc
-        .split("## Diagnostic codes")
-        .nth(1)
-        .expect("the chapter has a diagnostic code table");
-    let documented: Vec<(String, String)> = section
-        .lines()
-        .filter_map(|line| {
-            let rest = line.strip_prefix("| `E")?;
-            let (number, meaning) = rest.split_once("` | ")?;
-            Some((format!("E{number}"), meaning.strip_suffix(" |")?.to_owned()))
-        })
-        .collect();
-    let catalog: Vec<(String, String)> = Code::ALL
-        .iter()
-        .map(|code| (code.to_string(), code.summary().to_owned()))
-        .collect();
-    assert_eq!(catalog, documented);
+}
+
+#[test]
+fn generation_preserves_surrounding_text_and_requires_one_marker_pair() {
+    let document = format!(
+        "before\n{}\nstale\n{}\nafter\n",
+        catalog::START,
+        catalog::END
+    );
+    let generated = catalog::replace(&document).unwrap();
+    assert_eq!(generated, format!("before\n{}\nafter\n", catalog::table()));
+    assert_eq!(catalog::replace(&generated).unwrap(), generated);
+    for invalid in [
+        "".to_owned(),
+        catalog::START.to_owned(),
+        format!("{}{}", catalog::END, catalog::START),
+        format!("{document}{document}"),
+    ] {
+        assert!(catalog::replace(&invalid).is_err(), "{invalid}");
+    }
 }
