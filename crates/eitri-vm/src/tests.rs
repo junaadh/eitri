@@ -665,3 +665,126 @@ fn bool_not_and_tests() {
         [10]
     );
 }
+
+/// Private-field capacity probes keep this regression entirely test-only.
+fn storage_capacities(scratch: &VmScratch) -> (usize, usize) {
+    (scratch.slots.capacity(), scratch.frames.capacity())
+}
+
+fn limited_call_program(reentry: bool) -> IndexVec<FunctionId, Function> {
+    let call = if reentry {
+        "declare void @host.enter()\n"
+    } else {
+        ""
+    };
+    let target = if reentry { "host.enter" } else { "large" };
+    let kind = if reentry { "host" } else { "script" };
+    let text = format!(
+        "{call}define void @<module>() frame(0) {{\ncall.{kind} void @{target}()\nret\n}}\n\
+         define void @large() frame(1024) {{ %r1023 = ldi i64 0\nret }}\n"
+    );
+    let parsed = eitri_bytecode::text::parse(&text).unwrap();
+    let functions = IndexVec::from_raw(parsed.functions);
+    let signatures = IndexVec::from_raw(functions.iter().map(|f| f.signature.clone()).collect());
+    for function in functions.iter() {
+        verify(
+            function,
+            &Callees {
+                functions: &signatures,
+                hosts: &[sig(&[], &[])],
+            },
+        )
+        .unwrap();
+    }
+    functions
+}
+
+#[test]
+fn refused_script_calls_do_not_grow_storage() {
+    let functions = limited_call_program(false);
+    for run in [run, run_threaded] {
+        for (budget, depth, expected) in [
+            (1, 0, FaultKind::Depth),
+            (0, 1, FaultKind::Budget),
+            (0, 0, FaultKind::Budget),
+        ] {
+            // Exercise slot growth, frame growth, and both independently.
+            for (slots, frames) in [(1, 0), (2048, 0), (1, 1)] {
+                let mut scratch = VmScratch {
+                    slots: Vec::with_capacity(slots),
+                    frames: Vec::with_capacity(frames),
+                };
+                let before = storage_capacities(&scratch);
+                let fault = run(
+                    &functions,
+                    FunctionId::from_u32(0),
+                    &[],
+                    &mut Recorder::default(),
+                    Limits { budget, depth },
+                    &mut scratch,
+                )
+                .unwrap_err();
+                assert_eq!(fault.kind, expected);
+                assert_eq!(storage_capacities(&scratch), before);
+                assert_eq!(fault.trace.len(), 1);
+                assert_eq!(pc(&fault.trace[0]), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn refused_reentry_does_not_grow_storage_or_refund_fuel() {
+    struct Reenter {
+        expected: FaultKind,
+        remaining: u64,
+        calls: usize,
+    }
+    impl Host for Reenter {
+        fn call(&mut self, cx: &mut Call<'_, '_>, _: u32) -> Result<(), HostError> {
+            let function = cx.function("large").unwrap();
+            let before = (cx.machine.slots.capacity(), cx.machine.frames.capacity());
+            let error = cx
+                .call(&mut Recorder::default(), function, &[], &mut [])
+                .unwrap_err();
+            assert_eq!(error.kind, self.expected);
+            assert_eq!(cx.machine.budget, self.remaining);
+            assert_eq!(
+                (cx.machine.slots.capacity(), cx.machine.frames.capacity()),
+                before
+            );
+            // A depth refusal spends its debit; catching it cannot restore fuel.
+            let error = cx
+                .call(&mut Recorder::default(), function, &[], &mut [])
+                .unwrap_err();
+            assert_eq!(error.kind, FaultKind::Budget);
+            assert_eq!(
+                (cx.machine.slots.capacity(), cx.machine.frames.capacity()),
+                before
+            );
+            self.calls += 1;
+            Ok(())
+        }
+    }
+    let functions = limited_call_program(true);
+    for run in [run, run_threaded] {
+        for (budget, depth, expected) in [(2, 0, FaultKind::Depth), (1, 1, FaultKind::Budget)] {
+            let mut host = Reenter {
+                expected,
+                remaining: 0,
+                calls: 0,
+            };
+            let mut scratch = VmScratch::new();
+            run(
+                &functions,
+                FunctionId::from_u32(0),
+                &[],
+                &mut host,
+                Limits { budget, depth },
+                &mut scratch,
+            )
+            .unwrap();
+            assert_eq!(host.calls, 1);
+        }
+    }
+}

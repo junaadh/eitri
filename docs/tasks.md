@@ -1215,9 +1215,15 @@ data. These tasks do not authorize replacing the correctness baseline first.
   remain compatible (T023). Validation allocates nothing on success and costs
   O(used bindings), including name bytes and signature parameters. Regression
   tests cover mismatches and cross-context success for source/simple/assembly,
-  both interpreters and optimized artifacts. Frame growth before call-limit
-  checks is left for coordination with T013/T014. T064 remains continuous; this
-  is an M0 review with recorded limitations, not a complete denial-of-service sandbox.
+  both interpreters and optimized artifacts. Finding 6 is fixed: threaded
+  call growth checks fuel/depth before changing slot/frame storage, with the
+  hot path unchanged and debit/fault precedence preserved. Switch execution
+  and host reentry were already ordered correctly. VM unit tests probe private
+  capacities on both interpreters for denied depth/fuel calls and host reentry;
+  caught refusals preserve spent fuel. T011 before/after measurements and check
+  results are recorded in `/tmp/orchestra/eitri-3-done.md`. T064 remains
+  continuous; this is an M0 review with recorded limitations, not a complete
+  denial-of-service sandbox.
 - M0 checks: locked workspace build, formatting check, Clippy with warnings
   denied, and workspace tests pass. Focused security (6), limits (5), fixture,
   diagnostics, lifecycle and verifier-memory tests pass. Seeded release fuzzing

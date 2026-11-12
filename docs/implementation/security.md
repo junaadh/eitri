@@ -106,10 +106,16 @@ Follow-up work:
 - T010/T024/T064: strengthen host scalar result validation before broadening
   host values. The compiled-artifact binding mismatch (finding 4) is fixed
   by the same-bindings check described above.
-- T013/T014 coordination finding: threaded `CALL.SCRIPT` grows frame/slot
-  storage before checking fuel/depth; a refused call can therefore allocate.
-  Record frame-byte/growth policy with the other agent rather than changing
-  VM layouts or call semantics in this worktree.
+- Finding 6 is fixed: threaded `CALL.SCRIPT` checks fuel and depth in its
+  cold growth handler before resizing slots or reserving frames. An admitted
+  call retries the unchanged hot handler, which debits once; a depth refusal
+  debits before faulting, while exhausted fuel takes precedence. The switch
+  interpreter and host reentry already checked limits before storage growth
+  and needed no execution changes. VM unit tests use private, test-only slot
+  and frame capacity probes: denied depth/fuel calls preserve both capacities
+  on both interpreters, including independent slot/frame growth pressure.
+  Reentry tests also cover catching refusal and preservation of spent fuel.
+  Frame-byte quotas remain deferred; this fix does not change VM layouts.
 
 These are implementation/hardening findings, not unsettled language choices.
 No specification decision was needed for this review.

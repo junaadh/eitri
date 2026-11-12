@@ -523,7 +523,8 @@ extern "rust-preserve-none" fn call_host(
 
 /// `CALL.SCRIPT`. The fast path makes no call: growth of the slot or
 /// frame stack is handed to the cold `grow` handler, which re-executes this
-/// instruction; nothing observable (the budget) has changed by then.
+/// instruction. The cold handler rejects exhausted fuel/depth before growth;
+/// an admitted call is debited once, when this handler retries it.
 extern "rust-preserve-none" fn call_script(
     code: &[u32],
     pc: usize,
@@ -584,16 +585,25 @@ extern "rust-preserve-none" fn call_script(
     next!(code, 0, callee_s, size, st)
 }
 
-/// Cold: make room for a call, then execute it again.
+/// Cold: check limits before making room for a call, then execute it again.
+/// The fast path is unchanged. On success the retry debits fuel; a depth
+/// refusal must spend its debit here, in the same order as the fast path.
 #[cold]
 extern "rust-preserve-none" fn grow(
     code: &[u32],
     pc: usize,
     word: u32,
-    _: *mut u64,
+    s: *mut u64,
     len: usize,
     st: &mut State<'_>,
 ) {
+    if st.m.budget == 0 {
+        fail!(code, pc, word, s, len, st, FaultKind::Budget)
+    }
+    if st.m.frames.len() as u32 >= st.m.depth {
+        st.m.budget -= 1;
+        fail!(code, pc, word, s, len, st, FaultKind::Depth)
+    }
     let site = st.function.sites[(word >> 16) as usize];
     let CallTarget::Script(callee) = site.target else {
         unreachable!("the verifier matches the opcode to the target");
