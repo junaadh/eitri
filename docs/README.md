@@ -64,6 +64,7 @@ Decisions with their rationale and rejected alternatives.
 | [C API](implementation/c-api.md) | `eitri.h`, the stable ABI: status codes, accessors, `eitri-bindgen` |
 | [Identity and hashing](implementation/identity.md) | Hashing invariants, the first implementation, generated equality, map representations, experiments |
 | [Performance goals](implementation/performance.md) | What is measured and how |
+| [Security review](implementation/security.md) | M0 trust boundaries, resource coverage, unsafe audit, and deferred risks (T064) |
 
 ## Status
 

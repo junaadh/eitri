@@ -1,7 +1,8 @@
 //! The Fx hash (from Firefox and rustc): one multiply per word. Fast for the
-//! short keys a compiler hashes (spellings, ids) and adequate because the
-//! inputs are not adversarial hash-flooding targets: collisions cost probe
-//! length, never correctness, since every lookup compares the key.
+//! short keys a compiler hashes (spellings, ids). It is deterministic and
+//! does not resist adversarial hash flooding: collisions can cause excessive
+//! probe work, though every lookup compares the key for correctness. T064's
+//! security review records this unbounded compiler-work risk.
 
 use std::hash::{BuildHasherDefault, Hasher};
 

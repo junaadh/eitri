@@ -1,0 +1,3 @@
+//! depth: 0
+fn f() -> void {}
+f()

@@ -1,0 +1,7 @@
+//! budget: 0
+//! depth: 0
+var x = 1
+x += 2
+if x == 3 {
+    x = 4
+}

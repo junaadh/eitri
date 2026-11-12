@@ -8,6 +8,11 @@ how values cross the boundary, and what each side may rely on. The
 [Rust API](rust-api.md) and the [C API](c-api.md) are two spellings of the
 same operations.
 
+For the implemented M0 surface, see the [security review](security.md):
+`Context` currently provides fuel and frame-depth limits, but no memory
+quota, custom allocator, cleanup reserve, tasks, or C ABI. The facilities
+below describe the broader embedding design.
+
 ## Runtimes
 
 - A **runtime** is an isolated instance. Two runtimes share no script state.

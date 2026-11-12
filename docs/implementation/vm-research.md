@@ -665,6 +665,20 @@ could be lifted later by lazy instantiation.
 
 ## Experiment results
 
+### T064 M0 security review — 2026-11-12
+
+The [security audit](security.md) retains the scalar execution design and
+records its trust/denial-of-service limits. No execution-path optimization
+was attempted: removing safety checks or inventing memory-limit semantics
+would not be justified by this review. New adversarial tests cover long
+tokens, syntax depth, assembly cycles across both tiers/interpreters, and
+caught reentry faults sharing fuel. Memory/compiler-work quotas, hash-flood
+resistance, verifier state bounds, and stronger host/artifact validation are
+deferred explicitly. Existing E2/E5 unsafe mechanisms were inspected and
+checked with Miri; no unsafe was added. This review makes no new latency or
+allocation improvement claim. Commands, results and limitations are recorded
+against T064 and in `/tmp/codex-eitri-par-T064.md`.
+
 ### T011 baseline: source to result against Lua 5.4 — 2026-11-07
 
 **Method.** `cargo bench -p eitri --bench source_to_result` and

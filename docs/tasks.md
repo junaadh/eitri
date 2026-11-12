@@ -1200,6 +1200,30 @@ data. These tasks do not authorize replacing the correctness baseline first.
   the host; fuzzers run through a documented command; findings are fixed or recorded
   with their accepted risk.
 
+- M0 review 2026-11-12: [threat model and audit](implementation/security.md)
+  cover source, `.eits`, capabilities, host calls/reentry, all eight production
+  unsafe blocks, algorithmic bounds, and the limits exercised by the corpus.
+  Added generated adversarial tests and zero-budget/zero-depth fixtures;
+  corrected the hash module's non-adversarial-input assumption. No compiler,
+  lowering, numeric, literal, frame-layout, or VM behavior changed.
+  Remaining risks are explicitly recorded: no M0 memory/compiler-work quota,
+  deterministic hash flooding, verifier block-by-frame growth, inspection-only
+  huge input/index limits, assembly span narrowing, trusted host result bits,
+  and the same-context artifact contract. Frame growth before call-limit checks
+  is left for coordination with T013/T014. T064 remains continuous; this is an
+  M0 review with recorded limitations, not a complete denial-of-service sandbox.
+- M0 checks: locked workspace build, formatting check, Clippy with warnings
+  denied, and workspace tests pass. Focused security (6), limits (5), fixture,
+  diagnostics, lifecycle and verifier-memory tests pass. Seeded release fuzzing
+  passes 100,000 cases each for source, assembly and bytecode. Miri passes
+  20 lexer tests, the parser nesting test, six VM tests and the caught-reentry
+  test; broad syntax attempts were interrupted in expensive stress cases
+  (not reported as passes). Catalog and 445-link documentation checks pass.
+  The 135-source lifecycle run retained 423,706/554,778 bytes (default
+  match/threaded) and 423,686/554,758 (simple), stable across 20 warm rounds;
+  no latency or memory improvement is claimed. Full output and review
+  limitations: `/tmp/codex-eitri-par-T064.md`. T048 awaits the requested review.
+
 ### T065 — Keep the documentation true
 
 - [ ] Depends on: none; runs with every task.
