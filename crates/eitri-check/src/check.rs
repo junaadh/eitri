@@ -2322,6 +2322,46 @@ impl<'i> Checker<'_, 'i> {
         }
         let call_span = self.span(expr);
         let target = match ast.exprs[callee] {
+            Expr::Name(token)
+                if self
+                    .current
+                    .and_then(|current| ast.fns[current.id].receiver)
+                    .is_some()
+                    && !matches!(self.lookup(self.symbol(token)), Some(Name::Binding(binding)) if self.out.bindings[binding].owner.is_some())
+                    && self.methods.iter().any(|&id| {
+                        let candidate = ast.fns[id];
+                        candidate.is_static
+                            && candidate.receiver.is_some_and(|owner| {
+                                Some(self.symbol(owner))
+                                    == self
+                                        .current
+                                        .and_then(|current| ast.fns[current.id].receiver)
+                                        .map(|owner| self.symbol(owner))
+                            })
+                            && self.symbol(candidate.name) == self.symbol(token)
+                    }) =>
+            {
+                let owner = ast.fns[self.current.unwrap().id].receiver.unwrap();
+                let method = self
+                    .methods
+                    .iter()
+                    .copied()
+                    .find(|&id| {
+                        let candidate = ast.fns[id];
+                        candidate.is_static
+                            && candidate
+                                .receiver
+                                .is_some_and(|receiver| self.symbol(receiver) == self.symbol(owner))
+                            && self.symbol(candidate.name) == self.symbol(token)
+                    })
+                    .unwrap();
+                let signature = self.out.signatures[method];
+                Some((
+                    Res::Function(method),
+                    Params::Script(signature.params),
+                    signature.ret,
+                ))
+            }
             Expr::Name(token) => match self.resolve(token) {
                 Some(Name::Function(f)) => {
                     let s = self.out.signatures[f];

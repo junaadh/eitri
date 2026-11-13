@@ -1,10 +1,13 @@
 //! host: test
 import test from "test"
 struct Item { text: string }
-extend Item { static fn make(text: string) -> Item { return Item { text: text } } }
+extend Item {
+    static fn make(text: string) -> Item { return Item { text: text } }
+    static fn zero() -> Item { return make("zero") }
+}
 enum State { Empty, Full(value: Item) }
 extend State { static fn empty() -> State { return State.Empty } }
 let item = Item.make("hello")
 let state = State.empty()
-test.check(item.text == "hello")
+test.check(item.text == "hello" && Item.zero().text == "zero")
 test.check(match state { .Empty => true, .Full(value) => false })

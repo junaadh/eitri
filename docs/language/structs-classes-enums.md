@@ -1,17 +1,21 @@
 # Structs, classes, and enums
 
-The current implementation accepts structs with up to 256 fields,
-including scalar, string and nested struct fields, literals that initialize
-every field, field reads and writes through `var` subject to `let` fields, and copies in local bindings
-and control flow. Fields occupy frame slots, so strings remain collector roots.
-Recursive inline layouts are rejected. Structs can pass and return through
-script calls; host-initiated calls reject aggregate signatures for now. Methods
-using `extend` and explicit `self` work for structs and enums; `mutating`
-struct methods require mutable receivers. Up to 256 methods per module are supported. Bare field names inside methods,
-Static extension functions called through the type name also work. Bare static calls and other default expressions remain future work. Literal, arithmetic and call defaults are supported; defaults that capture names or construct aggregates are still unsupported. Enums with scalar and string
-payloads, construction, and exhaustive case matching with positional bindings
-execute on both interpreters. Structs and enums can contain each other, with
-inline cycles rejected. Richer patterns remain future work. The rest of
+The current implementation accepts structs with up to 256 scalar, string or
+nested aggregate fields, literals, field reads and writes, and copies in local
+bindings and control flow. `let` fields cannot be changed after construction.
+Fields occupy frame slots, so strings remain collector roots. Recursive inline
+layouts are rejected. Structs can pass and return through script calls;
+host-initiated calls reject aggregate signatures for now.
+
+Methods using `extend` and explicit `self` work for structs and enums;
+`mutating` struct methods require mutable receivers. Static extension functions
+can be called through the type name or by bare name inside another method of the
+type. Up to 256 methods per module are supported. Bare receiver field and method
+names remain future work. Literal, arithmetic and call defaults are supported;
+defaults that capture names or construct aggregates are still unsupported.
+Enums with payloads, construction and exhaustive case matching with positional
+bindings execute on both interpreters. Structs and enums can contain each other,
+with inline cycles rejected. Richer patterns remain future work. The rest of
 this chapter is the language contract for those features.
 
 ## Declaration identity across contexts

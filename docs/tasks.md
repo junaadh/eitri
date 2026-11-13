@@ -840,6 +840,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   captured names and aggregate construction remain unsupported.
 - T017-15: static extension functions on structs and enums can be called
   through the type name; `self` is rejected in their bodies.
+- T017-16: static extension functions also resolve by bare name in methods
+  of their own type, subject to local shadowing.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 
