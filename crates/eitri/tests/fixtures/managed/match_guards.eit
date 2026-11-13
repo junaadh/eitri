@@ -1,0 +1,22 @@
+//! host: test
+import test from "test"
+enum Choice { Empty, Full(value: string) }
+fn select(choice: Choice) -> string {
+    return match choice {
+        .Full(value) if value == "yes" && test.id(1) == 1 => value,
+        .Full(value) if test.id(2) == 2 => value,
+        .Full(_) => "other",
+        .Empty => "empty",
+    }
+}
+test.check(select(Choice.Full(value: "yes")) == "yes")
+test.check(select(Choice.Full(value: "no")) == "no")
+test.check(select(Choice.Empty) == "empty")
+fn terminal(choice: Choice) -> i64 {
+    match choice {
+        .Empty => { return 0 },
+        .Full(_) => { return 1 },
+        .Full(value) if test.id(5) == 5 => { return 5 },
+    }
+}
+test.emit(terminal(Choice.Full(value: "ok")))

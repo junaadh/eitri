@@ -2543,7 +2543,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         };
         let cases = &ast.enum_cases[ast.enums[enum_id].cases];
         let end = self.asm.label();
-        let arms = &ast.match_arms[node.arms];
+        let all_arms = &ast.match_arms[node.arms];
+        // A final guarded arm is unreachable: preceding unguarded arms must
+        // already be exhaustive, as guards do not contribute to coverage.
+        let arms = if all_arms.last().is_some_and(|arm| arm.guard.is_some()) {
+            &all_arms[..all_arms.len() - 1]
+        } else {
+            all_arms
+        };
         for (arm_index, arm) in arms.iter().enumerate() {
             let next = self.asm.label();
             let mark = self.top;
@@ -2585,6 +2592,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         span,
                     )?;
                 }
+            }
+            if let Some(guard) = arm.guard {
+                self.branch(guard, false, next)?;
             }
             match arm.body {
                 eitri_syntax::ast::MatchBody::Expr(body) => {

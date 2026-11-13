@@ -1,0 +1,1 @@
+error[E0301] 64..67: enum pattern qualifier does not match subject

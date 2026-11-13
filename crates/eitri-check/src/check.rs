@@ -1899,11 +1899,22 @@ impl<'i> Checker<'_, 'i> {
         for arm in &self.ast().match_arms[node.arms] {
             let mark = self.mark();
             if let Some(case) = arm.case {
+                if let Some(qualifier) = arm.qualifier
+                    && self.symbol(qualifier) != self.symbol(self.ast().enums[enum_id].name)
+                {
+                    self.report(
+                        Code::TypeMismatch,
+                        "enum pattern qualifier does not match subject",
+                        self.token_span(qualifier),
+                    );
+                }
                 if let Some(index) = cases
                     .iter()
                     .position(|item| self.symbol(item.name) == self.symbol(case))
                 {
-                    covered[index] = true;
+                    if arm.guard.is_none() {
+                        covered[index] = true;
+                    }
                     let fields = self.ast().params(cases[index].fields);
                     let bindings = &self.ast().match_bindings[arm.bindings];
                     if arm.parenthesized && bindings.len() != fields.len() {
@@ -1945,7 +1956,12 @@ impl<'i> Checker<'_, 'i> {
                     let binding = self.new_binding(token, false, subject);
                     self.out.pattern_bindings[token] = Some(binding);
                 }
-                fallback = true;
+                if arm.guard.is_none() {
+                    fallback = true;
+                }
+            }
+            if let Some(guard) = arm.guard {
+                self.value(guard, Some(Ty::Bool));
             }
             let ty = match arm.body {
                 eitri_syntax::ast::MatchBody::Expr(body) => {

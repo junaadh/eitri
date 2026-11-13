@@ -1,0 +1,3 @@
+enum One { Empty }
+enum Two { Empty }
+let n = match One.Empty { Two.Empty => 0 }

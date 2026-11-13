@@ -1050,28 +1050,36 @@ impl Eval<'_> {
                 };
                 let cases = &self.ast.enum_cases[self.ast.enums[enum_id].cases];
                 let name = self.tokens.symbol(cases[case as usize].name);
-                let arm = self.ast.match_arms[node.arms]
-                    .iter()
-                    .find(|arm| {
-                        arm.case
-                            .is_none_or(|token| self.tokens.symbol(token) == name)
-                    })
-                    .copied()
-                    .expect("exhaustive match");
-                if let Some(token) = arm.catch_binding {
-                    let binding =
-                        self.checked.pattern_bindings[token].expect("checked catch binding");
-                    self.locals[binding.index()] = Some(Value::Enum(enum_id, case, payload));
-                }
-                for (index, &token) in self.ast.match_bindings[arm.bindings].iter().enumerate() {
-                    if let Some(binding) = self.checked.pattern_bindings[token] {
-                        self.locals[binding.index()] = Some(self.structs[payload as usize][index]);
+                let ast = self.ast;
+                for &arm in &ast.match_arms[node.arms] {
+                    if arm
+                        .case
+                        .is_some_and(|token| self.tokens.symbol(token) != name)
+                    {
+                        continue;
                     }
+                    if let Some(token) = arm.catch_binding {
+                        let binding =
+                            self.checked.pattern_bindings[token].expect("checked catch binding");
+                        self.locals[binding.index()] = Some(Value::Enum(enum_id, case, payload));
+                    }
+                    for (index, &token) in ast.match_bindings[arm.bindings].iter().enumerate() {
+                        if let Some(binding) = self.checked.pattern_bindings[token] {
+                            self.locals[binding.index()] =
+                                Some(self.structs[payload as usize][index]);
+                        }
+                    }
+                    if let Some(guard) = arm.guard
+                        && !self.expr(host, guard)?.bool()
+                    {
+                        continue;
+                    }
+                    return match arm.body {
+                        eitri_syntax::ast::MatchBody::Expr(expr) => self.expr(host, expr),
+                        eitri_syntax::ast::MatchBody::Block(block) => self.block(host, block),
+                    };
                 }
-                match arm.body {
-                    eitri_syntax::ast::MatchBody::Expr(expr) => self.expr(host, expr),
-                    eitri_syntax::ast::MatchBody::Block(block) => self.block(host, block),
-                }
+                unreachable!("checked match is exhaustive")
             }
             Expr::If(mut id) => loop {
                 let node = self.ast.ifs[id];

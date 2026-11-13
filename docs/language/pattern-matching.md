@@ -1,9 +1,10 @@
 # Pattern matching
 
-The current implementation supports exhaustive matches on enums using `.Case`,
+The current implementation supports exhaustive matches on enums using `.Case` or `Type.Case`,
 positional payload bindings or `_`, and catch-all `_` or binding arms. Parenthesized
-case patterns must supply exactly one pattern per payload field. The remaining
-patterns and guards below are the language contract for later work.
+case patterns must supply exactly one pattern per payload field. Guards are
+supported and do not contribute to exhaustiveness. The remaining patterns
+below are the language contract for later work.
 
 ## `match`
 

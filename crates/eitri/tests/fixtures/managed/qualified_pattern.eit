@@ -1,0 +1,5 @@
+//! host: test
+import test from "test"
+enum Choice { Empty, Full(value: string) }
+let text = match Choice.Full(value: "ok") { Choice.Empty => "empty", Choice.Full(value) => value }
+test.check(text == "ok")

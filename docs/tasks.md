@@ -854,6 +854,10 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   the distinction between `.Case` and `.Case()`.
 - T017-22: catch-all binding patterns capture the entire enum value and
   preserve nested managed payloads.
+- T017-23: match guards execute in arm order after bindings; guarded arms do
+  not count toward exhaustiveness.
+- T017-24: fully qualified enum case patterns verify the subject type and
+  support payload bindings and forced collection.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

@@ -2133,3 +2133,28 @@ p50/p99 15,200/24,900 ns, execution 375/667 ns, total 15,500/25,700 ns;
 retained context memory was 30,683 B. This noisy scalar workload does not
 exercise matches. Samples: `/private/tmp/eitri-t017-22-samples.csv`; report:
 `/private/tmp/eitri-t017-22-bench.txt`.
+
+### T017-23 enum match guards
+
+Guards run after bindings in arm order and do not contribute to coverage.
+An unreachable final guarded arm is omitted only after earlier unguarded arms
+are proven exhaustive. Ordered host effects, non-exhaustiveness and forced GC
+are covered across both interpreters and lowerers.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,584/18,000 ns, execution 250/459 ns, total 9,833/18,400 ns;
+retained context memory was 30,683 B. This noisy scalar workload does not
+exercise guards. Samples: `/private/tmp/eitri-t017-23-samples.csv`; report:
+`/private/tmp/eitri-t017-23-bench.txt`.
+
+### T017-24 qualified enum patterns
+
+Enum case patterns accept a type qualifier, checked against the subject's
+nominal enum before execution. Bindings and managed payloads use the existing
+matching path, covered by forced-GC tests on both interpreters.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,542/14,900 ns, execution 209/334 ns, total 8,750/15,200 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+patterns. Samples: `/private/tmp/eitri-t017-24-samples.csv`; report:
+`/private/tmp/eitri-t017-24-bench.txt`.

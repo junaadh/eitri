@@ -391,13 +391,21 @@ impl Parser<'_> {
         let mut arms = Vec::new();
         self.skip_separators();
         while !self.at(T::RBrace) && !self.at(T::Eof) {
-            let (case, catch_binding) = if self.eat(T::Wildcard).is_some() {
-                (None, None)
+            let (case, qualifier, catch_binding) = if self.eat(T::Wildcard).is_some() {
+                (None, None, None)
+            } else if self.at(T::Ident) && self.nth(1) == T::Dot {
+                let qualifier = self.bump();
+                self.bump();
+                (
+                    Some(self.expect(T::Ident, "a case name")?),
+                    Some(qualifier),
+                    None,
+                )
             } else if self.at(T::Ident) {
-                (None, Some(self.bump()))
+                (None, None, Some(self.bump()))
             } else {
                 self.expect(T::Dot, "a case pattern")?;
-                (Some(self.expect(T::Ident, "a case name")?), None)
+                (Some(self.expect(T::Ident, "a case name")?), None, None)
             };
             let mut bindings = Vec::new();
             let parenthesized = self.eat(T::LParen).is_some();
@@ -416,6 +424,11 @@ impl Parser<'_> {
                 self.expect(T::RParen, "`)`")?;
             }
             let bindings = self.ast.match_bindings.push(&bindings);
+            let guard = if self.eat(T::If).is_some() {
+                Some(self.expr(false)?)
+            } else {
+                None
+            };
             self.expect(T::FatArrow, "`=>`")?;
             let body = if self.at(T::LBrace) {
                 crate::ast::MatchBody::Block(self.block()?)
@@ -424,9 +437,11 @@ impl Parser<'_> {
             };
             arms.push(crate::ast::MatchArm {
                 case,
+                qualifier,
                 catch_binding,
                 parenthesized,
                 bindings,
+                guard,
                 body,
             });
             if self.eat(T::Comma).is_none() && !self.at_statement_end() {
