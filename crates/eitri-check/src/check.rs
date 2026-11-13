@@ -1191,6 +1191,7 @@ impl<'i> Checker<'_, 'i> {
                         self.span(target),
                     );
                 }
+                self.check_readonly_path(target);
                 if let AssignOp::Compound(binary) = op
                     && !valid_operand(binary, ty)
                 {
@@ -2010,6 +2011,19 @@ impl<'i> Checker<'_, 'i> {
         Ty::Struct(id)
     }
 
+    fn check_readonly_path(&mut self, mut expr: ExprId) {
+        while let Expr::Member { base, name } = self.input.ast.exprs[expr] {
+            if let (Ty::Struct(id), Res::Field(index)) =
+                (self.out.types[base], self.out.resolutions[expr])
+                && self.input.ast.params(self.input.ast.structs[id].fields)[index as usize].readonly
+            {
+                self.report(Code::AssignToImmutable, "cannot assign through a read-only field", self.token_span(name));
+                return;
+            }
+            expr = base;
+        }
+    }
+
     fn member_value(&mut self, expr: ExprId, base: ExprId, name: TokenId) -> Ty {
         let may_be_struct = match self.input.ast.exprs[base] {
             Expr::Name(token) => match self.lookup(self.symbol(token)) {
@@ -2100,6 +2114,7 @@ impl<'i> Checker<'_, 'i> {
                         self.value(arg, expected);
                     }
                     if ast.fns[method].mutating {
+                        self.check_readonly_path(base);
                         let mut root = base;
                         while let Expr::Member { base, .. } = ast.exprs[root] {
                             root = base;

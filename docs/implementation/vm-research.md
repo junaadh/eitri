@@ -1959,3 +1959,15 @@ p50/p99 8,208/10,400 ns, first execution 208/292 ns, total 8,417/10,700 ns.
 This scalar workload does not exercise enum methods. Samples:
 `/private/tmp/eitri-t017-8-samples.csv`; report:
 `/private/tmp/eitri-t017-8-bench.txt`.
+
+### T017-9 empty structs
+
+Empty structs occupy one initialized scalar slot, including when nested in
+other aggregates. Copies, equality, script calls and enum payloads are covered
+with forced collection across both interpreters and lowering modes.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,250/10,400 ns, execution 208/292 ns, total 8,459/10,700 ns.
+This scalar workload does not exercise empty structs. Samples:
+`/private/tmp/eitri-t017-9-samples.csv`; report:
+`/private/tmp/eitri-t017-9-bench.txt`.

@@ -4,14 +4,14 @@
         code: Some(
             Unsupported,
         ),
-        message: "not supported yet: empty structs",
+        message: "not supported yet: attributes",
         labels: [
             Label {
                 style: Primary,
                 source: SourceId(0),
                 span: Span {
-                    start: 7,
-                    end: 8,
+                    start: 0,
+                    end: 7,
                 },
                 message: "",
             },
@@ -20,8 +20,8 @@
     },
 ]
 
-error[E0001]: not supported yet: empty structs
-  ╭─ unsupported/struct.eit:1:8
+error[E0001]: not supported yet: attributes
+  ╭─ unsupported/attribute.eit:1:1
   │
-1 │ struct P {
-  │        ^
+1 │ @extern
+  │ ^^^^^^^

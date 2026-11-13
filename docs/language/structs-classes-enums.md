@@ -1,6 +1,6 @@
 # Structs, classes, and enums
 
-The current implementation accepts nonempty structs with up to 256 fields,
+The current implementation accepts structs with up to 256 fields,
 including scalar, string and nested struct fields, literals that initialize
 every field, field reads and writes through `var`, and copies in local bindings
 and control flow. Fields occupy frame slots, so strings remain collector roots.

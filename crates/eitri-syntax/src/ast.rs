@@ -212,6 +212,7 @@ pub enum Stmt {
 pub struct Param {
     pub name: TokenId,
     pub ty: TypeExpr,
+    pub readonly: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

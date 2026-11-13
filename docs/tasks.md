@@ -826,6 +826,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   with IEEE float behavior, on both interpreters and under forced collection.
 - T017-8: enum methods use `extend` and explicit `self`; mutating enum
   methods are rejected. Managed payloads survive method calls and collection.
+- T017-9: empty structs can be copied, compared, nested and passed through
+  script calls, including inside enum payloads.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 
