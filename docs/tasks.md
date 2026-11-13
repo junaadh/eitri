@@ -727,6 +727,10 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   environment are in `/tmp/orchestra/eitri-t014-layout-ownership-samples.csv`
   and `/tmp/orchestra/eitri-t014-layout-ownership-bench.txt`; the run was not
   interleaved with the previous baseline and does not establish a latency change.
+- Layout tables now build multiple requested type roots with shared descendants,
+  retain their storage domain, and validate decoded local IDs through lookup.
+  These interfaces prepare the managed verifier; managed bytecode must still
+  enforce the correct owner and frame domain before using an operand.
 
 ### T015 — Implement allocation and non-moving collection
 

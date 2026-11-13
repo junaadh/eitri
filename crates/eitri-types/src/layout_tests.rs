@@ -106,6 +106,41 @@ fn retained_layout_bytes_include_nested_vectors_and_not_array_elements() {
 }
 
 #[test]
+fn multiple_roots_share_a_domain_checked_local_table() {
+    let mut types = TypeStore::default();
+    let scalar = types.intern(TypeDesc::Scalar(I64)).unwrap();
+    let other = types.intern(TypeDesc::Scalar(I8)).unwrap();
+    let unused = types.intern(TypeDesc::Scalar(F32)).unwrap();
+    let array = types
+        .intern(TypeDesc::FixedArray {
+            count: 4,
+            element: scalar,
+        })
+        .unwrap();
+    let (store, ids) =
+        LayoutStore::for_types(&types, &[array, other, scalar, array], Frame).unwrap();
+    assert_eq!(store.domain(), Frame);
+    assert_eq!(store.root(), ids[0]);
+    assert_eq!(ids[0], ids[3]);
+    assert_eq!(store.get(ids[0]).unwrap().frame_slots(), 4);
+    assert_eq!(store.get(ids[1]).unwrap().frame_slots(), 1);
+    assert_eq!(store.get(ids[2]).unwrap().frame_slots(), 1);
+    assert!(store.get(LayoutId::from_u32(unused.0)).is_none());
+    assert!(store.get(LayoutId::from_u32(u32::MAX)).is_none());
+    assert_eq!(LayoutId::from_u32(ids[0].to_u32()), ids[0]);
+    assert!(matches!(
+        LayoutStore::for_types(&types, &[], Frame),
+        Err(LayoutError::InvalidId)
+    ));
+    assert!(matches!(
+        LayoutStore::for_types(&types, &[scalar, TypeId(u32::MAX)], Frame),
+        Err(LayoutError::InvalidId)
+    ));
+    let (heap, _) = LayoutStore::for_types(&types, &[scalar], Heap).unwrap();
+    assert_eq!(heap.domain(), Heap);
+}
+
+#[test]
 fn padding_nested_products_and_c_abi() {
     #[repr(C)]
     struct Mixed {

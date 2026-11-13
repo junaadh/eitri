@@ -10,6 +10,16 @@ pub enum StorageDomain {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayoutId(pub(crate) u32);
+impl LayoutId {
+    /// Construct a local ID from an encoded operand. Use `LayoutStore::get`
+    /// to validate it against the owning store before accessing a layout.
+    pub fn from_u32(value: u32) -> Self {
+        Self(value)
+    }
+    pub fn to_u32(self) -> u32 {
+        self.0
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutError {
     InvalidId,
@@ -83,6 +93,7 @@ impl Layout {
 pub struct LayoutStore {
     layouts: Vec<Option<Layout>>,
     root: LayoutId,
+    domain: StorageDomain,
 }
 
 // Borrowed, anonymous layout inputs. Only tests construct products and leaves;
@@ -128,7 +139,20 @@ impl LayoutStore {
         root: TypeId,
         domain: StorageDomain,
     ) -> Result<Self, LayoutError> {
-        Self::build(types.nodes.len(), root.0 as usize, domain, |id| {
+        Self::for_types(types, &[root], domain).map(|(store, _)| store)
+    }
+    /// Construct one table for all requested roots, returning their local IDs
+    /// in the same order (including duplicates). At least one root is required.
+    /// Shared descendants are calculated once. IDs belong only to this store.
+    /// Time and space are O(type nodes + reachable edges + requested roots),
+    /// independent of fixed-array element counts.
+    pub fn for_types(
+        types: &TypeStore,
+        roots: &[TypeId],
+        domain: StorageDomain,
+    ) -> Result<(Self, Vec<LayoutId>), LayoutError> {
+        let indexes: Vec<_> = roots.iter().map(|id| id.0 as usize).collect();
+        let store = Self::build_many(types.nodes.len(), &indexes, domain, |id| {
             Ok(match types.nodes.get(id).ok_or(LayoutError::InvalidId)?.0 {
                 TypeDesc::Scalar(kind) => Shape::Scalar(kind),
                 TypeDesc::Void => Shape::Void,
@@ -138,13 +162,17 @@ impl LayoutStore {
                     Shape::Result(error.0 as usize, value.0 as usize)
                 }
             })
-        })
+        })?;
+        Ok((store, roots.iter().map(|id| LayoutId(id.0)).collect()))
     }
     pub fn root(&self) -> LayoutId {
         self.root
     }
     pub fn get(&self, id: LayoutId) -> Option<&Layout> {
         self.layouts.get(id.0 as usize)?.as_ref()
+    }
+    pub fn domain(&self) -> StorageDomain {
+        self.domain
     }
 
     /// Retained heap allocation, excluding the inline `LayoutStore` itself.
@@ -191,16 +219,26 @@ impl LayoutStore {
         domain: StorageDomain,
         shape: impl Fn(usize) -> Result<Shape<'a>, LayoutError>,
     ) -> Result<Self, LayoutError> {
-        if root >= count {
+        Self::build_many(count, &[root], domain, shape)
+    }
+
+    fn build_many<'a>(
+        count: usize,
+        roots: &[usize],
+        domain: StorageDomain,
+        shape: impl Fn(usize) -> Result<Shape<'a>, LayoutError>,
+    ) -> Result<Self, LayoutError> {
+        if roots.is_empty() || roots.iter().any(|&root| root >= count) {
             return Err(LayoutError::InvalidId);
         }
         u32::try_from(count).map_err(|_| LayoutError::Overflow)?;
         let mut store = Self {
             layouts: (0..count).map(|_| None).collect(),
-            root: LayoutId(root as u32),
+            root: LayoutId(roots[0] as u32),
+            domain,
         };
         let mut active = vec![false; count];
-        let mut stack = vec![(root, false)];
+        let mut stack: Vec<_> = roots.iter().rev().map(|&root| (root, false)).collect();
         while let Some((id, finish)) = stack.pop() {
             if id >= count {
                 return Err(LayoutError::InvalidId);
