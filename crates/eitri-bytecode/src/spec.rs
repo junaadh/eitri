@@ -367,6 +367,11 @@ pub enum Sem {
     StringCompare,
     StringJoin,
     StringSlice,
+    StringTrim,
+    StringCase,
+    StringNextChar,
+    StringNextLine,
+    StringReplace,
     StringContains,
     StringStarts,
     StringEnds,
@@ -684,6 +689,14 @@ ops! {
     StrConcat = "STR.CONCAT", "STR", Abc, [Dst, Src, Src], Sem::StringConcat, FAULT, true, Managed;
     StrCompare = "STR.COMPARE", "STR", Abc, [Dst, Src, Src], Sem::StringCompare, NONE, true, None;
     StrJoin = "STR.JOIN", "STR", Abc, [Dst, Src, Src], Sem::StringJoin, FAULT, true, Managed;
+    StrNextChar = "STR.NEXT.CHAR", "STR", Abc, [Dst, Src, SrcDst], Sem::StringNextChar, FAULT, true, None;
+    StrNextLine = "STR.NEXT.LINE", "STR", Abc, [Dst, Src, SrcDst], Sem::StringNextLine, FAULT, true, Managed;
+    StrUpper = "STR.UPPER", "STR", Abc, [Dst, Src, None], Sem::StringCase, FAULT, true, Managed;
+    StrLower = "STR.LOWER", "STR", Abc, [Dst, Src, None], Sem::StringCase, FAULT, true, Managed;
+    StrReplace = "STR.REPLACE", "STR", Abc, [Dst, Src, None], Sem::StringReplace, FAULT, true, Managed;
+    StrTrim = "STR.TRIM", "STR", Abc, [Dst, Src, None], Sem::StringTrim, FAULT, true, Managed;
+    StrTrimStart = "STR.TRIM.START", "STR", Abc, [Dst, Src, None], Sem::StringTrim, FAULT, true, Managed;
+    StrTrimEnd = "STR.TRIM.END", "STR", Abc, [Dst, Src, None], Sem::StringTrim, FAULT, true, Managed;
     StrSlice = "STR.SLICE", "STR", Abc, [Dst, Src, None], Sem::StringSlice, FAULT, true, Managed;
     StrContains = "STR.CONTAINS", "STR", Abc, [Dst, Src, Src], Sem::StringContains, NONE, true, None;
     StrStarts = "STR.STARTS", "STR", Abc, [Dst, Src, Src], Sem::StringStarts, NONE, true, None;

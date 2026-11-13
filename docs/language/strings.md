@@ -6,7 +6,10 @@ across control flow and calls, including host function arguments and results.
 String values also cross host-initiated reentrant calls. String `+` chains
 allocate one result, and content comparison, `.is_empty()`, byte-offset
 `.slice(start, end)`, `.contains()`, `.starts_with()`, `.ends_with()`, and
-`.find()` work on both interpreters. `string(value)` converts scalar numbers,
+`.find()`, `.trim()`, `.trim_start()`, `.trim_end()`, `.replace()`,
+`.to_upper()`, and `.to_lower()` work on both interpreters. Case mapping uses
+Unicode 17.0 simple mappings. String character and line iteration works with
+`for`, including byte-offset bindings. `string(value)` converts scalar numbers,
 booleans and characters to text. Single-line interpolation supports these
 types and strings; raw strings remain uninterpreted. A `find` result can be
 stored and read with `??`; other optional syntax remains future work. Other
@@ -125,7 +128,13 @@ for i, c in name {              // byte offset and char
 ```
 
 Iteration decodes UTF-8 as it goes, without allocating. The offset from the
-two-name form can be passed straight to `slice`.
+two-name form can be passed straight to `slice`. `name.chars()` also iterates
+the characters, including in the two-name form.
+
+`for line in s.lines()` iterates lines without their `\n` terminators or a
+preceding `\r`. It recognizes `\n` and `\r\n`; a lone `\r` remains part of
+the line. A trailing terminator does not produce a final empty line. The
+two-name form yields the line's starting byte offset and the line.
 
 ## Ordering
 
@@ -166,6 +175,7 @@ These are built into the compiler for now.
 | `find(sub)` | `?i64`: the byte offset of the first match |
 | `split(sep)` | `[]string` |
 | `trim()` | `string` |
+| `trim_start()`, `trim_end()` | `string` |
 | `replace(from, to)` | `string` |
 | `to_upper()`, `to_lower()` | `string`, using simple Unicode case mapping |
 | `to_bytes()` | `bytes` |
@@ -173,6 +183,17 @@ These are built into the compiler for now.
 | `i64.parse(s)`, `f64.parse(s)` | `ParseError!i64`, `ParseError!f64` |
 
 Lua-style patterns are planned as a library.
+
+`split(sep)` retains empty fields from leading, adjacent, and trailing
+nonempty separators. An empty separator yields each Unicode scalar as a
+separate string, with no empty endpoints; splitting an empty string by an
+empty separator yields an empty array. `trim()`, `trim_start()`, and
+`trim_end()` remove Unicode White_Space from the indicated ends.
+
+`replace(from, to)` replaces non-overlapping matches from left to right. When
+`from` is empty, it inserts `to` at every Unicode scalar boundary, including
+both ends: `"ab".replace("", "-")` is `"-a-b-"`, and
+`"".replace("", "-")` is `"-"`.
 
 ## Representation
 

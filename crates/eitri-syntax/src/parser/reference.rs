@@ -519,9 +519,36 @@ impl Parser<'_> {
                     body,
                 }
             }
-            T::For | T::Guard | T::Defer => {
+            T::For => {
+                let keyword = self.bump();
+                let name = self.expect(T::Ident, "a name")?;
+                let second = if self.eat(T::Comma).is_some() {
+                    Some(self.expect(T::Ident, "a name")?)
+                } else {
+                    None
+                };
+                self.expect(T::In, "`in`")?;
+                let start = self.bitwise(true)?;
+                let inclusive = self.at(T::DotDotEq);
+                let end = if self.at(T::DotDot) || inclusive {
+                    self.bump();
+                    Some(self.bitwise(true)?)
+                } else {
+                    None
+                };
+                let body = self.block()?;
+                Stmt::For(self.ast.fors.push(crate::ast::ForStmt {
+                    keyword,
+                    name,
+                    second,
+                    start,
+                    end,
+                    inclusive,
+                    body,
+                }))
+            }
+            T::Guard | T::Defer => {
                 let feature = match self.kind() {
-                    T::For => "`for` loops",
                     T::Guard => "`guard`",
                     _ => "`defer`",
                 };
@@ -530,14 +557,18 @@ impl Parser<'_> {
                 return Ok(None);
             }
             T::Break | T::Continue => {
-                let feature = if self.at(T::Break) {
-                    "`break`"
+                let is_break = self.at(T::Break);
+                let keyword = self.bump();
+                if !self.at_statement_end() {
+                    self.unsupported(self.current_span(), "loop labels");
+                    self.skip_statement();
+                    return Ok(None);
+                }
+                if is_break {
+                    Stmt::Break(keyword)
                 } else {
-                    "`continue`"
-                };
-                self.unsupported(span, feature);
-                self.skip_statement();
-                return Ok(None);
+                    Stmt::Continue(keyword)
+                }
             }
             T::Fn => {
                 self.unsupported(span, "nested functions");

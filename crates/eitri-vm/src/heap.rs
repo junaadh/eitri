@@ -160,6 +160,63 @@ impl Heap {
         self.finish_string(text, limit, memory)
     }
 
+    pub fn case(
+        &mut self,
+        source: HeapRef,
+        upper: bool,
+        limit: usize,
+        memory: &mut Option<eitri_base::MemoryBudget>,
+    ) -> Result<HeapRef, HeapLimit> {
+        let length = self
+            .string(source)
+            .expect("live source")
+            .chars()
+            .try_fold(0usize, |n, c| {
+                n.checked_add(simple_case(c, upper).len_utf8())
+            })
+            .ok_or(HeapLimit)?;
+        self.reserve_object(length, limit, memory)?;
+        let mut result = String::new();
+        super::reserve_string_vm(&mut result, length, memory).map_err(|_| HeapLimit)?;
+        for c in self.string(source).expect("live source").chars() {
+            result.push(simple_case(c, upper));
+        }
+        self.finish_string(result, limit, memory)
+    }
+
+    pub fn replace(
+        &mut self,
+        source: HeapRef,
+        from: HeapRef,
+        to: HeapRef,
+        limit: usize,
+        memory: &mut Option<eitri_base::MemoryBudget>,
+    ) -> Result<HeapRef, HeapLimit> {
+        let original = self.string(source).expect("live source");
+        let pattern = self.string(from).expect("live pattern");
+        let replacement = self.string(to).expect("live replacement");
+        let count = original.match_indices(pattern).count();
+        let length = original
+            .len()
+            .checked_sub(count.checked_mul(pattern.len()).ok_or(HeapLimit)?)
+            .and_then(|n| n.checked_add(count.checked_mul(replacement.len())?))
+            .ok_or(HeapLimit)?;
+        self.reserve_object(length, limit, memory)?;
+        let mut result = String::new();
+        super::reserve_string_vm(&mut result, length, memory).map_err(|_| HeapLimit)?;
+        let original = self.string(source).expect("live source");
+        let pattern = self.string(from).expect("live pattern");
+        let replacement = self.string(to).expect("live replacement");
+        let mut last = 0;
+        for (index, matched) in original.match_indices(pattern) {
+            result.push_str(&original[last..index]);
+            result.push_str(replacement);
+            last = index + matched.len();
+        }
+        result.push_str(&original[last..]);
+        self.finish_string(result, limit, memory)
+    }
+
     pub fn slice(
         &mut self,
         reference: HeapRef,
@@ -467,6 +524,18 @@ impl Drop for Heap {
                 eprintln!("eitri: {leaked} retained string handle(s) were not released");
             }
         }
+    }
+}
+
+fn simple_case(c: char, upper: bool) -> char {
+    let table = if upper {
+        super::unicode_case::UPPER
+    } else {
+        super::unicode_case::LOWER
+    };
+    match table.binary_search_by_key(&(c as u32), |&(key, _)| key) {
+        Ok(index) => char::from_u32(table[index].1).expect("valid Unicode case mapping"),
+        Err(_) => c,
     }
 }
 

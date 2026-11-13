@@ -119,6 +119,7 @@ pub fn check<'s>(
         module_bindings: &mut scratch.module_bindings,
         unknown: &mut scratch.unknown,
         current: None,
+        loop_depth: 0,
     };
     checker.module();
     &scratch.checked
@@ -152,6 +153,7 @@ struct Checker<'a, 'i> {
     /// are silent.
     unknown: &'a mut FxHashSet<Symbol>,
     current: Option<FnContext>,
+    loop_depth: usize,
 }
 
 impl<'i> Checker<'_, 'i> {
@@ -528,11 +530,98 @@ impl<'i> Checker<'_, 'i> {
             Stmt::Expr(expr) => {
                 self.expr(expr, None, false);
             }
+            Stmt::For(for_id) => {
+                let eitri_syntax::ast::ForStmt {
+                    name,
+                    second,
+                    start,
+                    end,
+                    body,
+                    ..
+                } = self.input.ast.fors[for_id];
+                if let Some(end) = end {
+                    let range_ty = self.value(start, None);
+                    if range_ty != Ty::Error && !range_ty.integer() {
+                        self.mismatch(range_ty, Ty::I64, self.span(start));
+                    }
+                    self.value(end, Some(range_ty));
+                    if second.is_some() {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: two names for a range",
+                            self.span(start),
+                        );
+                    }
+                    let mark = self.mark();
+                    let binding = self.new_binding(name, false, range_ty);
+                    self.out.stmt_bindings[id] = Some(binding);
+                    self.loop_depth += 1;
+                    self.statements(body);
+                    self.loop_depth -= 1;
+                    self.restore(mark);
+                } else {
+                    let iterator = match self.input.ast.exprs[start] {
+                        Expr::Call { callee, args } if self.input.ast.args(args).is_empty() => {
+                            match self.input.ast.exprs[callee] {
+                                Expr::Member { base, name } => match self.spelling(name) {
+                                    "chars" => Some((base, Res::ForChars, Ty::Char)),
+                                    "lines" => Some((base, Res::ForLines, Ty::String)),
+                                    _ => None,
+                                },
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    let iterator = if let Some((base, kind, element)) = iterator {
+                        self.value(base, Some(Ty::String));
+                        self.out.resolutions[start] = kind;
+                        Some(element)
+                    } else if self.value(start, None) == Ty::String {
+                        Some(Ty::Char)
+                    } else {
+                        None
+                    };
+                    if let Some(element) = iterator {
+                        let mark = self.mark();
+                        let binding = self.new_binding(
+                            name,
+                            false,
+                            if second.is_some() { Ty::I64 } else { element },
+                        );
+                        self.out.stmt_bindings[id] = Some(binding);
+                        if let Some(second) = second {
+                            self.new_binding(second, false, element);
+                        }
+                        self.loop_depth += 1;
+                        self.statements(body);
+                        self.loop_depth -= 1;
+                        self.restore(mark);
+                    } else {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: this for iterator",
+                            self.span(start),
+                        );
+                    }
+                }
+            }
             Stmt::While {
                 condition, body, ..
             } => {
                 self.value(condition, Some(Ty::Bool));
+                self.loop_depth += 1;
                 self.statements(body);
+                self.loop_depth -= 1;
+            }
+            Stmt::Break(keyword) | Stmt::Continue(keyword) => {
+                if self.loop_depth == 0 {
+                    self.report(
+                        Code::Syntax,
+                        "loop control outside a loop",
+                        self.token_span(keyword),
+                    );
+                }
             }
             Stmt::Return { keyword, value } => {
                 let ret = self.current.map_or(Ty::Error, |f| f.ret);

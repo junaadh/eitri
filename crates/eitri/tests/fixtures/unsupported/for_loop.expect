@@ -1,1 +1,1 @@
-error[E0001] 0..3: not supported yet: `for` loops
+error[E0001] 12..13: not supported yet: two names for a range

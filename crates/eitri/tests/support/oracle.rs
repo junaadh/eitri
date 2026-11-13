@@ -187,7 +187,9 @@ impl Oracle {
             if let Err(unwind) = eval.stmt(host, stmt) {
                 result = Err(match unwind {
                     Unwind::Fault(fault) => fault,
-                    Unwind::Return(_) => unreachable!("the checker rejects a top-level return"),
+                    Unwind::Return(_) | Unwind::Break | Unwind::Continue => {
+                        unreachable!("checked top-level control flow")
+                    }
                 });
                 break;
             }
@@ -296,6 +298,8 @@ impl Value {
 /// Leaving evaluation early: a `return`, or a fault on its way out.
 enum Unwind {
     Return(Value),
+    Break,
+    Continue,
     Fault(Fault),
 }
 
@@ -388,13 +392,20 @@ impl Eval<'_> {
                 self.locals[binding.index()] = Some(new);
             }
             Stmt::Expr(expr) => return self.expr(host, expr),
+            Stmt::Break(_) => return Err(Unwind::Break),
+            Stmt::Continue(_) => return Err(Unwind::Continue),
+            Stmt::For(for_id) => return self.for_stmt(host, id, for_id),
             Stmt::While {
                 keyword,
                 condition,
                 body,
             } => {
                 while self.expr(host, condition)?.bool() {
-                    self.block(host, body)?;
+                    match self.block(host, body) {
+                        Ok(_) | Err(Unwind::Continue) => {}
+                        Err(Unwind::Break) => break,
+                        Err(other) => return Err(other),
+                    }
                     // After the body, before the condition again.
                     self.debit(self.tokens.span(keyword))?;
                 }
@@ -406,6 +417,100 @@ impl Eval<'_> {
                 };
                 return Err(Unwind::Return(value));
             }
+        }
+        Ok(Value::Void)
+    }
+
+    #[inline(never)]
+    fn for_stmt(
+        &mut self,
+        host: &mut dyn Host,
+        id: eitri_syntax::ast::StmtId,
+        for_id: eitri_syntax::ast::ForId,
+    ) -> Flow<Value> {
+        let eitri_syntax::ast::ForStmt {
+            keyword,
+            start,
+            end,
+            inclusive,
+            body,
+            ..
+        } = self.ast.fors[for_id];
+        let binding = self.checked.stmt_bindings[id].expect("checked for binding");
+        if end.is_none() {
+            let base = if matches!(
+                self.checked.resolutions[start],
+                Res::ForChars | Res::ForLines
+            ) {
+                let Expr::Call { callee, .. } = self.ast.exprs[start] else {
+                    unreachable!()
+                };
+                let Expr::Member { base, .. } = self.ast.exprs[callee] else {
+                    unreachable!()
+                };
+                base
+            } else {
+                start
+            };
+            let Value::String(index) = self.expr(host, base)? else {
+                unreachable!()
+            };
+            let text = self.strings[index as usize].clone();
+            let mut entries = Vec::new();
+            if self.checked.resolutions[start] != Res::ForLines {
+                for (offset, ch) in text.char_indices() {
+                    entries.push((offset, Value::Scalar(Ty::Char, ch as u64)));
+                }
+            } else {
+                let mut offset = 0;
+                for line in text.split_inclusive('\n') {
+                    let clean = line
+                        .strip_suffix('\n')
+                        .map(|s| s.strip_suffix('\r').unwrap_or(s))
+                        .unwrap_or(line);
+                    let index = self.strings.len() as u32;
+                    self.strings.push(clean.to_owned());
+                    entries.push((offset, Value::String(index)));
+                    offset += line.len();
+                }
+            }
+            for (offset, value) in entries {
+                if self.ast.fors[for_id].second.is_some() {
+                    self.locals[binding.index()] = Some(Value::Int(offset as i64));
+                    self.locals[binding.index() + 1] = Some(value);
+                } else {
+                    self.locals[binding.index()] = Some(value);
+                }
+                match self.block(host, body) {
+                    Ok(_) | Err(Unwind::Continue) => {}
+                    Err(Unwind::Break) => break,
+                    Err(other) => return Err(other),
+                }
+                self.debit(self.tokens.span(keyword))?;
+            }
+            return Ok(Value::Void);
+        }
+        let mut current = self.expr(host, start)?.integer();
+        let limit = self.expr(host, end.expect("checked range"))?.integer();
+        while if inclusive {
+            current <= limit
+        } else {
+            current < limit
+        } {
+            self.locals[binding.index()] = Some(Value::from_word(
+                self.checked.bindings[binding].ty,
+                current as u64,
+            ));
+            match self.block(host, body) {
+                Ok(_) | Err(Unwind::Continue) => {}
+                Err(Unwind::Break) => break,
+                Err(other) => return Err(other),
+            }
+            self.debit(self.tokens.span(keyword))?;
+            if inclusive && current == limit {
+                break;
+            }
+            current += 1;
         }
         Ok(Value::Void)
     }
@@ -516,10 +621,138 @@ impl Eval<'_> {
                     Value::Int(value.len() as i64)
                 })
             }
+            Expr::Call { callee, .. }
+                if matches!(
+                    self.checked.resolutions[e],
+                    Res::StringTrim
+                        | Res::StringTrimStart
+                        | Res::StringTrimEnd
+                        | Res::StringUpper
+                        | Res::StringLower
+                ) =>
+            {
+                let Expr::Member { base, .. } = self.ast.exprs[callee] else {
+                    unreachable!()
+                };
+                let Value::String(index) = self.expr(host, base)? else {
+                    unreachable!()
+                };
+                let value = &self.strings[index as usize];
+                if matches!(
+                    self.checked.resolutions[e],
+                    Res::StringUpper | Res::StringLower
+                ) {
+                    let upper = self.checked.resolutions[e] == Res::StringUpper;
+                    let result: String = value
+                        .chars()
+                        .map(|c| {
+                            let override_value = match c as u32 {
+                                0x130 => Some((0x130, 0x69)),
+                                0x277 => Some((0x277, 0x277)),
+                                0x27C => Some((0x27C, 0x27C)),
+                                0x1F80 => Some((0x1F88, 0x1F80)),
+                                0x1F81 => Some((0x1F89, 0x1F81)),
+                                0x1F82 => Some((0x1F8A, 0x1F82)),
+                                0x1F83 => Some((0x1F8B, 0x1F83)),
+                                0x1F84 => Some((0x1F8C, 0x1F84)),
+                                0x1F85 => Some((0x1F8D, 0x1F85)),
+                                0x1F86 => Some((0x1F8E, 0x1F86)),
+                                0x1F87 => Some((0x1F8F, 0x1F87)),
+                                0x1F90 => Some((0x1F98, 0x1F90)),
+                                0x1F91 => Some((0x1F99, 0x1F91)),
+                                0x1F92 => Some((0x1F9A, 0x1F92)),
+                                0x1F93 => Some((0x1F9B, 0x1F93)),
+                                0x1F94 => Some((0x1F9C, 0x1F94)),
+                                0x1F95 => Some((0x1F9D, 0x1F95)),
+                                0x1F96 => Some((0x1F9E, 0x1F96)),
+                                0x1F97 => Some((0x1F9F, 0x1F97)),
+                                0x1FA0 => Some((0x1FA8, 0x1FA0)),
+                                0x1FA1 => Some((0x1FA9, 0x1FA1)),
+                                0x1FA2 => Some((0x1FAA, 0x1FA2)),
+                                0x1FA3 => Some((0x1FAB, 0x1FA3)),
+                                0x1FA4 => Some((0x1FAC, 0x1FA4)),
+                                0x1FA5 => Some((0x1FAD, 0x1FA5)),
+                                0x1FA6 => Some((0x1FAE, 0x1FA6)),
+                                0x1FA7 => Some((0x1FAF, 0x1FA7)),
+                                0x1FB3 => Some((0x1FBC, 0x1FB3)),
+                                0x1FC3 => Some((0x1FCC, 0x1FC3)),
+                                0x1FF3 => Some((0x1FFC, 0x1FF3)),
+                                0xA7DD => Some((0xA7DD, 0xA7DD)),
+                                0xA7E2 => Some((0xA7E2, 0xA7E2)),
+                                0xAB4B => Some((0xAB4B, 0xAB4B)),
+                                0xAB4C => Some((0xAB4C, 0xAB4C)),
+                                0xAB6C => Some((0xAB6C, 0xAB6C)),
+                                0xAB6D => Some((0xAB6D, 0xAB6D)),
+                                0x1DF40 => Some((0x1DF40, 0x1DF40)),
+                                0x1DF41 => Some((0x1DF41, 0x1DF41)),
+                                0x1DF48 => Some((0x1DF48, 0x1DF48)),
+                                0x1DF49 => Some((0x1DF49, 0x1DF49)),
+                                0x1DF4A => Some((0x1DF4A, 0x1DF4A)),
+                                0x1DF4B => Some((0x1DF4B, 0x1DF4B)),
+                                0x1DF4D => Some((0x1DF4D, 0x1DF4D)),
+                                0x1DF4E => Some((0x1DF4E, 0x1DF4E)),
+                                0x1DF51 => Some((0x1DF51, 0x1DF51)),
+                                0x1DF52 => Some((0x1DF52, 0x1DF52)),
+                                0x1DF68 => Some((0x1DF68, 0x1DF68)),
+                                0x1DF69 => Some((0x1DF69, 0x1DF69)),
+                                0x1DF6A => Some((0x1DF6A, 0x1DF6A)),
+                                0x1DF6B => Some((0x1DF6B, 0x1DF6B)),
+                                0x1DF6C => Some((0x1DF6C, 0x1DF6C)),
+                                0x1DF6D => Some((0x1DF6D, 0x1DF6D)),
+                                0x1DF6E => Some((0x1DF6E, 0x1DF6E)),
+                                0x1DF6F => Some((0x1DF6F, 0x1DF6F)),
+                                0x1DF72 => Some((0x1DF72, 0x1DF72)),
+                                0x1DF73 => Some((0x1DF73, 0x1DF73)),
+                                0x1DF74 => Some((0x1DF74, 0x1DF74)),
+                                0x1DF75 => Some((0x1DF75, 0x1DF75)),
+                                0x1DF76 => Some((0x1DF76, 0x1DF76)),
+                                0x1DF77 => Some((0x1DF77, 0x1DF77)),
+                                0x1DF78 => Some((0x1DF78, 0x1DF78)),
+                                0x1DF79 => Some((0x1DF79, 0x1DF79)),
+                                0x1DF7A => Some((0x1DF7A, 0x1DF7A)),
+                                0x1DF7B => Some((0x1DF7B, 0x1DF7B)),
+                                0x1DF7C => Some((0x1DF7C, 0x1DF7C)),
+                                0x1DF7D => Some((0x1DF7D, 0x1DF7D)),
+                                0x1DF7E => Some((0x1DF7E, 0x1DF7E)),
+                                0x1DF7F => Some((0x1DF7F, 0x1DF7F)),
+                                _ => None,
+                            };
+                            if let Some((u, l)) = override_value {
+                                char::from_u32(if upper { u } else { l }).unwrap()
+                            } else {
+                                let mapped = if upper {
+                                    c.to_uppercase().collect::<String>()
+                                } else {
+                                    c.to_lowercase().collect::<String>()
+                                };
+                                if mapped.chars().count() == 1 {
+                                    mapped.chars().next().unwrap()
+                                } else {
+                                    c
+                                }
+                            }
+                        })
+                        .collect();
+                    let index = self.strings.len() as u32;
+                    self.strings.push(result);
+                    return Ok(Value::String(index));
+                }
+                let result = match self.checked.resolutions[e] {
+                    Res::StringTrim => value.trim(),
+                    Res::StringTrimStart => value.trim_start(),
+                    Res::StringTrimEnd => value.trim_end(),
+                    _ => unreachable!(),
+                }
+                .to_owned();
+                let index = self.strings.len() as u32;
+                self.strings.push(result);
+                Ok(Value::String(index))
+            }
             Expr::Call { callee, args }
                 if matches!(
                     self.checked.resolutions[e],
                     Res::StringSlice
+                        | Res::StringReplace
                         | Res::StringContains
                         | Res::StringStarts
                         | Res::StringEnds
@@ -536,7 +769,17 @@ impl Eval<'_> {
                 for &argument in self.ast.args(args) {
                     arguments.push(self.expr(host, argument)?);
                 }
-                if self.checked.resolutions[e] == Res::StringSlice {
+                if self.checked.resolutions[e] == Res::StringReplace {
+                    let (Value::String(from), Value::String(to)) = (arguments[0], arguments[1])
+                    else {
+                        unreachable!()
+                    };
+                    let result = self.strings[index as usize]
+                        .replace(&self.strings[from as usize], &self.strings[to as usize]);
+                    let index = self.strings.len() as u32;
+                    self.strings.push(result);
+                    Ok(Value::String(index))
+                } else if self.checked.resolutions[e] == Res::StringSlice {
                     let first = arguments[0].integer();
                     let last = arguments[1].integer();
                     let slice = usize::try_from(first)
@@ -947,6 +1190,7 @@ impl Reenter for Eval<'_> {
             Ok(_) => Ok(Value::Void),
             Err(Unwind::Return(value)) => Ok(value),
             Err(Unwind::Fault(fault)) => Err(fault),
+            Err(Unwind::Break | Unwind::Continue) => unreachable!("checked loop control"),
         };
         self.locals = saved;
         self.current = current;

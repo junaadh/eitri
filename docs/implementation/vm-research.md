@@ -1800,3 +1800,35 @@ causal change. Runtime creation, file I/O and host work are excluded. The
 few-microsecond target remains missed. Report and samples:
 `/tmp/orchestra/eitri-t016-3-bench.txt` and
 `/tmp/orchestra/eitri-t016-3-samples.csv`. Lua was not rerun.
+
+### T016 work in progress: string transforms
+
+Unicode White_Space trimming, replacement and Unicode 17.0 simple case mapping
+now run in both interpreters. Collection is forced at every safepoint in the
+transform fixture. These operations scan their inputs; case mapping uses two
+passes and a binary search over the 1,505 upper or 1,488 lower mappings per
+scalar. Replacement counts matches before allocating and scans again to write.
+This is a correctness implementation, with no optimization claim.
+
+On 2026-11-13, `cargo bench --offline --locked -p eitri --bench
+source_to_result -- 1001` measured optimized builds on aarch64 macOS 27.0.1,
+Rust 1.101.0-nightly (2d20b42b8), LLVM 23.1.5. The CPU identification query
+was unavailable. The reused `module` compile p50/p99 was 7,834/8,167 ns,
+first execution 208/250 ns, and total 8,083/8,417 ns; 48 allocations and
+4,692 bytes per run. This scalar workload does not measure the new string
+operations, and there is no matched before run, so no performance change is
+claimed. Raw samples: `/private/tmp/eitri-t016-wip-samples.csv`; complete
+report: `/private/tmp/eitri-t016-wip-bench.txt`.
+
+T016-4 follow-up: integer ranges and string character/line loops, with
+innermost `break` and `continue`, are covered by fixtures on both interpreters.
+The reused loop-label stack adds 32 retained bytes in the arithmetic and
+branching benchmark contexts, while reused-run allocation counts remain at
+24 for both workloads. The isolated command `cargo bench --offline --locked
+-p eitri --bench source_to_result -- 1001` measured the scalar `module`
+compile p50/p99 at 7,875/9,666 ns, execution 208/250 ns, and total
+8,084/9,917 ns. These workloads do not measure the new loops. The host CPU
+identity was unavailable in the sandbox; raw samples and the full report are
+`/private/tmp/eitri-t016-4-samples-isolated.csv` and
+`/private/tmp/eitri-t016-4-bench-isolated.txt`. Comparisons with the earlier
+work-in-progress run are not controlled enough to claim a speed change.

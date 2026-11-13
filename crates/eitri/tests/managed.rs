@@ -81,6 +81,69 @@ fn slice_and_search_survive_collection_at_every_safepoint() {
 }
 
 #[test]
+fn string_transformations_reject_wrong_arguments() {
+    let mut context = Context::new();
+    for source in [
+        "\"x\".trim(1)",
+        "\"x\".to_upper(1)",
+        "\"x\".replace(\"x\")",
+        "\"x\".replace(1, 2)",
+    ] {
+        assert!(context.compile(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn string_iteration_survives_collection_at_every_safepoint() {
+    let source = include_str!("fixtures/managed/for_strings.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/for_strings.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn trimming_survives_collection_at_every_safepoint() {
+    let source = include_str!("fixtures/managed/string_trim.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/string_trim.expect")
+            );
+        }
+    }
+}
+
+#[test]
 fn scalar_string_conversions_survive_forced_collection() {
     let source = include_str!("fixtures/managed/string_conversion.eit");
     for threaded in [false, true] {

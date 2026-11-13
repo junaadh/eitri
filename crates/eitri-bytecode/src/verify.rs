@@ -705,7 +705,7 @@ pub fn string_roots_budgeted(
                 let first = insn.decoded.operands.b as usize;
                 uses[i * frame + first..i * frame + first + count].fill(true);
             }
-            Sem::StringSlice => {
+            Sem::StringSlice | Sem::StringReplace => {
                 let first = insn.decoded.operands.b as usize;
                 uses[i * frame + first..i * frame + first + 3].fill(true);
             }
@@ -910,7 +910,9 @@ fn structure(
                 ErrorKind::InvalidScalar("invalid string join range"),
             ));
         }
-        if decoded.op == Op::StrSlice && decoded.operands.b as u32 + 2 >= function.frame_size {
+        if matches!(decoded.op, Op::StrSlice | Op::StrReplace)
+            && decoded.operands.b as u32 + 2 >= function.frame_size
+        {
             return Err(error(
                 at,
                 ErrorKind::SlotOutsideFrame(decoded.operands.b as u32 + 2),
@@ -1184,6 +1186,36 @@ fn transfer(
         Sem::StringLen => {
             read(state, pc, b, Some(ValueType::String))?;
             write(state, a, I64);
+        }
+        Sem::StringNextChar | Sem::StringNextLine => {
+            read(state, pc, b, Some(ValueType::String))?;
+            read(state, pc, c, Some(I64))?;
+            if a == c {
+                return Err(error(
+                    pc,
+                    ErrorKind::InvalidScalar("iterator output overlaps cursor"),
+                ));
+            }
+            write(state, c, I64);
+            write(
+                state,
+                a,
+                if matches!(d.op.info().sem, Sem::StringNextChar) {
+                    ValueType::Char
+                } else {
+                    ValueType::String
+                },
+            );
+        }
+        Sem::StringReplace => {
+            for slot in b..=b + 2 {
+                read(state, pc, slot, Some(ValueType::String))?;
+            }
+            write(state, a, ValueType::String);
+        }
+        Sem::StringTrim | Sem::StringCase => {
+            read(state, pc, b, Some(ValueType::String))?;
+            write(state, a, ValueType::String);
         }
         Sem::StringConcat => {
             read(state, pc, b, Some(ValueType::String))?;

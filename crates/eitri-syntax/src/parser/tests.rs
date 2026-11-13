@@ -172,9 +172,22 @@ impl Printer<'_> {
                 format!("({op} {} {})", self.token(target), self.expr(value))
             }
             Stmt::Expr(e) => self.expr(e),
+            Stmt::For(for_id) => {
+                let crate::ast::ForStmt {
+                    start, end, body, ..
+                } = self.ast.fors[for_id];
+                format!(
+                    "(for {} {:?} {})",
+                    self.expr(start),
+                    end.map(|e| self.expr(e)),
+                    self.block(body)
+                )
+            }
             Stmt::While {
                 condition, body, ..
             } => format!("(while {} {})", self.expr(condition), self.block(body)),
+            Stmt::Break(_) => "(break)".into(),
+            Stmt::Continue(_) => "(continue)".into(),
             Stmt::Return { value, .. } => match value {
                 Some(v) => format!("(return {})", self.expr(v)),
                 None => "(return)".into(),
@@ -372,18 +385,6 @@ fn unsupported_features_are_reported_once_and_dropped() {
         (
             "@extern\nfn f() -> void {\n}",
             "E0001 0..7 not supported yet: attributes",
-        ),
-        (
-            "for i in 0..3 {\n}",
-            "E0001 0..3 not supported yet: `for` loops",
-        ),
-        (
-            "while true {\n    break\n}",
-            "E0001 17..22 not supported yet: `break`",
-        ),
-        (
-            "while false {\n    continue\n}",
-            "E0001 18..26 not supported yet: `continue`",
         ),
         (
             "let x = {\n    1\n}",

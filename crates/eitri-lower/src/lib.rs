@@ -79,6 +79,7 @@ pub struct LowerScratch {
     recording: Assembler<true>,
     slots: IndexVec<BindingId, u32>,
     stack: Vec<ExprId>,
+    loops: Vec<(Label, Label)>,
 }
 
 impl LowerScratch {
@@ -109,6 +110,8 @@ impl LowerScratch {
             .reserve_budgeted(bindings.saturating_sub(self.slots.len()), budget)?;
         let additional = tokens.saturating_sub(self.stack.len());
         budget.reserve_vec(&mut self.stack, additional)?;
+        let additional = tokens.saturating_sub(self.loops.len());
+        budget.reserve_vec(&mut self.loops, additional)?;
         Ok(())
     }
 
@@ -119,6 +122,7 @@ impl LowerScratch {
             .checked_add(self.recording.budget_bytes()?)
             .and_then(|n| n.checked_add(self.slots.capacity() * size_of::<u32>()))
             .and_then(|n| n.checked_add(self.stack.capacity() * size_of::<ExprId>()))
+            .and_then(|n| n.checked_add(self.loops.capacity() * size_of::<(Label, Label)>()))
             .ok_or(eitri_base::OutOfMemory)
     }
 
@@ -149,6 +153,7 @@ impl LowerScratch {
             + self.recording.vector_bytes()
             + self.slots.capacity() * size_of::<u32>()
             + self.stack.capacity() * size_of::<ExprId>()
+            + self.loops.capacity() * size_of::<(Label, Label)>()
     }
 }
 
@@ -239,6 +244,7 @@ fn lower_mode<const SIMPLE: bool>(
     scratch.slots.clear();
     scratch.slots.resize(checked.bindings.len(), u32::MAX);
     scratch.stack.clear();
+    scratch.loops.clear();
     if keep_ir {
         let lowerer = Lowerer::<_, SIMPLE> {
             input,
@@ -247,6 +253,7 @@ fn lower_mode<const SIMPLE: bool>(
             slots: &mut scratch.slots,
             stack: &mut scratch.stack,
             plans: Vec::new(),
+            loops: &mut scratch.loops,
             top: 0,
         };
         lower_with(lowerer)
@@ -258,6 +265,7 @@ fn lower_mode<const SIMPLE: bool>(
             slots: &mut scratch.slots,
             stack: &mut scratch.stack,
             plans: Vec::new(),
+            loops: &mut scratch.loops,
             top: 0,
         };
         lower_with(lowerer)
@@ -528,6 +536,7 @@ struct Lowerer<'a, 'i, const R: bool, const SIMPLE: bool> {
     slots: &'a mut IndexVec<BindingId, u32>,
     stack: &'a mut Vec<ExprId>,
     plans: Vec<String>,
+    loops: &'a mut Vec<(Label, Label)>,
     /// The next free slot.
     top: u32,
 }
@@ -629,7 +638,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     fn stmt_ends(&self, stmt: StmtId) -> bool {
         let ast = self.input.ast;
         match ast.stmts[stmt] {
-            Stmt::Return { .. } => true,
+            Stmt::Return { .. } | Stmt::Break(_) | Stmt::Continue(_) => true,
             Stmt::Expr(e) => match ast.exprs[e] {
                 Expr::If(id) => self.checked.types[e] == Ty::Void && self.if_ends(id),
                 _ => false,
@@ -712,6 +721,141 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             Stmt::Expr(e) => self.discard(e)?,
+            Stmt::Break(keyword) | Stmt::Continue(keyword) => {
+                let &(continue_to, break_to) = self.loops.last().expect("checked loop control");
+                let target = if matches!(ast.stmts[id], Stmt::Break(_)) {
+                    break_to
+                } else {
+                    continue_to
+                };
+                self.asm.jump(target, self.input.tokens.span(keyword));
+            }
+            Stmt::For(for_id) => {
+                let eitri_syntax::ast::ForStmt {
+                    keyword,
+                    start,
+                    end,
+                    inclusive,
+                    body,
+                    ..
+                } = ast.fors[for_id];
+                let binding = checked.stmt_bindings[id].expect("checked for binding");
+                if end.is_none() {
+                    let base =
+                        if matches!(checked.resolutions[start], Res::ForChars | Res::ForLines) {
+                            let Expr::Call { callee, .. } = ast.exprs[start] else {
+                                unreachable!()
+                            };
+                            let Expr::Member { base, .. } = ast.exprs[callee] else {
+                                unreachable!()
+                            };
+                            base
+                        } else {
+                            start
+                        };
+                    let string = self.temp();
+                    self.expr(base, Some(string))?;
+                    self.top = string + 1;
+                    let length = self.temp();
+                    self.asm.emit(
+                        Op::StrLen,
+                        Operands::abc(length.into(), string.into(), 0),
+                        ast.span(start),
+                    )?;
+                    let current = self.temp();
+                    self.asm.load(current, 0, ValueType::I64, ast.span(start))?;
+                    let first_slot = self.temp();
+                    self.slots[binding] = first_slot;
+                    let result = if ast.fors[for_id].second.is_some() {
+                        let second = BindingId::from_u32(binding.as_u32() + 1);
+                        let slot = self.temp();
+                        self.slots[second] = slot;
+                        slot
+                    } else {
+                        first_slot
+                    };
+                    let top = self.asm.label();
+                    let exit = self.asm.label();
+                    let span = self.input.tokens.span(keyword);
+                    self.asm.bind(top)?;
+                    self.asm.branch_if(Cond::Le, length, current, exit, span)?;
+                    if ast.fors[for_id].second.is_some() {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc(first_slot.into(), current.into(), 0),
+                            span,
+                        )?;
+                    }
+                    let op = if checked.resolutions[start] == Res::ForLines {
+                        Op::StrNextLine
+                    } else {
+                        Op::StrNextChar
+                    };
+                    self.asm.emit(
+                        op,
+                        Operands::abc(result.into(), string.into(), current.into()),
+                        span,
+                    )?;
+                    let next = self.asm.label();
+                    self.loops.push((next, exit));
+                    let body_result = self.statements(body);
+                    self.loops.pop();
+                    body_result?;
+                    self.asm.bind(next)?;
+                    self.asm.jump(top, span);
+                    self.asm.bind(exit)?;
+                    self.top = mark;
+                    return Ok(());
+                }
+                let current = self.temp();
+                self.expr(start, Some(current))?;
+                self.top = current + 1;
+                let limit = self.temp();
+                self.expr(end.expect("checked range"), Some(limit))?;
+                self.top = limit + 1;
+                self.slots[binding] = current;
+                let top = self.asm.label();
+                let exit = self.asm.label();
+                let span = self.input.tokens.span(keyword);
+                let inclusive_exit = if inclusive {
+                    let poll = self.asm.label();
+                    self.asm.jump(top, span);
+                    self.asm.bind(poll)?;
+                    self.asm.jump(exit, span);
+                    Some(poll)
+                } else {
+                    None
+                };
+                self.asm.bind(top)?;
+                let ty = checked.bindings[binding].ty;
+                let cond = match (ty.signed(), inclusive) {
+                    (true, true) => Cond::Lt,
+                    (true, false) => Cond::Le,
+                    (false, true) => Cond::Lo,
+                    (false, false) => Cond::Ls,
+                };
+                self.asm.branch_if(cond, limit, current, exit, span)?;
+                let next = self.asm.label();
+                self.loops.push((next, exit));
+                let body_result = self.statements(body);
+                self.loops.pop();
+                body_result?;
+                self.asm.bind(next)?;
+                if inclusive {
+                    self.asm.branch_if(
+                        Cond::Eq,
+                        current,
+                        limit,
+                        inclusive_exit.expect("inclusive exit"),
+                        span,
+                    )?;
+                }
+                let one = self.temp();
+                self.asm.load(one, 1, value_type(ty), span)?;
+                self.operate(BinaryOp::Add, ty, current, current, one, span)?;
+                self.asm.jump(top, span);
+                self.asm.bind(exit)?;
+            }
             Stmt::While {
                 keyword,
                 condition,
@@ -721,7 +865,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let exit = self.asm.label();
                 self.asm.bind(top)?;
                 self.branch(condition, false, exit)?;
-                self.statements(body)?;
+                self.loops.push((top, exit));
+                let body_result = self.statements(body);
+                self.loops.pop();
+                body_result?;
                 // The back edge polls the budget; a fault there points at
                 // `while`.
                 self.asm.jump(top, self.input.tokens.span(keyword));
@@ -1068,10 +1215,38 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
                 Ok(slot)
             }
+            Expr::Call { callee, .. }
+                if matches!(
+                    checked.resolutions[e],
+                    Res::StringTrim
+                        | Res::StringTrimStart
+                        | Res::StringTrimEnd
+                        | Res::StringUpper
+                        | Res::StringLower
+                ) =>
+            {
+                let Expr::Member { base, .. } = ast.exprs[callee] else {
+                    unreachable!()
+                };
+                let src = self.expr(base, None)?;
+                let slot = self.dst(dst);
+                let op = match checked.resolutions[e] {
+                    Res::StringUpper => Op::StrUpper,
+                    Res::StringLower => Op::StrLower,
+                    Res::StringTrim => Op::StrTrim,
+                    Res::StringTrimStart => Op::StrTrimStart,
+                    Res::StringTrimEnd => Op::StrTrimEnd,
+                    _ => unreachable!(),
+                };
+                self.asm
+                    .emit(op, Operands::abc(slot.into(), src.into(), 0), span)?;
+                Ok(slot)
+            }
             Expr::Call { callee, args }
                 if matches!(
                     checked.resolutions[e],
                     Res::StringSlice
+                        | Res::StringReplace
                         | Res::StringContains
                         | Res::StringStarts
                         | Res::StringEnds
@@ -1081,7 +1256,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let Expr::Member { base, .. } = ast.exprs[callee] else {
                     unreachable!()
                 };
-                if checked.resolutions[e] == Res::StringSlice {
+                if matches!(
+                    checked.resolutions[e],
+                    Res::StringSlice | Res::StringReplace
+                ) {
                     let first = self.top;
                     self.top += 3;
                     let end = self.top;
@@ -1093,7 +1271,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                     let slot = self.dst(dst);
                     self.asm.emit(
-                        Op::StrSlice,
+                        if checked.resolutions[e] == Res::StringSlice {
+                            Op::StrSlice
+                        } else {
+                            Op::StrReplace
+                        },
                         Operands::abc(slot.into(), first.into(), 0),
                         span,
                     )?;

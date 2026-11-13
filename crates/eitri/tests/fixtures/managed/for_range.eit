@@ -1,0 +1,25 @@
+//! host: test
+import test from "test"
+var total = 0
+for n in 1..5 {
+    total += n
+}
+test.emit(total)
+for n in 9223372036854775807..=9223372036854775807 {
+    test.check(n == 9223372036854775807)
+}
+for n in 4..2 {
+    test.emit(n)
+}
+let start: u8 = 253
+let end: u8 = 255
+for n in start..=end { test.emit(i64(n)) }
+let large: u64 = 18446744073709551615
+for n in large..=large { test.check(n == large) }
+var n = 0
+for i in 0..10 {
+    if i == 1 { continue }
+    if i == 4 { break }
+    n += i
+}
+test.emit(n)

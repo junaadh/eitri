@@ -23,6 +23,7 @@ eitri_base::newtype_index! {
     pub struct StmtId;
     pub struct FnId;
     pub struct IfId;
+    pub struct ForId;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +148,17 @@ pub enum TypeExpr {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForStmt {
+    pub keyword: TokenId,
+    pub name: TokenId,
+    pub second: Option<TokenId>,
+    pub start: ExprId,
+    pub end: Option<ExprId>,
+    pub inclusive: bool,
+    pub body: Block,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stmt {
     Let {
         mutable: bool,
@@ -162,6 +174,9 @@ pub enum Stmt {
         span: Span,
     },
     Expr(ExprId),
+    For(ForId),
+    Break(TokenId),
+    Continue(TokenId),
     While {
         keyword: TokenId,
         condition: ExprId,
@@ -213,6 +228,7 @@ pub struct Ast {
     pub stmts: IndexVec<StmtId, Stmt>,
     pub exprs: IndexVec<ExprId, Expr>,
     pub ifs: IndexVec<IfId, IfExpr>,
+    pub fors: IndexVec<ForId, ForStmt>,
     pub expr_spans: IndexVec<ExprId, Span>,
     pub expr_lists: ListPool<ExprId>,
     pub stmt_lists: ListPool<StmtId>,
@@ -234,6 +250,7 @@ impl Ast {
             + self.stmts.capacity() * size_of::<Stmt>()
             + self.exprs.capacity() * size_of::<Expr>()
             + self.ifs.capacity() * size_of::<IfExpr>()
+            + self.fors.capacity() * size_of::<ForStmt>()
             + self.expr_spans.capacity() * size_of::<Span>()
             + self.expr_lists.heap_bytes()
             + self.stmt_lists.heap_bytes()
@@ -259,6 +276,8 @@ impl Ast {
             .reserve_budgeted(count.saturating_sub(self.exprs.len()), budget)?;
         self.ifs
             .reserve_budgeted(count.saturating_sub(self.ifs.len()), budget)?;
+        self.fors
+            .reserve_budgeted(count.saturating_sub(self.fors.len()), budget)?;
         self.expr_spans
             .reserve_budgeted(count.saturating_sub(self.expr_spans.len()), budget)?;
         self.expr_lists.reserve_budgeted(count, budget)?;
@@ -274,6 +293,7 @@ impl Ast {
         self.stmts.clear();
         self.exprs.clear();
         self.ifs.clear();
+        self.fors.clear();
         self.expr_spans.clear();
         self.expr_lists.clear();
         self.stmt_lists.clear();

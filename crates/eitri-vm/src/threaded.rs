@@ -21,8 +21,8 @@ use eitri_bytecode::{CallTarget, Function, FunctionId, Op};
 
 use crate::{
     Call, Fault, FaultKind, Frame, Host, Limits, Location, Machine, VmScratch, absolute,
-    collect_at, copy_result, format_scalar, host_fault, machine, raised, reserve_vm, resize_vm,
-    slot_field, string_slice_range,
+    collect_at, copy_result, format_scalar, host_fault, machine, next_char, next_line, raised,
+    reserve_vm, resize_vm, slot_field, string_slice_range, string_trim_range,
 };
 
 /// Everything a handler needs that is not hot enough for a register.
@@ -406,6 +406,92 @@ fn managed_op(
             st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
             Ok(None)
         }
+        Op::StrNextChar => {
+            let reference = st.m.references[st.base + b].expect("verified string operand");
+            let (ch, next) = next_char(
+                st.m.heap.string(reference).expect("live string root"),
+                st.m.slots[st.base + c],
+            )?;
+            st.m.slots[st.base + c] = next as u64;
+            Ok(Some(ch as u64))
+        }
+        Op::StrNextLine => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let reference = st.m.references[st.base + b].expect("verified string operand");
+            let (first, last, next) = next_line(
+                st.m.heap.string(reference).expect("live string root"),
+                st.m.slots[st.base + c],
+            )?;
+            let mut value =
+                st.m.heap
+                    .slice(reference, first, last, st.m.memory_limit, st.m.memory);
+            if value.is_err() {
+                trace(st, pc)?;
+                value =
+                    st.m.heap
+                        .slice(reference, first, last, st.m.memory_limit, st.m.memory);
+            }
+            st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+            st.m.slots[st.base + c] = next as u64;
+            Ok(None)
+        }
+        Op::StrUpper | Op::StrLower => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let source = st.m.references[st.base + b].expect("verified string operand");
+            let mut value =
+                st.m.heap
+                    .case(source, op == Op::StrUpper, st.m.memory_limit, st.m.memory);
+            if value.is_err() {
+                trace(st, pc)?;
+                value =
+                    st.m.heap
+                        .case(source, op == Op::StrUpper, st.m.memory_limit, st.m.memory);
+            }
+            st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+            Ok(None)
+        }
+        Op::StrReplace => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let source = st.m.references[st.base + b].expect("verified string operand");
+            let from = st.m.references[st.base + b + 1].expect("verified string operand");
+            let to = st.m.references[st.base + b + 2].expect("verified string operand");
+            let mut value =
+                st.m.heap
+                    .replace(source, from, to, st.m.memory_limit, st.m.memory);
+            if value.is_err() {
+                trace(st, pc)?;
+                value =
+                    st.m.heap
+                        .replace(source, from, to, st.m.memory_limit, st.m.memory);
+            }
+            st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+            Ok(None)
+        }
+        Op::StrTrim | Op::StrTrimStart | Op::StrTrimEnd => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let reference = st.m.references[st.base + b].expect("verified string operand");
+            let (first, last) =
+                string_trim_range(st.m.heap.string(reference).expect("live string root"), op);
+            let mut value =
+                st.m.heap
+                    .slice(reference, first, last, st.m.memory_limit, st.m.memory);
+            if value.is_err() {
+                trace(st, pc)?;
+                value =
+                    st.m.heap
+                        .slice(reference, first, last, st.m.memory_limit, st.m.memory);
+            }
+            st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+            Ok(None)
+        }
         Op::StrSlice => {
             if st.m.force_gc {
                 trace(st, pc)?;
@@ -602,6 +688,14 @@ managed_handler!(str_len, Op::StrLen);
 managed_handler!(str_concat, Op::StrConcat);
 managed_handler!(str_compare, Op::StrCompare);
 managed_handler!(str_join, Op::StrJoin);
+managed_handler!(str_next_char, Op::StrNextChar);
+managed_handler!(str_next_line, Op::StrNextLine);
+managed_handler!(str_upper, Op::StrUpper);
+managed_handler!(str_lower, Op::StrLower);
+managed_handler!(str_replace, Op::StrReplace);
+managed_handler!(str_trim, Op::StrTrim);
+managed_handler!(str_trim_start, Op::StrTrimStart);
+managed_handler!(str_trim_end, Op::StrTrimEnd);
 managed_handler!(str_slice, Op::StrSlice);
 managed_handler!(str_interpolate, Op::StrInterpolate);
 managed_handler!(str_contains, Op::StrContains);
@@ -741,6 +835,14 @@ extern "rust-preserve-none" fn wide(
                 | Op::StrConcat
                 | Op::StrCompare
                 | Op::StrJoin
+                | Op::StrNextChar
+                | Op::StrNextLine
+                | Op::StrUpper
+                | Op::StrLower
+                | Op::StrReplace
+                | Op::StrTrim
+                | Op::StrTrimStart
+                | Op::StrTrimEnd
                 | Op::StrSlice
                 | Op::StrInterpolate
                 | Op::StrContains
@@ -1160,6 +1262,14 @@ static TABLE: [Handler; 256] = {
     table[Op::StrConcat as usize] = str_concat;
     table[Op::StrCompare as usize] = str_compare;
     table[Op::StrJoin as usize] = str_join;
+    table[Op::StrNextChar as usize] = str_next_char;
+    table[Op::StrNextLine as usize] = str_next_line;
+    table[Op::StrUpper as usize] = str_upper;
+    table[Op::StrLower as usize] = str_lower;
+    table[Op::StrReplace as usize] = str_replace;
+    table[Op::StrTrim as usize] = str_trim;
+    table[Op::StrTrimStart as usize] = str_trim_start;
+    table[Op::StrTrimEnd as usize] = str_trim_end;
     table[Op::StrSlice as usize] = str_slice;
     table[Op::StrInterpolate as usize] = str_interpolate;
     table[Op::StrContains as usize] = str_contains;

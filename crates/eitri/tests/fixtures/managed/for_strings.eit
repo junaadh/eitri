@@ -1,0 +1,22 @@
+//! host: test
+import test from "test"
+for i, c in "aé☃".chars() {
+    test.emit(i)
+    test.check(c == 'a' || c == 'é' || c == '☃')
+}
+for c in "".chars() { test.check(c == 'x') }
+for i, line in "a\r\né\n\nlast\r".lines() {
+    test.emit(i)
+    test.emit(line.len())
+}
+for line in "z\n".lines() { test.check(line == "z") }
+for i, line in "one\ntwo\nthree".lines() {
+    if i == 0 { continue }
+    test.emit(i)
+    test.emit(line.len())
+    break
+}
+let literal = "éx"
+for i, c in literal {
+    if c == 'x' { test.emit(i) }
+}

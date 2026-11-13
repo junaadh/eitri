@@ -46,6 +46,7 @@ use eitri_base::IndexVec;
 use eitri_bytecode::{CallTarget, Function, FunctionId, Op, SlotRange};
 
 mod heap;
+mod unicode_case;
 pub use heap::RetainedString;
 mod threaded;
 
@@ -1061,6 +1062,45 @@ fn slot_field(word: u32, hi: u32, shift: u32) -> usize {
     (((word >> shift) & 0xff) | ((hi >> shift) & 0xff) << 8) as usize
 }
 
+fn next_char(text: &str, offset: u64) -> Result<(char, usize), FaultKind> {
+    let offset = usize::try_from(offset).map_err(|_| FaultKind::InvalidStringSlice)?;
+    let c = text
+        .get(offset..)
+        .and_then(|s| s.chars().next())
+        .ok_or(FaultKind::InvalidStringSlice)?;
+    Ok((c, offset + c.len_utf8()))
+}
+
+fn next_line(text: &str, offset: u64) -> Result<(usize, usize, usize), FaultKind> {
+    let start = usize::try_from(offset).map_err(|_| FaultKind::InvalidStringSlice)?;
+    let rest = text
+        .get(start..)
+        .filter(|s| !s.is_empty())
+        .ok_or(FaultKind::InvalidStringSlice)?;
+    let (mut end, next) = match rest.find('\n') {
+        Some(index) => (start + index, start + index + 1),
+        None => (text.len(), text.len()),
+    };
+    if next > end && end > start && text.as_bytes()[end - 1] == b'\r' {
+        end -= 1;
+    }
+    Ok((start, end, next))
+}
+
+fn string_trim_range(text: &str, op: Op) -> (usize, usize) {
+    let start = if op == Op::StrTrimEnd {
+        0
+    } else {
+        text.len() - text.trim_start().len()
+    };
+    let end = if op == Op::StrTrimStart {
+        text.len()
+    } else {
+        text.trim_end().len().max(start)
+    };
+    (start, end)
+}
+
 fn string_slice_range(text: &str, start: u64, end: u64) -> Result<(usize, usize), FaultKind> {
     if (start as i64) < 0 || (end as i64) < 0 {
         return Err(FaultKind::InvalidStringSlice);
@@ -1216,6 +1256,155 @@ fn host_fault(
 /// results are then at `base`) or faults. Frames below `floor` belong to
 /// outer runs: a nested run returns to its host when its entry returns,
 /// and its faults trace only its own frames.
+type StringTransformState<'a> = (
+    &'a mut heap::Heap,
+    &'a mut Vec<Option<heap::HeapRef>>,
+    &'a mut Vec<heap::HeapRef>,
+    &'a mut Vec<Frame>,
+    &'a mut Option<eitri_base::MemoryBudget>,
+);
+
+#[inline(never)]
+fn string_transform(
+    op: Op,
+    (a, b, c): (usize, usize, usize),
+    s: &mut [u64],
+    state: StringTransformState<'_>,
+    (memory_limit, force_gc): (usize, bool),
+    (functions, id, base, start): (&IndexVec<FunctionId, Function>, FunctionId, usize, usize),
+) -> Result<(), FaultKind> {
+    let (heap, references, host_roots, frames, memory) = state;
+    match op {
+        Op::StrNextChar => {
+            let reference = references[base + b].expect("verified string operand");
+            let (ch, next) = next_char(heap.string(reference).expect("live string root"), s[c])?;
+            s[c] = next as u64;
+            s[a] = ch as u64;
+        }
+        Op::StrNextLine => {
+            if force_gc {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+            }
+            let reference = references[base + b].expect("verified string operand");
+            let (first, last, next) =
+                next_line(heap.string(reference).expect("live string root"), s[c])?;
+            let mut value = heap.slice(reference, first, last, memory_limit, memory);
+            if value.is_err() {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+                value = heap.slice(reference, first, last, memory_limit, memory);
+            }
+            references[base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+            s[c] = next as u64;
+        }
+        Op::StrUpper | Op::StrLower => {
+            if force_gc {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+            }
+            let source = references[base + b].expect("verified string operand");
+            let mut value = heap.case(source, op == Op::StrUpper, memory_limit, memory);
+            if value.is_err() {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+                value = heap.case(source, op == Op::StrUpper, memory_limit, memory);
+            }
+            references[base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+        }
+        Op::StrReplace => {
+            if force_gc {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+            }
+            let source = references[base + b].expect("verified string operand");
+            let from = references[base + b + 1].expect("verified string operand");
+            let to = references[base + b + 2].expect("verified string operand");
+            let mut value = heap.replace(source, from, to, memory_limit, memory);
+            if value.is_err() {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+                value = heap.replace(source, from, to, memory_limit, memory);
+            }
+            references[base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+        }
+        Op::StrTrim | Op::StrTrimStart | Op::StrTrimEnd => {
+            if force_gc {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+            }
+            let reference = references[base + b].expect("verified string operand");
+            let (first, last) =
+                string_trim_range(heap.string(reference).expect("live string root"), op);
+            let mut value = heap.slice(reference, first, last, memory_limit, memory);
+            if value.is_err() {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+                value = heap.slice(reference, first, last, memory_limit, memory);
+            }
+            references[base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
 fn execute(
     m: &mut Machine<'_>,
     host: &mut dyn Host,
@@ -1432,6 +1621,24 @@ fn execute(
                         m.references[base + a!()] = Some(value.map_err(|_| {
                             fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)
                         })?);
+                    }
+                    Op::StrNextChar
+                    | Op::StrNextLine
+                    | Op::StrUpper
+                    | Op::StrLower
+                    | Op::StrReplace
+                    | Op::StrTrim
+                    | Op::StrTrimStart
+                    | Op::StrTrimEnd => {
+                        string_transform(
+                            op,
+                            (a!(), b!(), c!()),
+                            s,
+                            (m.heap, m.references, m.host_roots, m.frames, m.memory),
+                            (m.memory_limit, m.force_gc),
+                            (functions, id, base, start),
+                        )
+                        .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
                     }
                     Op::StrSlice => {
                         if m.force_gc {

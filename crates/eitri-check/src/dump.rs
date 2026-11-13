@@ -405,6 +405,20 @@ impl Dumper<'_> {
                 (line, vec![Node::Ref(target, binding), Node::Expr(value)])
             }
             Stmt::Expr(e) => self.expr(e, None),
+            Stmt::For(for_id) => {
+                let eitri_syntax::ast::ForStmt {
+                    keyword,
+                    start,
+                    end,
+                    body,
+                    ..
+                } = ast.fors[for_id];
+                let range = self.range(tokens.span(keyword).to(body.span));
+                let mut nodes = vec![Node::Expr(start)];
+                nodes.extend(end.map(Node::Expr));
+                nodes.push(Node::Block(body));
+                (format!("{} {range}", self.paint(STMT, "ForStmt")), nodes)
+            }
             Stmt::While {
                 keyword,
                 condition,
@@ -415,6 +429,15 @@ impl Dumper<'_> {
                     format!("{} {range}", self.paint(STMT, "WhileStmt")),
                     vec![Node::Expr(condition), Node::Block(body)],
                 )
+            }
+            Stmt::Break(keyword) | Stmt::Continue(keyword) => {
+                let span = self.range(tokens.span(keyword));
+                let name = if matches!(ast.stmts[id], Stmt::Break(_)) {
+                    "BreakStmt"
+                } else {
+                    "ContinueStmt"
+                };
+                (format!("{} {span}", self.paint(STMT, name)), vec![])
             }
             Stmt::Return { keyword, value } => {
                 let span = match value {

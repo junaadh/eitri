@@ -60,6 +60,17 @@ and these scalar types. Invalid slice ranges and UTF-8 boundaries fault with
 Hosts may retain a string argument across calls and executions and
 return it to a script; explicit release removes its collector root.
 
+## String transforms and iteration (T016-4)
+
+Both interpreters support Unicode White_Space trimming, replacement, and
+Unicode 17.0 simple uppercase and lowercase mappings. Integer ranges can be
+iterated directly with `for`, including inclusive maximum endpoints. Strings
+and `.chars()` yield Unicode scalars; `.lines()` yields lines. A second loop
+binding receives the UTF-8 byte offset before the character or line binding.
+`break` and `continue` target the innermost loop; labels remain unsupported.
+Taken loop back edges poll the execution budget.
+Standalone range values and other collection iterators remain future work.
+
 ## Types
 
 | Type | Where | Notes |

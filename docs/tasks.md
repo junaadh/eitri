@@ -790,6 +790,11 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   syntax remains future work. Invalid UTF-8 boundaries produce a typed fault.
 - T016-3: single-line `${expression}` interpolation and `string(value)`
   format strings and scalar numbers, booleans and characters on both interpreters.
+- T016-4: integer range and string character/line `for` loops, byte-offset
+  bindings, `break`/`continue`, trimming, replacement, and Unicode 17.0 simple
+  case mapping execute on both interpreters. Forced-GC fixtures cover string
+  iteration and transforms; measurements are in the research ledger. T016's
+  remaining bytes and other string operations are still open.
 
 ### T017 — Implement aggregates and tagged values
 
@@ -806,6 +811,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Add packed element storage and correct width/stride accesses, pre-sized
   literal allocation, basic methods, insertion order, iteration mutation
   detection, and overflow-free integer range execution.
+- Implement string `split`, which returns an array, with the field and empty
+  separator semantics specified in the strings chapter.
 - Done when: optional map values, missing lookups, equality/hash invariants,
   signed zeros/NaNs in keys, and maximum-endpoint loops behave as specified.
   Literal evaluations create independent mutable collections.

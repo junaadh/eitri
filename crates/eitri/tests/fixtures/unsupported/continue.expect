@@ -1,1 +1,1 @@
-error[E0001] 18..26: not supported yet: `continue`
+error[E0102] 0..8: loop control outside a loop

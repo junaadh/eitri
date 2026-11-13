@@ -1,1 +1,1 @@
-error[E0001] 17..22: not supported yet: `break`
+error[E0102] 0..5: loop control outside a loop

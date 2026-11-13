@@ -1,0 +1,15 @@
+//! host: test
+import test from "test"
+let text = "\u{2003} café \n"
+test.check(text.trim() == "café")
+test.check(text.trim_start() == "café \n")
+test.check(text.trim_end() == "\u{2003} café")
+test.check(" \n".trim() == "")
+test.check("".trim_start() == "")
+test.check("ab".replace("", "-") == "-a-b-")
+test.check("".replace("", "-") == "-")
+test.check("aaaa".replace("aa", "b") == "bb")
+test.check("é☃".replace("", ".") == ".é.☃.")
+test.check("aßé".to_upper() == "AßÉ")
+test.check("İΣ".to_lower() == "iσ")
+test.check("ᾀ".to_upper() == "ᾈ")
