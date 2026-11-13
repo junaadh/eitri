@@ -697,6 +697,14 @@ pub fn string_roots_budgeted(
             }
         }
         match insn.decoded.op.info().sem {
+            Sem::StringInterpolate => {
+                let plan = &function.strings[insn.decoded.operands.c as usize];
+                let count = crate::format_parts(plan)
+                    .filter(|part| matches!(part, Ok(crate::FormatPart::Value(_))))
+                    .count();
+                let first = insn.decoded.operands.b as usize;
+                uses[i * frame + first..i * frame + first + count].fill(true);
+            }
             Sem::StringSlice => {
                 let first = insn.decoded.operands.b as usize;
                 uses[i * frame + first..i * frame + first + 3].fill(true);
@@ -852,6 +860,35 @@ fn structure(
         let info = decoded.op.info();
         if decoded.op == Op::StrNew && decoded.operands.b as usize >= function.strings.len() {
             return Err(error(at, ErrorKind::NoConstant(decoded.operands.b as u32)));
+        }
+        if decoded.op == Op::StrInterpolate {
+            let plan_index = decoded.operands.c as usize;
+            let Some(plan) = function.strings.get(plan_index) else {
+                return Err(error(at, ErrorKind::NoConstant(plan_index as u32)));
+            };
+            let mut count = 0usize;
+            for part in crate::format_parts(plan) {
+                match part {
+                    Ok(crate::FormatPart::Value(_)) => count += 1,
+                    Ok(crate::FormatPart::Literal(_)) => {}
+                    Err(()) => {
+                        return Err(error(
+                            at,
+                            ErrorKind::InvalidScalar("invalid interpolation plan"),
+                        ));
+                    }
+                }
+            }
+            if count == 0
+                || (decoded.operands.b as usize)
+                    .checked_add(count)
+                    .is_none_or(|end| end > function.frame_size as usize)
+            {
+                return Err(error(
+                    at,
+                    ErrorKind::InvalidScalar("invalid interpolation operand window"),
+                ));
+            }
         }
         if !info.implemented {
             return Err(error(at, ErrorKind::Unimplemented(decoded.op)));
@@ -1179,6 +1216,21 @@ fn transfer(
             read(state, pc, b, Some(ValueType::String))?;
             read(state, pc, c, Some(ValueType::String))?;
             write(state, a, I64);
+        }
+        Sem::StringFormat(ty) => {
+            read(state, pc, b, Some(ty))?;
+            write(state, a, ValueType::String);
+        }
+        Sem::StringInterpolate => {
+            let plan = &function.strings[c as usize];
+            let mut slot = b;
+            for part in crate::format_parts(plan) {
+                if let crate::FormatPart::Value(ty) = part.expect("verified interpolation plan") {
+                    read(state, pc, slot, Some(ty))?;
+                    slot += 1;
+                }
+            }
+            write(state, a, ValueType::String);
         }
         Sem::Move => {
             let ty = read(state, pc, b, None)?;

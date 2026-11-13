@@ -1071,6 +1071,75 @@ fn string_slice_range(text: &str, start: u64, end: u64) -> Result<(usize, usize)
     Ok((start, end))
 }
 
+struct ScalarText {
+    bytes: [u8; 128],
+    len: usize,
+}
+
+impl std::fmt::Write for ScalarText {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        let end = self.len.checked_add(text.len()).ok_or(std::fmt::Error)?;
+        let dst = self.bytes.get_mut(self.len..end).ok_or(std::fmt::Error)?;
+        dst.copy_from_slice(text.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+impl ScalarText {
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len]).expect("formatted scalars are UTF-8")
+    }
+}
+
+fn format_scalar(op: Op, word: u64) -> ScalarText {
+    use std::fmt::Write;
+    let mut text = ScalarText {
+        bytes: [0; 128],
+        len: 0,
+    };
+    let result = match op {
+        Op::StrFmtI64 => write!(text, "{}", word as i64),
+        Op::StrFmtI8 => write!(text, "{}", word as i8),
+        Op::StrFmtU8 => write!(text, "{}", word as u8),
+        Op::StrFmtU64 => write!(text, "{word}"),
+        Op::StrFmtF32 => write!(text, "{:?}", f32::from_bits(word as u32)),
+        Op::StrFmtF64 => write!(text, "{:?}", f64::from_bits(word)),
+        Op::StrFmtBool => write!(text, "{}", word != 0),
+        Op::StrFmtChar => write!(
+            text,
+            "{}",
+            char::from_u32(word as u32).expect("verified character")
+        ),
+        _ => unreachable!("only scalar format opcodes"),
+    };
+    result.expect("a scalar's shortest representation fits the buffer");
+    if matches!(op, Op::StrFmtF32 | Op::StrFmtF64)
+        && let Some(index) = text.bytes[..text.len].iter().position(|&b| b == b'e')
+        && text.bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
+    {
+        text.bytes.copy_within(index + 1..text.len, index + 2);
+        text.bytes[index + 1] = b'+';
+        text.len += 1;
+    }
+    text
+}
+
+fn format_type_op(ty: eitri_bytecode::ValueType) -> Op {
+    use eitri_bytecode::ValueType;
+    match ty {
+        ValueType::I64 => Op::StrFmtI64,
+        ValueType::I8 => Op::StrFmtI8,
+        ValueType::U8 => Op::StrFmtU8,
+        ValueType::U64 => Op::StrFmtU64,
+        ValueType::F32 => Op::StrFmtF32,
+        ValueType::F64 => Op::StrFmtF64,
+        ValueType::Bool => Op::StrFmtBool,
+        ValueType::Char => Op::StrFmtChar,
+        ValueType::String => unreachable!("strings use their managed payload"),
+    }
+}
+
 /// Copy `count` slots from `from` to `to`. Calls usually move one slot,
 /// which is copied inline instead of through a call to `memmove` (E4, V4).
 #[inline(always)]
@@ -1401,6 +1470,96 @@ fn execute(
                             value = m
                                 .heap
                                 .slice(reference, first, last, m.memory_limit, m.memory);
+                        }
+                        m.references[base + a!()] = Some(value.map_err(|_| {
+                            fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)
+                        })?);
+                    }
+                    Op::StrInterpolate => {
+                        if m.force_gc {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        }
+                        let length = m.references.len().max(base + function.frame_size as usize);
+                        resize_vm(m.references, length, None, m.memory)
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        let plan = &function.strings[c!()];
+                        let mut value = m.heap.interpolate(
+                            plan,
+                            &s[b!()..],
+                            &m.references[base + b!()..],
+                            m.memory_limit,
+                            m.memory,
+                        );
+                        if value.is_err() {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                            value = m.heap.interpolate(
+                                plan,
+                                &s[b!()..],
+                                &m.references[base + b!()..],
+                                m.memory_limit,
+                                m.memory,
+                            );
+                        }
+                        m.references[base + a!()] = Some(value.map_err(|_| {
+                            fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)
+                        })?);
+                    }
+                    Op::StrFmtI64
+                    | Op::StrFmtI8
+                    | Op::StrFmtU8
+                    | Op::StrFmtU64
+                    | Op::StrFmtF32
+                    | Op::StrFmtF64
+                    | Op::StrFmtBool
+                    | Op::StrFmtChar => {
+                        if m.force_gc {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        }
+                        let length = m.references.len().max(base + function.frame_size as usize);
+                        resize_vm(m.references, length, None, m.memory)
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        let text = format_scalar(op, s[b!()]);
+                        let mut value =
+                            m.heap.alloc_string(text.as_str(), m.memory_limit, m.memory);
+                        if value.is_err() {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                            value = m.heap.alloc_string(text.as_str(), m.memory_limit, m.memory);
                         }
                         m.references[base + a!()] = Some(value.map_err(|_| {
                             fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)

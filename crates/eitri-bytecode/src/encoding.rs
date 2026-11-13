@@ -133,7 +133,7 @@ static ENCODERS: [Encoder; 256] = {
             let role = info.roles[column];
             let (shift, bits) = layout[column];
             // Narrow slots only; anything wider takes the general path.
-            let (min, max) = if role.is_slot() {
+            let (min, max) = if role.is_widened() {
                 (0, u8::MAX as i64)
             } else {
                 role.range()
@@ -195,7 +195,7 @@ pub fn encode_general(op: Op, operands: Operands, out: &mut Vec<u32>) -> Result<
     let mut high = [0u32; 3];
     for (column, &role) in info.roles.iter().enumerate() {
         let value = operands.get(column);
-        if role.is_slot() {
+        if role.is_widened() {
             if !(0..=MAX_SLOT).contains(&value) {
                 return Err(EncodeError::OutOfRange {
                     column,
@@ -278,7 +278,7 @@ pub fn decode(code: &[u32], pc: usize) -> Result<Decoded, DecodeError> {
         if high == 0 {
             continue;
         }
-        if !role.is_slot() {
+        if !role.is_widened() {
             return Err(DecodeError::IllegalWide);
         }
         operands.set(column, operands.get(column) | (high as i64) << 8);

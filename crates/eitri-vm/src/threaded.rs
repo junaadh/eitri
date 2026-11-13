@@ -21,8 +21,8 @@ use eitri_bytecode::{CallTarget, Function, FunctionId, Op};
 
 use crate::{
     Call, Fault, FaultKind, Frame, Host, Limits, Location, Machine, VmScratch, absolute,
-    collect_at, copy_result, host_fault, machine, raised, reserve_vm, resize_vm, slot_field,
-    string_slice_range,
+    collect_at, copy_result, format_scalar, host_fault, machine, raised, reserve_vm, resize_vm,
+    slot_field, string_slice_range,
 };
 
 /// Everything a handler needs that is not hot enough for a register.
@@ -428,6 +428,59 @@ fn managed_op(
             st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
             Ok(None)
         }
+        Op::StrInterpolate => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let length = st.m.references.len().max(end);
+            resize_vm(st.m.references, length, None, st.m.memory)?;
+            let plan = &st.function.strings[c];
+            let mut value = st.m.heap.interpolate(
+                plan,
+                &st.m.slots[st.base + b..],
+                &st.m.references[st.base + b..],
+                st.m.memory_limit,
+                st.m.memory,
+            );
+            if value.is_err() {
+                trace(st, pc)?;
+                value = st.m.heap.interpolate(
+                    plan,
+                    &st.m.slots[st.base + b..],
+                    &st.m.references[st.base + b..],
+                    st.m.memory_limit,
+                    st.m.memory,
+                );
+            }
+            st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+            Ok(None)
+        }
+        Op::StrFmtI64
+        | Op::StrFmtI8
+        | Op::StrFmtU8
+        | Op::StrFmtU64
+        | Op::StrFmtF32
+        | Op::StrFmtF64
+        | Op::StrFmtBool
+        | Op::StrFmtChar => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let length = st.m.references.len().max(end);
+            resize_vm(st.m.references, length, None, st.m.memory)?;
+            let text = format_scalar(op, st.m.slots[st.base + b]);
+            let mut value =
+                st.m.heap
+                    .alloc_string(text.as_str(), st.m.memory_limit, st.m.memory);
+            if value.is_err() {
+                trace(st, pc)?;
+                value =
+                    st.m.heap
+                        .alloc_string(text.as_str(), st.m.memory_limit, st.m.memory);
+            }
+            st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+            Ok(None)
+        }
         Op::StrLen => {
             let reference = st.m.references[st.base + b].expect("verified managed slot");
             Ok(Some(
@@ -550,10 +603,19 @@ managed_handler!(str_concat, Op::StrConcat);
 managed_handler!(str_compare, Op::StrCompare);
 managed_handler!(str_join, Op::StrJoin);
 managed_handler!(str_slice, Op::StrSlice);
+managed_handler!(str_interpolate, Op::StrInterpolate);
 managed_handler!(str_contains, Op::StrContains);
 managed_handler!(str_starts, Op::StrStarts);
 managed_handler!(str_ends, Op::StrEnds);
 managed_handler!(str_find, Op::StrFind);
+managed_handler!(str_fmt_i64, Op::StrFmtI64);
+managed_handler!(str_fmt_i8, Op::StrFmtI8);
+managed_handler!(str_fmt_u8, Op::StrFmtU8);
+managed_handler!(str_fmt_u64, Op::StrFmtU64);
+managed_handler!(str_fmt_f32, Op::StrFmtF32);
+managed_handler!(str_fmt_f64, Op::StrFmtF64);
+managed_handler!(str_fmt_bool, Op::StrFmtBool);
+managed_handler!(str_fmt_char, Op::StrFmtChar);
 slot_handler!(ldi, Op::Ldi);
 slot_handler!(ldk, Op::Ldk);
 slot_handler!(add_wrap, Op::AddWrap);
@@ -680,10 +742,19 @@ extern "rust-preserve-none" fn wide(
                 | Op::StrCompare
                 | Op::StrJoin
                 | Op::StrSlice
+                | Op::StrInterpolate
                 | Op::StrContains
                 | Op::StrStarts
                 | Op::StrEnds
                 | Op::StrFind
+                | Op::StrFmtI64
+                | Op::StrFmtI8
+                | Op::StrFmtU8
+                | Op::StrFmtU64
+                | Op::StrFmtF32
+                | Op::StrFmtF64
+                | Op::StrFmtBool
+                | Op::StrFmtChar
         )
     ) {
         let op = Op::from_byte(op).expect("verified opcode");
@@ -1090,10 +1161,19 @@ static TABLE: [Handler; 256] = {
     table[Op::StrCompare as usize] = str_compare;
     table[Op::StrJoin as usize] = str_join;
     table[Op::StrSlice as usize] = str_slice;
+    table[Op::StrInterpolate as usize] = str_interpolate;
     table[Op::StrContains as usize] = str_contains;
     table[Op::StrStarts as usize] = str_starts;
     table[Op::StrEnds as usize] = str_ends;
     table[Op::StrFind as usize] = str_find;
+    table[Op::StrFmtI64 as usize] = str_fmt_i64;
+    table[Op::StrFmtI8 as usize] = str_fmt_i8;
+    table[Op::StrFmtU8 as usize] = str_fmt_u8;
+    table[Op::StrFmtU64 as usize] = str_fmt_u64;
+    table[Op::StrFmtF32 as usize] = str_fmt_f32;
+    table[Op::StrFmtF64 as usize] = str_fmt_f64;
+    table[Op::StrFmtBool as usize] = str_fmt_bool;
+    table[Op::StrFmtChar as usize] = str_fmt_char;
     table[Op::Ldi as usize] = ldi;
     table[Op::Ldk as usize] = ldk;
     table[Op::LdkX as usize] = ldk_x;

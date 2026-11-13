@@ -1,0 +1,18 @@
+//! host: test
+import test from "test"
+test.check(string(-9223372036854775808) == "-9223372036854775808")
+test.check(string(u8(255)) == "255")
+let max: u64 = 18446744073709551615
+test.check(string(max) == "18446744073709551615")
+test.check(string(i8(-128)) == "-128")
+test.check(string(true) == "true")
+test.check(string(false) == "false")
+test.check(string('é') == "é")
+test.check(string(2.0) == "2.0")
+test.check(string(f32(0.1)) == "0.1")
+test.check(string(1e21) == "1e+21")
+test.check(string(-0.0) == "-0.0")
+test.check(string(1e-9) == "1e-9")
+test.check(string(1.0 / 0.0) == "inf")
+test.check(string(0.0 / 0.0) == "NaN")
+test.check(string("already") == "already")

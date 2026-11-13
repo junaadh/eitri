@@ -5,6 +5,7 @@
 mod asm;
 mod disasm;
 mod encoding;
+mod format;
 mod function;
 pub mod ir;
 pub mod opt;
@@ -19,6 +20,7 @@ mod verify;
 pub use asm::{AsmError, Assembler, Label, imm_complement};
 pub use disasm::disassemble;
 pub use encoding::{DecodeError, Decoded, EncodeError, MAX_SLOT, Operands, decode, encode};
+pub use format::{FormatPart, FormatParts, format_parts};
 pub use function::{CallSite, CallTarget, Function, FunctionId, Signature, SlotRange, ValueType};
 pub use root_builder::{RootBuildError, RootBuilder, RootCheckpoint, RootLayout};
 pub use roots::{

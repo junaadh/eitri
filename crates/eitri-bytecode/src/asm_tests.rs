@@ -997,3 +997,64 @@ fn string_slice_checks_its_full_operand_window() {
         ErrorKind::RootMissing(1)
     );
 }
+
+#[test]
+fn scalar_format_requires_the_exact_operand_type() {
+    let mut asm = Assembler::new();
+    asm.load(1, 3, I64, S).unwrap();
+    asm.emit(Op::StrFmtBool, Operands::abc(2, 1, 0), S).unwrap();
+    asm.emit(Op::StrLen, Operands::abc(0, 2, 0), S).unwrap();
+    asm.ret(S).unwrap();
+    let f = asm.finish("format", sig(&[], &[I64])).unwrap();
+    let signatures = IndexVec::from_raw(vec![f.signature.clone()]);
+    let callees = Callees {
+        functions: &signatures,
+        hosts: &[],
+    };
+    assert!(matches!(
+        string_roots(&f, &callees).unwrap_err().kind,
+        ErrorKind::WrongType { .. }
+    ));
+}
+
+#[test]
+fn interpolation_plan_checks_types_window_and_roots() {
+    let mut asm = Assembler::new();
+    asm.load(1, 7, I64, S).unwrap();
+    asm.emit(Op::StrNew, Operands::abc(2, 1, 0), S).unwrap();
+    asm.emit(Op::StrInterpolate, Operands::abc(3, 1, 0), S)
+        .unwrap();
+    asm.emit(Op::StrLen, Operands::abc(0, 3, 0), S).unwrap();
+    asm.ret(S).unwrap();
+    let mut f = asm.finish("interpolation", sig(&[], &[I64])).unwrap();
+    f.strings = vec![Box::<str>::from("is"), Box::<str>::from("x")].into_boxed_slice();
+    let signatures = IndexVec::from_raw(vec![f.signature.clone()]);
+    let callees = Callees {
+        functions: &signatures,
+        hosts: &[],
+    };
+    f.roots = string_roots(&f, &callees).unwrap();
+    verify(&f, &callees).unwrap();
+    let mut bad = f.clone();
+    bad.strings[0] = "é".into();
+    assert!(matches!(
+        verify(&bad, &callees).unwrap_err().kind,
+        ErrorKind::InvalidScalar(_)
+    ));
+    bad.strings[0] = "ii".into();
+    assert!(matches!(
+        verify(&bad, &callees).unwrap_err().kind,
+        ErrorKind::WrongType { .. }
+    ));
+    bad.strings[0] = "isss".into();
+    assert!(matches!(
+        verify(&bad, &callees).unwrap_err().kind,
+        ErrorKind::InvalidScalar(_)
+    ));
+    let map = f.roots.safepoints.last().unwrap().1.map.0 as usize;
+    f.roots.maps[map].ordinary.clear();
+    assert_eq!(
+        verify(&f, &callees).unwrap_err().kind,
+        ErrorKind::RootMissing(2)
+    );
+}

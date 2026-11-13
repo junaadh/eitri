@@ -53,6 +53,7 @@ pub enum Res {
     StringStarts,
     StringEnds,
     StringFind,
+    StringConvert(Ty),
     StringLiteral(u32),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
@@ -848,6 +849,38 @@ impl<'i> Checker<'_, 'i> {
                     }
                 }
             }
+            Expr::StringPart(span) => {
+                match string_fragment(&self.input.text[span.range()], false) {
+                    Ok(Some(value)) => {
+                        self.out.resolutions[expr] =
+                            Res::StringLiteral(self.out.strings.len() as u32);
+                        self.out.strings.push(value);
+                        Ty::String
+                    }
+                    Ok(None) => {
+                        self.report(Code::Lexical, "invalid string escape", span);
+                        Ty::Error
+                    }
+                    Err(_) => {
+                        self.report(Code::OutOfMemory, "runtime memory limit exceeded", span);
+                        Ty::Error
+                    }
+                }
+            }
+            Expr::Interpolation(parts) => {
+                for &part in self.input.ast.args(parts) {
+                    let ty = self.value(part, None);
+                    if !(ty.numeric() || matches!(ty, Ty::String | Ty::Bool | Ty::Char | Ty::Error))
+                    {
+                        self.report(
+                            Code::TypeMismatch,
+                            "interpolated value is not formattable",
+                            self.span(part),
+                        );
+                    }
+                }
+                Ty::String
+            }
             Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
             Expr::Bool(_) => Ty::Bool,
             Expr::Name(token) => self.name(expr, token),
@@ -969,6 +1002,33 @@ impl<'i> Checker<'_, 'i> {
         let Expr::Name(token) = self.ast().exprs[callee] else {
             unreachable!("conversion target is a type name")
         };
+        if matches!(
+            type_name(self.symbol(token)),
+            TypeName::Supported(Ty::String)
+        ) && checked
+        {
+            if args.len() != 1 {
+                self.report(
+                    Code::ArgumentCount,
+                    format!("`string` conversion takes 1 argument, found {}", args.len()),
+                    self.span(expr),
+                );
+                for &arg in args {
+                    self.value(arg, None);
+                }
+                return Ty::Error;
+            }
+            let from = self.value(args[0], None);
+            if !(from.numeric() || matches!(from, Ty::Bool | Ty::Char | Ty::String | Ty::Error)) {
+                self.report(
+                    Code::TypeMismatch,
+                    "string conversion requires a formattable value",
+                    self.span(args[0]),
+                );
+            }
+            self.out.resolutions[expr] = Res::StringConvert(from);
+            return Ty::String;
+        }
         let to = match type_name(self.symbol(token)) {
             TypeName::Supported(t) if t.numeric() => t,
             _ => {
@@ -1549,6 +1609,10 @@ fn string_value(text: &str) -> Result<Option<String>, eitri_base::OutOfMemory> {
     let Some(inner) = text.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
         return Ok(None);
     };
+    string_fragment(inner, raw)
+}
+
+fn string_fragment(inner: &str, raw: bool) -> Result<Option<String>, eitri_base::OutOfMemory> {
     let mut out = String::new();
     out.try_reserve_exact(inner.len())
         .map_err(|_| eitri_base::OutOfMemory)?;

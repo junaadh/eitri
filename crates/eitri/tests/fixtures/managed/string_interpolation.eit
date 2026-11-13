@@ -1,0 +1,9 @@
+//! host: test
+import test from "test"
+let value = 7
+test.check("x = ${value + 1}" == "x = 8")
+test.check("bare {value}" == "bare {value}")
+test.check("\${value}" == r"${value}")
+test.check("flag ${true}, char ${'é'}" == "flag true, char é")
+test.check("nested ${"n=${value}"}" == "nested n=7")
+test.check("${test.id(1)}:${test.id(2)}" == "1:2")

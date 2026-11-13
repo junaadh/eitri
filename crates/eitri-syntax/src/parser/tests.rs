@@ -188,6 +188,16 @@ impl Printer<'_> {
                 format!("{}{}", if negative { "-" } else { "" }, self.token(token))
             }
             Expr::Char(token) | Expr::String(token) => self.token(token).to_owned(),
+            Expr::StringPart(span) => self.text[span.range()].to_owned(),
+            Expr::Interpolation(parts) => format!(
+                "(interpolation {})",
+                self.ast
+                    .args(parts)
+                    .iter()
+                    .map(|&e| self.expr(e))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
             Expr::Convert { callee, value } => {
                 format!("(truncating {} {})", self.expr(callee), self.expr(value))
             }

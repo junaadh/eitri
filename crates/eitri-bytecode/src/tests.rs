@@ -3,13 +3,13 @@ use crate::{DecodeError, EncodeError, Operands, decode, disassemble, encode};
 
 #[test]
 fn inventory_matches_the_manifest() {
-    assert_eq!(Op::ALL.len(), 175, "the documented inventory");
+    assert_eq!(Op::ALL.len(), 184, "the documented inventory");
     // Numbering is the table order, so it is deterministic.
     for (index, &op) in Op::ALL.iter().enumerate() {
         assert_eq!(op as usize, index);
         assert_eq!(Op::from_byte(index as u8), Some(op));
     }
-    assert_eq!(Op::from_byte(175), None);
+    assert_eq!(Op::from_byte(184), None);
     let mut names: Vec<&str> = OPS.iter().map(|info| info.name).collect();
     names.sort();
     names.dedup();
@@ -233,7 +233,7 @@ fn cond_name(cond: Cond) -> &'static str {
 fn samples(role: Role) -> Vec<i64> {
     let (min, max) = role.range();
     let mut values = vec![min, max, (min + max) / 2];
-    if role.is_slot() {
+    if role.is_widened() {
         values.extend([255, 256, 65_535]);
     }
     values
@@ -256,7 +256,7 @@ fn every_opcode_round_trips_at_its_boundaries() {
                         let wide = [a, b, c]
                             .iter()
                             .zip(roles)
-                            .any(|(&v, r)| r.is_slot() && v > 255);
+                            .any(|(&v, r)| r.is_widened() && v > 255);
                         let mut code = Vec::new();
                         let result = encode(op, operands, &mut code);
                         if wide && !op.wide_legal() {

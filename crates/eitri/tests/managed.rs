@@ -81,6 +81,119 @@ fn slice_and_search_survive_collection_at_every_safepoint() {
 }
 
 #[test]
+fn scalar_string_conversions_survive_forced_collection() {
+    let source = include_str!("fixtures/managed/string_conversion.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/string_conversion.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn string_conversion_rejects_optional_values_and_bad_arity() {
+    let mut context = Context::new();
+    for source in ["string()", "string(1, 2)", "string(\"abc\".find(\"a\"))"] {
+        assert!(context.compile(source).is_err(), "{source} was accepted");
+    }
+}
+
+#[test]
+fn string_conversion_reports_allocation_failure_and_host_can_continue() {
+    for threaded in [false, true] {
+        let mut context = Context::new();
+        context.set_threaded(threaded);
+        context.set_force_gc(true);
+        context.set_heap_limit(0);
+        let compiled = context.compile("string(42).len()").unwrap();
+        let mut host = TestHost::new(|_| None);
+        assert_eq!(
+            context.execute(&compiled, &mut host).unwrap_err().kind,
+            Some(eitri::FaultKind::OutOfMemory)
+        );
+        context.set_heap_limit(1024);
+        context.execute(&compiled, &mut host).unwrap();
+    }
+}
+
+#[test]
+fn interpolation_evaluates_all_values_before_allocating() {
+    let source = "import test from \"test\"\nlet value = \"${test.id(1)} ${test.id(2)}\"";
+    for threaded in [false, true] {
+        let mut context = Context::new();
+        context.set_threaded(threaded);
+        context.set_force_gc(true);
+        context.set_heap_limit(0);
+        context.register_host_module("test", TEST_MODULE).unwrap();
+        let artifact = context.compile(source).unwrap();
+        let mut host = TestHost::new(|name| context.host_index("test", name));
+        let fault = context.execute(&artifact, &mut host).unwrap_err();
+        assert_eq!(fault.kind, Some(eitri::FaultKind::OutOfMemory));
+        assert_eq!(host.effects, "effect: test.id(1)\neffect: test.id(2)\n");
+    }
+}
+
+#[test]
+fn interpolation_preserves_live_strings_at_safepoints() {
+    let source = include_str!("fixtures/managed/string_interpolation.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let artifact = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&artifact, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/string_interpolation.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn interpolation_works_with_wide_plan_and_frame_indices() {
+    let mut source = String::from("import test from \"test\"\n");
+    for index in 0..260 {
+        source += &format!("let value{index} = \"{index}\"\n");
+    }
+    source += "test.check(\"${value259}:${1}\" == \"259:1\")\n";
+    assert_eq!(support::eits::round_trip(&source), Ok(true));
+    for threaded in [false, true] {
+        let mut context = Context::new();
+        context.set_threaded(threaded);
+        context.set_force_gc(true);
+        context.register_host_module("test", TEST_MODULE).unwrap();
+        let artifact = context.compile(&source).unwrap();
+        let mut host = TestHost::new(|name| context.host_index("test", name));
+        context.execute(&artifact, &mut host).unwrap();
+        assert_eq!(host.effects, "effect: test.check(true)\n");
+    }
+}
+
+#[test]
 fn strings_survive_every_safepoint_and_are_reclaimed_after_run() {
     for threaded in [false, true] {
         for simple in [false, true] {

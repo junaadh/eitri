@@ -139,6 +139,7 @@ pub fn parse<'s>(
         params: &mut scratch.params,
         links: &mut scratch.links,
         pos: 0,
+        limit: tokens.len() as u32 - 1,
         current: tokens.kind(TokenId::from_u32(0)),
         depth: 0,
         nesting_reported: false,
@@ -210,6 +211,7 @@ struct Parser<'a> {
     params: &'a mut Vec<Param>,
     links: &'a mut Vec<IfLink>,
     pos: u32,
+    limit: u32,
     /// The kind of the token at `pos`, kept in step with it so the hot
     /// `kind()` is a field read rather than a bounds-checked load.
     current: TokenKind,
@@ -239,7 +241,7 @@ impl Parser<'_> {
 
     /// The kind `n` tokens ahead; `Eof` past the end.
     fn nth(&self, n: u32) -> TokenKind {
-        let index = (self.pos + n).min(self.tokens.len() as u32 - 1);
+        let index = (self.pos + n).min(self.limit);
         self.tokens.kind(TokenId::from_u32(index))
     }
 
@@ -276,8 +278,8 @@ impl Parser<'_> {
     /// Two tokens with no space between them, such as the `>` `>` of a
     /// right shift.
     fn adjacent(&self, n: u32) -> bool {
-        let a = TokenId::from_u32((self.pos + n).min(self.tokens.len() as u32 - 1));
-        let b = TokenId::from_u32((self.pos + n + 1).min(self.tokens.len() as u32 - 1));
+        let a = TokenId::from_u32((self.pos + n).min(self.limit));
+        let b = TokenId::from_u32((self.pos + n + 1).min(self.limit));
         self.span_of(a).end == self.span_of(b).start
     }
 
@@ -1164,6 +1166,52 @@ impl Parser<'_> {
         Ok(self.error(span))
     }
 
+    fn string(&mut self, token: TokenId, span: Span) -> Parsed<ExprId> {
+        if self.tokens.interpolation(token, 0).is_none() {
+            return Ok(self.ast.expr(Expr::String(token), span));
+        }
+        let mark = self.exprs.len();
+        let saved_pos = self.pos;
+        let saved_limit = self.limit;
+        let mut text_start = span.start + 1;
+        let mut index = 0;
+        while let Some(part) = self.tokens.interpolation(token, index) {
+            if part.open > text_start {
+                let part_span = Span::new(text_start, part.open);
+                let literal = self.ast.expr(Expr::StringPart(part_span), part_span);
+                self.exprs.push(literal);
+            }
+            self.limit = part.end;
+            self.seek(part.start);
+            let parsed = self.expr(false).and_then(|value| {
+                if self.at(T::Eof) {
+                    Ok(value)
+                } else {
+                    Err(self.expected("the end of the interpolation"))
+                }
+            });
+            self.limit = saved_limit;
+            self.seek(saved_pos);
+            let value = match parsed {
+                Ok(value) => value,
+                Err(error) => {
+                    self.exprs.truncate(mark);
+                    return Err(error);
+                }
+            };
+            self.exprs.push(value);
+            text_start = part.expr.end + 1;
+            index += 1;
+        }
+        if text_start < span.end - 1 {
+            let part_span = Span::new(text_start, span.end - 1);
+            let literal = self.ast.expr(Expr::StringPart(part_span), part_span);
+            self.exprs.push(literal);
+        }
+        let parts = self.ast.expr_lists.push_drain(self.exprs, mark);
+        Ok(self.ast.expr(Expr::Interpolation(parts), span))
+    }
+
     fn primary(&mut self, ns: bool) -> Parsed<ExprId> {
         let token = self.token();
         let span = self.current_span();
@@ -1195,7 +1243,7 @@ impl Parser<'_> {
             }
             T::Str => {
                 self.bump();
-                self.ast.expr(Expr::String(token), span)
+                self.string(token, span)?
             }
             T::Char => {
                 self.bump();

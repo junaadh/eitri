@@ -205,6 +205,27 @@ enum Value {
     Void,
 }
 
+fn format_value(value: Value) -> String {
+    let mut text = match value.ty() {
+        Ty::I64 => format!("{}", value.word() as i64),
+        Ty::I8 => format!("{}", value.word() as i8),
+        Ty::U8 => format!("{}", value.word() as u8),
+        Ty::U64 => format!("{}", value.word()),
+        Ty::F32 => format!("{:?}", f32::from_bits(value.word() as u32)),
+        Ty::F64 => format!("{:?}", f64::from_bits(value.word())),
+        Ty::Bool => format!("{}", value.bool()),
+        Ty::Char => format!("{}", char::from_u32(value.word() as u32).unwrap()),
+        _ => unreachable!(),
+    };
+    if matches!(value.ty(), Ty::F32 | Ty::F64)
+        && let Some(at) = text.find('e')
+        && text.as_bytes().get(at + 1).is_some_and(u8::is_ascii_digit)
+    {
+        text.insert(at + 1, '+');
+    }
+    text
+}
+
 impl Value {
     fn from_word(ty: Ty, word: u64) -> Self {
         match ty {
@@ -400,10 +421,23 @@ impl Eval<'_> {
                 self.checked.types[e],
                 self.checked.int_value(e).expect("checked literal fits") as u64,
             )),
-            Expr::String(_) => {
+            Expr::String(_) | Expr::StringPart(_) => {
                 let Res::StringLiteral(index) = self.checked.resolutions[e] else {
                     unreachable!()
                 };
+                Ok(Value::String(index))
+            }
+            Expr::Interpolation(parts) => {
+                let mut text = String::new();
+                for &part in self.ast.args(parts) {
+                    let value = self.expr(host, part)?;
+                    match value {
+                        Value::String(index) => text.push_str(&self.strings[index as usize]),
+                        _ => text.push_str(&format_value(value)),
+                    }
+                }
+                let index = self.strings.len() as u32;
+                self.strings.push(text);
                 Ok(Value::String(index))
             }
             Expr::Convert { value, .. } => {
@@ -535,6 +569,18 @@ impl Eval<'_> {
                         _ => unreachable!(),
                     }))
                 }
+            }
+            Expr::Call { args, .. }
+                if matches!(self.checked.resolutions[e], Res::StringConvert(_)) =>
+            {
+                let value = self.expr(host, self.ast.args(args)[0])?;
+                if let Value::String(_) = value {
+                    return Ok(value);
+                }
+                let text = format_value(value);
+                let index = self.strings.len() as u32;
+                self.strings.push(text);
+                Ok(Value::String(index))
             }
             Expr::Call { args, .. }
                 if matches!(self.checked.resolutions[e], Res::Convert { .. }) =>

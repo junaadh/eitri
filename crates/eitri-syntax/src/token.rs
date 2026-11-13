@@ -186,6 +186,19 @@ pub struct Tokens {
     /// The smallest of the three columns' capacities: `push` may write
     /// below it without growing.
     capacity: usize,
+    primary_len: usize,
+    interpolations: Vec<Interpolation>,
+}
+
+/// A single embedded expression and its lazily appended token stream.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Interpolation {
+    pub owner: TokenId,
+    pub open: u32,
+    pub expr: Span,
+    pub start: u32,
+    pub end: u32,
+    pub depth: u16,
 }
 
 impl Tokens {
@@ -197,6 +210,8 @@ impl Tokens {
         self.kinds.clear();
         self.spans.clear();
         self.payloads.clear();
+        self.primary_len = 0;
+        self.interpolations.clear();
     }
 
     pub(crate) fn reserve(&mut self, additional: usize) {
@@ -279,7 +294,11 @@ impl Tokens {
     }
 
     pub fn len(&self) -> usize {
-        self.kinds.len()
+        if self.primary_len == 0 {
+            self.kinds.len()
+        } else {
+            self.primary_len
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -297,7 +316,71 @@ impl Tokens {
     }
 
     pub fn kinds(&self) -> &[TokenKind] {
-        &self.kinds
+        &self.kinds[..self.len()]
+    }
+
+    pub(crate) fn physical_len(&self) -> usize {
+        self.kinds.len()
+    }
+    pub(crate) fn seal_primary(&mut self) {
+        self.primary_len = self.kinds.len();
+    }
+    pub(crate) fn push_interpolation(&mut self, part: Interpolation) {
+        self.interpolations.push(part);
+    }
+    pub(crate) fn interpolation_count(&self) -> usize {
+        self.interpolations.len()
+    }
+    pub(crate) fn interpolation_at(&self, index: usize) -> Interpolation {
+        self.interpolations[index]
+    }
+    pub(crate) fn set_interpolation_stream(&mut self, index: usize, start: u32, end: u32) {
+        self.interpolations[index].start = start;
+        self.interpolations[index].end = end;
+    }
+    pub(crate) fn interpolation(&self, owner: TokenId, nth: usize) -> Option<Interpolation> {
+        let start = self
+            .interpolations
+            .partition_point(|part| part.owner.as_u32() < owner.as_u32());
+        self.interpolations
+            .get(start + nth)
+            .copied()
+            .filter(|part| part.owner == owner)
+    }
+    pub(crate) fn append_shifted(&mut self, other: &Tokens, offset: u32, depth: u16) -> (u32, u32) {
+        let base = self.physical_len() as u32;
+        for index in 0..other.physical_len() {
+            let kind = other.kinds[index];
+            let span = other.spans[index];
+            let payload = other.payloads[index];
+            let payload = if (kind.is_open_delimiter()
+                || matches!(
+                    kind,
+                    TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace
+                ))
+                && payload != UNMATCHED
+            {
+                payload + base
+            } else {
+                payload
+            };
+            self.push(
+                kind,
+                Span::new(span.start + offset, span.end + offset),
+                payload,
+            );
+        }
+        for part in &other.interpolations {
+            self.interpolations.push(Interpolation {
+                owner: TokenId::from_u32(part.owner.as_u32() + base),
+                open: part.open + offset,
+                expr: Span::new(part.expr.start + offset, part.expr.end + offset),
+                start: 0,
+                end: 0,
+                depth,
+            });
+        }
+        (base, base + other.len() as u32 - 1)
     }
 
     pub fn last_kind(&self) -> Option<TokenKind> {
@@ -332,6 +415,7 @@ impl Tokens {
         self.kinds.capacity() * size_of::<TokenKind>()
             + self.spans.capacity() * size_of::<Span>()
             + self.payloads.capacity() * size_of::<u32>()
+            + self.interpolations.capacity() * size_of::<Interpolation>()
     }
 }
 

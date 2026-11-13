@@ -1,0 +1,9 @@
+effect: test.check(true)
+effect: test.check(true)
+effect: test.check(true)
+effect: test.check(true)
+effect: test.check(true)
+effect: test.id(1)
+effect: test.id(2)
+effect: test.check(true)
+ok

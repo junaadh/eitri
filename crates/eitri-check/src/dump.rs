@@ -462,13 +462,17 @@ impl Dumper<'_> {
                 );
                 (line, Vec::new())
             }
-            Expr::String(_) => (
+            Expr::String(_) | Expr::StringPart(_) => (
                 format!(
                     "{} {range} {ty} {}",
                     self.paint(STMT, "StringLiteral"),
                     self.paint(VALUE, self.text(span))
                 ),
                 Vec::new(),
+            ),
+            Expr::Interpolation(parts) => (
+                format!("{} {range} {ty}", self.paint(STMT, "Interpolation")),
+                ast.args(parts).iter().copied().map(Node::Expr).collect(),
             ),
             Expr::Bool(value) => {
                 let line = format!(

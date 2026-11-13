@@ -54,7 +54,7 @@ fn operand(role: Role, value: i64, end: i64) -> Option<String> {
         }
         Role::Const16 | Role::Const32 => format!("k{value}"),
         Role::Site16 => format!("site{value}"),
-        Role::Index8 | Role::Index16 => format!("@{value}"),
+        Role::Index8 | Role::Index16 | Role::FormatIndex => format!("@{value}"),
         Role::Offset8 | Role::Offset32 => format!("+{value}"),
         Role::Width8 => format!("w{value:#04x}"),
     })

@@ -1786,3 +1786,17 @@ creation, file I/O and host work are excluded. The few-microsecond target
 remains missed. Report and samples are in
 `/tmp/orchestra/eitri-t016-2-bench.txt` and
 `/tmp/orchestra/eitri-t016-2-samples.csv`. Lua was not rerun.
+
+### T016-3 interpolation and scalar conversion
+
+On 2026-11-13, `cargo bench --locked -p eitri --bench source_to_result --
+20001` measured 20,001 individual samples per cell in release on the threaded
+interpreter, macOS 27.0.1 AArch64, Rust 1.101.0-nightly and LLVM 23.1.5;
+the CPU model was unavailable. The reused scalar module's compile p50/p99
+was 7.542/9.625 µs, execution 0.208/0.292 µs, and total 7.750/9.917 µs;
+48 allocations / 4,692 B, 344 code bytes and 2,978 metadata bytes. These
+unpaired scalar workloads do not measure conversion and do not establish a
+causal change. Runtime creation, file I/O and host work are excluded. The
+few-microsecond target remains missed. Report and samples:
+`/tmp/orchestra/eitri-t016-3-bench.txt` and
+`/tmp/orchestra/eitri-t016-3-samples.csv`. Lua was not rerun.

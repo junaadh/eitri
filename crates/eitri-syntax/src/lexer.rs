@@ -28,7 +28,7 @@
 use eitri_base::{Interner, SourceId, Span};
 use eitri_diag::{Code, Diagnostic, Diagnostics, Label};
 
-use crate::token::{TokenId, TokenKind, Tokens};
+use crate::token::{Interpolation, TokenId, TokenKind, Tokens};
 
 /// Deepest delimiter nesting accepted (`E0002` beyond it), from the
 /// [first slice](../../../docs/implementation/first-slice.md#resources).
@@ -37,8 +37,8 @@ pub const MAX_NESTING: usize = 256;
 /// String-scanning state: inside a literal, or inside a `${…}` in one.
 #[derive(Clone, Copy)]
 enum Frame {
-    Str { triple: bool },
-    Interpolation { braces: u32 },
+    Str { triple: bool, raw: bool },
+    Interpolation { braces: u32, open: u32, expr: u32 },
 }
 
 /// The lexer's reusable working memory: the token buffer it fills and the
@@ -117,7 +117,59 @@ pub fn lex<'s>(
         &mut scratch.delimiters,
         &mut scratch.strings,
     );
+    scratch.tokens.seal_primary();
+    expand_interpolations(text, source, interner, diagnostics, &mut scratch.tokens);
     &scratch.tokens
+}
+
+/// Tokenize interpolation expressions after the main stream. Each embedded
+/// stream ends at its own EOF; token spans are rebased to the original source.
+fn expand_interpolations(
+    text: &str,
+    source: SourceId,
+    interner: &mut Interner,
+    diagnostics: &mut Diagnostics,
+    tokens: &mut Tokens,
+) {
+    let mut index = 0;
+    while index < tokens.interpolation_count() {
+        let part = tokens.interpolation_at(index);
+        if part.depth as usize >= MAX_NESTING {
+            diagnostics.push(error(
+                Code::Limit,
+                "implementation limit: interpolation nesting exceeds 256",
+                source,
+                Span::new(part.open, part.open + 2),
+            ));
+            break;
+        }
+        let mut nested = Tokens::new();
+        let mut delimiters = Vec::new();
+        let mut strings = Vec::new();
+        let mut reports = Diagnostics::new(100);
+        lex_into(
+            &text[part.expr.range()],
+            source,
+            interner,
+            &mut reports,
+            &mut nested,
+            &mut delimiters,
+            &mut strings,
+        );
+        nested.seal_primary();
+        for mut diagnostic in reports.into_vec() {
+            for label in &mut diagnostic.labels {
+                label.span = Span::new(
+                    label.span.start + part.expr.start,
+                    label.span.end + part.expr.start,
+                );
+            }
+            diagnostics.push(diagnostic);
+        }
+        let (start, end) = tokens.append_shifted(&nested, part.expr.start, part.depth + 1);
+        tokens.set_interpolation_stream(index, start, end);
+        index += 1;
+    }
 }
 
 fn lex_into(
@@ -487,7 +539,7 @@ impl Scan<'_> {
             self.raw_body(triple)
         } else {
             self.strings.clear();
-            self.strings.push(Frame::Str { triple });
+            self.strings.push(Frame::Str { triple, raw: false });
             self.string_body()
         };
         if !terminated {
@@ -533,9 +585,9 @@ impl Scan<'_> {
                 return false;
             };
             match frame {
-                Frame::Str { triple } => match b {
+                Frame::Str { triple, raw } => match b {
                     // `\` never escapes a line break: that stays unterminated.
-                    b'\\' if self.peek(1) != b'\n' => {
+                    b'\\' if !raw && self.peek(1) != b'\n' => {
                         self.pos += 2.min(self.bytes.len() - self.pos)
                     }
                     b'"' if !triple => {
@@ -547,25 +599,83 @@ impl Scan<'_> {
                         self.strings.pop();
                     }
                     b'\n' if !triple => return false,
-                    b'$' if self.peek(1) == b'{' => {
+                    b'$' if !raw && self.peek(1) == b'{' => {
+                        let open = self.pos as u32;
                         self.pos += 2;
-                        self.strings.push(Frame::Interpolation { braces: 0 });
+                        self.strings.push(Frame::Interpolation {
+                            braces: 0,
+                            open,
+                            expr: self.pos as u32,
+                        });
                     }
                     // Nothing before the next `"`, `\`, `$`, or line break
                     // can change state: skip to it, eight bytes at a time.
+                    _ if raw => self.pos = swar::find_either(self.bytes, self.pos + 1, b'"', b'\n'),
                     _ => self.pos = swar::find_string_special(self.bytes, self.pos + 1),
                 },
-                Frame::Interpolation { braces } => {
+                Frame::Interpolation { braces, open, expr } => {
                     let top = self.strings.len() - 1;
                     match b {
-                        b'{' => self.strings[top] = Frame::Interpolation { braces: braces + 1 },
+                        b'/' if self.peek(1) == b'*' => {
+                            let mut at = self.pos + 2;
+                            while at + 1 < self.bytes.len() && &self.bytes[at..at + 2] != b"*/" {
+                                if self.bytes[at] == b'\n' && self.in_single_line_string() {
+                                    return false;
+                                }
+                                at += 1;
+                            }
+                            if at + 1 >= self.bytes.len() {
+                                return false;
+                            }
+                            self.pos = at + 2;
+                            continue;
+                        }
+                        b'/' if self.peek(1) == b'/' => {
+                            let at = swar::find_newline(self.bytes, self.pos + 2);
+                            if self.in_single_line_string() {
+                                return false;
+                            }
+                            self.pos = at;
+                            continue;
+                        }
+                        b'{' => {
+                            self.strings[top] = Frame::Interpolation {
+                                braces: braces + 1,
+                                open,
+                                expr,
+                            }
+                        }
                         b'}' if braces == 0 => {
+                            if self.strings.len() == 2 {
+                                self.tokens.push_interpolation(Interpolation {
+                                    owner: TokenId::from_u32(self.tokens.physical_len() as u32),
+                                    open,
+                                    expr: Span::new(expr, self.pos as u32),
+                                    start: 0,
+                                    end: 0,
+                                    depth: 0,
+                                });
+                            }
                             self.strings.pop();
                         }
-                        b'}' => self.strings[top] = Frame::Interpolation { braces: braces - 1 },
+                        b'}' => {
+                            self.strings[top] = Frame::Interpolation {
+                                braces: braces - 1,
+                                open,
+                                expr,
+                            }
+                        }
+                        b'r' if self.peek(1) == b'"'
+                            && (self.pos == 0 || !is_ident_continue(self.bytes[self.pos - 1])) =>
+                        {
+                            self.pos += 1;
+                            let triple = self.bytes[self.pos..].starts_with(b"\"\"\"");
+                            self.strings.push(Frame::Str { triple, raw: true });
+                            self.pos += if triple { 2 } else { 0 };
+                        }
                         b'"' => {
                             let triple = self.bytes[self.pos..].starts_with(b"\"\"\"");
-                            self.strings.push(Frame::Str { triple });
+                            self.strings.push(Frame::Str { triple, raw: false });
                             self.pos += if triple { 2 } else { 0 };
                         }
                         b'\'' => {
@@ -585,7 +695,7 @@ impl Scan<'_> {
     fn in_single_line_string(&self) -> bool {
         self.strings
             .iter()
-            .any(|frame| matches!(frame, Frame::Str { triple: false }))
+            .any(|frame| matches!(frame, Frame::Str { triple: false, .. }))
     }
 
     /// The end of a well-formed char literal starting at `start`, if it is one.

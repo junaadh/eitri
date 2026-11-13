@@ -176,6 +176,58 @@ impl Heap {
         self.finish_string(text, limit, memory)
     }
 
+    /// Render a verified plan after all operands have been evaluated. The
+    /// first pass computes the exact byte length, and the second writes the
+    /// result into its only payload allocation.
+    pub fn interpolate(
+        &mut self,
+        plan: &str,
+        words: &[u64],
+        references: &[Option<HeapRef>],
+        limit: usize,
+        memory: &mut Option<eitri_base::MemoryBudget>,
+    ) -> Result<HeapRef, HeapLimit> {
+        use eitri_bytecode::{FormatPart, ValueType, format_parts};
+        let mut length = 0usize;
+        let mut slot = 0usize;
+        for part in format_parts(plan) {
+            let n = match part.expect("verified interpolation plan") {
+                FormatPart::Literal(text) => text.len(),
+                FormatPart::Value(ValueType::String) => {
+                    let reference = references[slot].expect("verified string operand");
+                    slot += 1;
+                    self.string(reference).expect("live string root").len()
+                }
+                FormatPart::Value(ty) => {
+                    let value = super::format_scalar(super::format_type_op(ty), words[slot]);
+                    slot += 1;
+                    value.as_str().len()
+                }
+            };
+            length = length.checked_add(n).ok_or(HeapLimit)?;
+        }
+        self.reserve_object(length, limit, memory)?;
+        let mut text = String::new();
+        super::reserve_string_vm(&mut text, length, memory).map_err(|_| HeapLimit)?;
+        slot = 0;
+        for part in format_parts(plan) {
+            match part.expect("verified interpolation plan") {
+                FormatPart::Literal(literal) => text.push_str(literal),
+                FormatPart::Value(ValueType::String) => {
+                    let reference = references[slot].expect("verified string operand");
+                    slot += 1;
+                    text.push_str(self.string(reference).expect("live string root"));
+                }
+                FormatPart::Value(ty) => {
+                    let value = super::format_scalar(super::format_type_op(ty), words[slot]);
+                    slot += 1;
+                    text.push_str(value.as_str());
+                }
+            }
+        }
+        self.finish_string(text, limit, memory)
+    }
+
     fn reserve_object(
         &mut self,
         text_len: usize,

@@ -86,6 +86,8 @@ pub enum Role {
     Site16,
     /// A module-binding, capture, or layout index.
     Index8,
+    /// An interpolation-plan index, widened like a slot but not a frame slot.
+    FormatIndex,
     Index16,
     /// A field offset, scaled by the access width.
     Offset8,
@@ -98,6 +100,10 @@ pub enum Role {
 impl Role {
     pub const fn is_slot(self) -> bool {
         matches!(self, Role::Dst | Role::Src | Role::SrcDst)
+    }
+
+    pub const fn is_widened(self) -> bool {
+        self.is_slot() || matches!(self, Role::FormatIndex)
     }
 
     pub const fn is_displacement(self) -> bool {
@@ -117,6 +123,7 @@ impl Role {
             | Role::SrcDst
             | Role::Shift8
             | Role::Index8
+            | Role::FormatIndex
             | Role::Offset8
             | Role::Width8 => (0, u8::MAX as i64),
             Role::Imm8 | Role::Disp8 => (i8::MIN as i64, i8::MAX as i64),
@@ -364,6 +371,8 @@ pub enum Sem {
     StringStarts,
     StringEnds,
     StringFind,
+    StringFormat(crate::ValueType),
+    StringInterpolate,
     Int {
         op: IntOp,
         mode: Mode,
@@ -680,6 +689,15 @@ ops! {
     StrStarts = "STR.STARTS", "STR", Abc, [Dst, Src, Src], Sem::StringStarts, NONE, true, None;
     StrEnds = "STR.ENDS", "STR", Abc, [Dst, Src, Src], Sem::StringEnds, NONE, true, None;
     StrFind = "STR.FIND", "STR", Abc, [Dst, Src, Src], Sem::StringFind, NONE, true, None;
+    StrFmtI64 = "STR.FMT.I64", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::I64), FAULT, true, Managed;
+    StrFmtI8 = "STR.FMT.I8", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::I8), FAULT, true, Managed;
+    StrFmtU8 = "STR.FMT.U8", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::U8), FAULT, true, Managed;
+    StrFmtU64 = "STR.FMT.U64", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::U64), FAULT, true, Managed;
+    StrFmtF32 = "STR.FMT.F32", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::F32), FAULT, true, Managed;
+    StrFmtF64 = "STR.FMT.F64", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::F64), FAULT, true, Managed;
+    StrFmtBool = "STR.FMT.BOOL", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::Bool), FAULT, true, Managed;
+    StrFmtChar = "STR.FMT.CHAR", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::Char), FAULT, true, Managed;
+    StrInterpolate = "STR.INTERPOLATE", "STR", Abc, [Dst, Src, FormatIndex], Sem::StringInterpolate, FAULT, true, Managed;
 
 }
 

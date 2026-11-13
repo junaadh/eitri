@@ -788,6 +788,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - T016-2: byte-boundary slicing, contains, starts/ends checks and `find` run
   on both interpreters. `find` results support lazy `??`; general optional
   syntax remains future work. Invalid UTF-8 boundaries produce a typed fault.
+- T016-3: single-line `${expression}` interpolation and `string(value)`
+  format strings and scalar numbers, booleans and characters on both interpreters.
 
 ### T017 — Implement aggregates and tagged values
 

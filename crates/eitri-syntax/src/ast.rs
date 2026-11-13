@@ -80,6 +80,10 @@ pub enum Expr {
     },
     Char(TokenId),
     String(TokenId),
+    /// A literal fragment inside an interpolated string.
+    StringPart(Span),
+    /// Alternating literal fragments and expressions in source order.
+    Interpolation(List<ExprId>),
     Bool(bool),
     /// A name, resolved by the checker.
     Name(TokenId),

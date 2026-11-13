@@ -53,7 +53,9 @@ result allocation, and strings support content comparisons, `.len()` and
 `.is_empty()`, `.slice(start, end)`, `.contains()`, `.starts_with()`,
 `.ends_with()` and `.find()`. Find produces a restricted optional byte offset
 that can be stored and read using lazy `??`; general optionals are still
-unsupported. Invalid slice ranges and UTF-8 boundaries fault with
+unsupported. `string(value)` converts scalar numbers, booleans and characters
+to managed text; single-line `${expression}` interpolation also supports strings
+and these scalar types. Invalid slice ranges and UTF-8 boundaries fault with
 `InvalidStringSlice`. No host effects occur for a rejected program.
 Hosts may retain a string argument across calls and executions and
 return it to a script; explicit release removes its collector root.

@@ -424,8 +424,8 @@ manifest with `python3 tools/update_opcode_manifest.py`.
 | `LDK_X`, `LDF_X`, `STF_X` | 3 | |
 | `CALL` | 3 | script, host, value |
 | `RET`, `TRAP`, `WIDE` | 3 | |
-| `STR` | 10 | managed string allocation and byte length |
-| **Total** | **175** | 81 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
+| `STR` | 19 | managed string allocation and byte length |
+| **Total** | **184** | 72 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
 
 `SHR` immediate forms need no width, because the amount is checked at
 compile time and a canonical value shifted right stays canonical. `LDF_X`

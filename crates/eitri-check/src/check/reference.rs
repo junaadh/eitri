@@ -614,7 +614,12 @@ impl<'i> Checker<'_, 'i> {
             Expr::Binary { .. } => self.binary_chain(expr),
             Expr::Call { callee, args } => self.call(expr, callee, args),
             Expr::If(id) => self.if_expr(expr, id, expected, used),
-            Expr::Float { .. } | Expr::Char(_) | Expr::String(_) | Expr::Convert { .. } => {
+            Expr::Float { .. }
+            | Expr::Char(_)
+            | Expr::String(_)
+            | Expr::StringPart(_)
+            | Expr::Interpolation(_)
+            | Expr::Convert { .. } => {
                 unreachable!("outside frozen M0 reference")
             }
             Expr::Error => Ty::Error,

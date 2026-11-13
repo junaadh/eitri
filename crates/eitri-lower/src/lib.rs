@@ -168,6 +168,21 @@ pub fn value_type(ty: Ty) -> ValueType {
     }
 }
 
+fn string_format_op(ty: Ty) -> Op {
+    match ty {
+        Ty::I64 => Op::StrFmtI64,
+        Ty::I8 => Op::StrFmtI8,
+        Ty::U8 => Op::StrFmtU8,
+        Ty::U64 => Op::StrFmtU64,
+        Ty::F32 => Op::StrFmtF32,
+        Ty::F64 => Op::StrFmtF64,
+        Ty::Bool => Op::StrFmtBool,
+        Ty::Char => Op::StrFmtChar,
+        Ty::String => Op::Mov,
+        _ => unreachable!("checked formattable type"),
+    }
+}
+
 fn signature(params: &[Ty], ret: Ty) -> Signature {
     Signature {
         params: params.iter().map(|&ty| value_type(ty)).collect(),
@@ -231,6 +246,7 @@ fn lower_mode<const SIMPLE: bool>(
             asm: &mut scratch.recording,
             slots: &mut scratch.slots,
             stack: &mut scratch.stack,
+            plans: Vec::new(),
             top: 0,
         };
         lower_with(lowerer)
@@ -241,6 +257,7 @@ fn lower_mode<const SIMPLE: bool>(
             asm: &mut scratch.asm,
             slots: &mut scratch.slots,
             stack: &mut scratch.stack,
+            plans: Vec::new(),
             top: 0,
         };
         lower_with(lowerer)
@@ -297,6 +314,7 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
         }
     }
     if !lowerer.checked.strings.is_empty()
+        || !lowerer.plans.is_empty()
         || functions.iter().any(|f| {
             f.signature
                 .params
@@ -364,13 +382,13 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
             while pc < function.code.len() {
                 let decoded =
                     eitri_bytecode::decode(&function.code, pc).expect("assembled instruction");
-                has_strings |= decoded.op == Op::StrNew;
+                has_strings |= matches!(decoded.op, Op::StrNew | Op::StrInterpolate);
                 pc += decoded.words as usize;
             }
             if has_strings {
                 let mut strings = lowerer
                     .asm
-                    .artifact_vec(lowerer.checked.strings.len())
+                    .artifact_vec(lowerer.checked.strings.len() + lowerer.plans.len())
                     .map_err(|error| {
                         lowering_error(
                             error,
@@ -380,6 +398,16 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
                         )
                     })?;
                 for value in &lowerer.checked.strings {
+                    strings.push(lowerer.asm.artifact_string(value).map_err(|error| {
+                        lowering_error(
+                            error,
+                            input,
+                            &function.name,
+                            function.span_at(0).unwrap_or_default(),
+                        )
+                    })?);
+                }
+                for value in &lowerer.plans {
                     strings.push(lowerer.asm.artifact_string(value).map_err(|error| {
                         lowering_error(
                             error,
@@ -499,6 +527,7 @@ struct Lowerer<'a, 'i, const R: bool, const SIMPLE: bool> {
     asm: &'a mut Assembler<R>,
     slots: &'a mut IndexVec<BindingId, u32>,
     stack: &'a mut Vec<ExprId>,
+    plans: Vec<String>,
     /// The next free slot.
     top: u32,
 }
@@ -876,7 +905,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     .load(slot, value as u64, value_type(checked.types[e]), span)?;
                 Ok(slot)
             }
-            Expr::String(_) => {
+            Expr::String(_) | Expr::StringPart(_) => {
                 let Res::StringLiteral(index) = checked.resolutions[e] else {
                     unreachable!("checked string literal")
                 };
@@ -888,6 +917,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 )?;
                 Ok(slot)
             }
+            Expr::Interpolation(parts) => self.interpolation(e, parts, dst),
             Expr::Bool(value) => {
                 let slot = self.dst(dst);
                 self.asm
@@ -1002,6 +1032,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 ..
             } => self.coalesce(e, dst),
             Expr::Binary { .. } => self.chain(e, dst),
+            Expr::Call { args, .. } if matches!(checked.resolutions[e], Res::StringConvert(_)) => {
+                let Res::StringConvert(from) = checked.resolutions[e] else {
+                    unreachable!()
+                };
+                let value = self.expr(ast.args(args)[0], None)?;
+                let slot = self.dst(dst);
+                let op = string_format_op(from);
+                self.asm
+                    .emit(op, Operands::abc(slot.into(), value.into(), 0), span)?;
+                Ok(slot)
+            }
             Expr::Call { args, .. } if matches!(checked.resolutions[e], Res::Convert { .. }) => {
                 self.conversion(e, ast.args(args)[0], dst)
             }
@@ -1082,6 +1123,71 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 unreachable!("checked code has no bare members or errors")
             }
         }
+    }
+
+    fn interpolation(
+        &mut self,
+        root: ExprId,
+        parts: eitri_base::List<ExprId>,
+        dst: Option<u32>,
+    ) -> Lowered<u32> {
+        use std::fmt::Write;
+        let ast = self.input.ast;
+        let parts = ast.args(parts);
+        let count = u32::try_from(
+            parts
+                .iter()
+                .filter(|&&part| !matches!(ast.exprs[part], Expr::StringPart(_)))
+                .count(),
+        )
+        .map_err(|_| AsmError::CodeTooLarge)?;
+        let first = self.top;
+        self.top = first.checked_add(count).ok_or(AsmError::CodeTooLarge)?;
+        let end = self.top;
+        let mut plan = String::new();
+        let mut index = 0u32;
+        for &part in parts {
+            if matches!(ast.exprs[part], Expr::StringPart(_)) {
+                let Res::StringLiteral(literal) = self.checked.resolutions[part] else {
+                    unreachable!()
+                };
+                let text = &self.checked.strings[literal as usize];
+                write!(plan, "L{:08x}", text.len()).expect("writing to a string");
+                plan.push_str(text);
+                continue;
+            }
+            let target = first + index;
+            let ty = self.checked.types[part];
+            plan.push(match ty {
+                Ty::String => 's',
+                Ty::I64 => 'i',
+                Ty::I8 => 'b',
+                Ty::U8 => 'u',
+                Ty::U64 => 'U',
+                Ty::F32 => 'f',
+                Ty::F64 => 'F',
+                Ty::Bool => 't',
+                Ty::Char => 'c',
+                _ => unreachable!("checked formattable type"),
+            });
+            self.expr(part, Some(target))?;
+            self.top = end;
+            index += 1;
+        }
+        let plan_index = self
+            .checked
+            .strings
+            .len()
+            .checked_add(self.plans.len())
+            .ok_or(AsmError::CodeTooLarge)?;
+        self.plans.push(plan);
+        let slot = self.dst(dst);
+        self.asm.emit(
+            Op::StrInterpolate,
+            Operands::abc(slot.into(), first.into(), plan_index as i64),
+            ast.span(root),
+        )?;
+        Ok(slot)
     }
 
     fn coalesce(&mut self, root: ExprId, dst: Option<u32>) -> Lowered<u32> {

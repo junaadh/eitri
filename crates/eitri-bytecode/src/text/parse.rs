@@ -794,6 +794,7 @@ impl<'a> Body<'_, '_, 'a> {
                         | Role::Shift8
                         | Role::Imm16
                         | Role::Index8
+                        | Role::FormatIndex
                         | Role::Index16
                         | Role::Offset8
                         | Role::Offset32
