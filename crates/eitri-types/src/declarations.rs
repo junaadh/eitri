@@ -1,4 +1,4 @@
-//! Caller-owned named-product graph. Constructors remain internal until T017.
+//! Caller-owned named declaration graph. Constructors remain internal until T017.
 use crate::{TypeId, TypeStore};
 use eitri_base::FxHashMap;
 
@@ -23,6 +23,9 @@ pub enum DeclError {
     UnknownType(TypeId),
     AlreadyDefined(DeclId),
     DuplicateField(String),
+    DuplicateCase(String),
+    EmptyEnum,
+    Unsupported,
     Undefined(DeclId),
     InlineCycle { keys: Vec<DeclKey> },
     Layout(crate::LayoutError),
@@ -31,7 +34,27 @@ pub enum DeclError {
 }
 struct Declaration {
     key: DeclKey,
-    fields: Option<Vec<(String, FieldType)>>,
+    body: Option<Body>,
+}
+enum Body {
+    Product(Vec<(String, FieldType)>),
+    Enum(Vec<(String, Option<FieldType>)>),
+}
+impl Body {
+    fn len(&self) -> usize {
+        match self {
+            Self::Product(fields) => fields.len(),
+            Self::Enum(cases) => cases.len(),
+        }
+    }
+    fn entry(&self, index: usize) -> Option<(&str, Option<FieldType>)> {
+        match self {
+            Self::Product(fields) => fields
+                .get(index)
+                .map(|(name, ty)| (name.as_str(), Some(*ty))),
+            Self::Enum(cases) => cases.get(index).map(|(name, ty)| (name.as_str(), *ty)),
+        }
+    }
 }
 #[derive(Default)]
 pub struct Declarations {
@@ -48,7 +71,7 @@ impl Declarations {
         let id = DeclId(u32::try_from(self.declarations.len()).map_err(|_| DeclError::TooMany)?);
         self.declarations.push(Declaration {
             key: key.clone(),
-            fields: None,
+            body: None,
         });
         self.keys.insert(key, id);
         Ok(id)
@@ -62,7 +85,7 @@ impl Declarations {
             .declarations
             .get(id.0 as usize)
             .ok_or(DeclError::UnknownDecl(id))?;
-        if decl.fields.is_some() {
+        if decl.body.is_some() {
             return Err(DeclError::AlreadyDefined(id));
         }
         let mut names = eitri_base::FxHashSet::default();
@@ -76,13 +99,43 @@ impl Declarations {
                 return Err(DeclError::UnknownDecl(*target));
             }
         }
-        self.declarations[id.0 as usize].fields = Some(fields);
+        self.declarations[id.0 as usize].body = Some(Body::Product(fields));
+        Ok(())
+    }
+    pub(crate) fn define_enum(
+        &mut self,
+        id: DeclId,
+        cases: Vec<(String, Option<FieldType>)>,
+    ) -> Result<(), DeclError> {
+        let decl = self
+            .declarations
+            .get(id.0 as usize)
+            .ok_or(DeclError::UnknownDecl(id))?;
+        if decl.body.is_some() {
+            return Err(DeclError::AlreadyDefined(id));
+        }
+        if cases.is_empty() {
+            return Err(DeclError::EmptyEnum);
+        }
+        u32::try_from(cases.len()).map_err(|_| DeclError::TooMany)?;
+        let mut names = eitri_base::FxHashSet::default();
+        for (name, ty) in &cases {
+            if !names.insert(name) {
+                return Err(DeclError::DuplicateCase(name.clone()));
+            }
+            if let Some(FieldType::Named(target) | FieldType::Reference(target)) = ty
+                && self.declarations.get(target.0 as usize).is_none()
+            {
+                return Err(DeclError::UnknownDecl(*target));
+            }
+        }
+        self.declarations[id.0 as usize].body = Some(Body::Enum(cases));
         Ok(())
     }
     /// O(declarations + fields) time and space, with an explicit DFS stack.
     pub(crate) fn check(&self) -> Result<(), DeclError> {
         for (n, decl) in self.declarations.iter().enumerate() {
-            if decl.fields.is_none() {
+            if decl.body.is_none() {
                 return Err(DeclError::Undefined(DeclId(n as u32)));
             }
         }
@@ -97,19 +150,16 @@ impl Declarations {
             state[root] = 1;
             path.push(root);
             while let Some((id, next)) = stack.last_mut() {
-                let fields = self.declarations[*id]
-                    .fields
-                    .as_ref()
-                    .expect("checked above");
+                let fields = self.declarations[*id].body.as_ref().expect("checked above");
                 if *next == fields.len() {
                     state[*id] = 2;
                     stack.pop();
                     path.pop();
                     continue;
                 }
-                let ty = fields[*next].1;
+                let ty = fields.entry(*next).expect("in bounds").1;
                 *next += 1;
-                if let FieldType::Named(child) = ty {
+                if let Some(FieldType::Named(child)) = ty {
                     let child = child.0 as usize;
                     if state[child] == 1 {
                         let start = path.iter().position(|&n| n == child).expect("active path");
@@ -141,17 +191,40 @@ impl Declarations {
             return Err(DeclError::UnknownDecl(root));
         }
         for decl in &self.declarations {
-            for (_, ty) in decl.fields.as_ref().expect("checked") {
-                if let FieldType::Type(id) = ty
+            let body = decl.body.as_ref().expect("checked");
+            for index in 0..body.len() {
+                if let Some(FieldType::Type(id)) = body.entry(index).expect("in bounds").1
                     && types.nodes.get(id.0 as usize).is_none()
                 {
-                    return Err(DeclError::UnknownType(*id));
+                    return Err(DeclError::UnknownType(id));
+                }
+            }
+        }
+        // References are reachable too, even though their layouts are not inlined.
+        let mut seen = vec![false; self.declarations.len()];
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if std::mem::replace(&mut seen[id.0 as usize], true) {
+                continue;
+            }
+            let body = self.declarations[id.0 as usize]
+                .body
+                .as_ref()
+                .expect("checked");
+            if matches!(body, Body::Enum(_)) {
+                return Err(DeclError::Unsupported);
+            }
+            for index in 0..body.len() {
+                if let Some(FieldType::Named(child) | FieldType::Reference(child)) =
+                    body.entry(index).expect("in bounds").1
+                {
+                    stack.push(child);
                 }
             }
         }
         crate::layout::named_layout(types, self, root, domain).map_err(DeclError::Layout)
     }
-    /// Snapshot a signature with named products using the same anonymous type
+    /// Snapshot a signature with named declarations using the same anonymous type
     /// bytes as `TypeStore::signature`. Named and reference tags precede either
     /// a key and ordered shape or a back-reference distance to an active path
     /// entry. Unique declaration keys make these path encodings canonical under
@@ -210,6 +283,9 @@ impl Declarations {
         const REFERENCE: u8 = 13;
         const BACKREF: u8 = 14;
         const DEFINITION: u8 = 15;
+        const ENUM_DEFINITION: u8 = 16;
+        const NO_PAYLOAD: u8 = 17;
+        const PAYLOAD: u8 = 18;
         enum Work {
             Type(FieldType),
             Fields(DeclId, usize),
@@ -247,8 +323,12 @@ impl Declarations {
                             number(&mut out, depth - 1 - index, limit)?;
                             continue;
                         }
-                        let fields = decl.fields.as_ref().ok_or(DeclError::Undefined(id))?;
-                        append(&mut out, &[DEFINITION], limit)?;
+                        let fields = decl.body.as_ref().ok_or(DeclError::Undefined(id))?;
+                        let tag = match fields {
+                            Body::Product(_) => DEFINITION,
+                            Body::Enum(_) => ENUM_DEFINITION,
+                        };
+                        append(&mut out, &[tag], limit)?;
                         string(&mut out, &decl.key.module, limit)?;
                         string(&mut out, &decl.key.name, limit)?;
                         number(&mut out, fields.len(), limit)?;
@@ -258,14 +338,23 @@ impl Declarations {
                         stack.push(Work::Fields(id, 0));
                     }
                     Work::Fields(id, index) => {
-                        let fields = self.declarations[id.0 as usize]
-                            .fields
+                        let body = self.declarations[id.0 as usize]
+                            .body
                             .as_ref()
                             .expect("defined above");
-                        if let Some((name, ty)) = fields.get(index) {
+                        if let Some((name, ty)) = body.entry(index) {
                             string(&mut out, name, limit)?;
                             stack.push(Work::Fields(id, index + 1));
-                            stack.push(Work::Type(*ty));
+                            if matches!(body, Body::Enum(_)) {
+                                append(
+                                    &mut out,
+                                    &[if ty.is_some() { PAYLOAD } else { NO_PAYLOAD }],
+                                    limit,
+                                )?;
+                            }
+                            if let Some(ty) = ty {
+                                stack.push(Work::Type(ty));
+                            }
                         }
                     }
                     Work::Exit(id) => {
@@ -284,11 +373,16 @@ impl Declarations {
         self.declarations.len()
     }
     pub(crate) fn fields(&self, id: usize) -> &[(String, FieldType)] {
-        self.declarations[id].fields.as_deref().expect("checked")
+        match self.declarations[id].body.as_ref().expect("checked") {
+            Body::Product(fields) => fields,
+            // The layout builder enumerates all declarations; reachable enums were
+            // rejected above, so this placeholder cannot enter the result.
+            Body::Enum(_) => &[],
+        }
     }
 }
 
-/// Compare reachable named products coinductively across independent stores.
+/// Compare reachable named declarations coinductively across independent stores.
 /// An explicit stack and set of assumed-equal pairs terminate reference cycles.
 /// At most A*B pairs are examined (normally only reachable pairs), for A and B
 /// declaration counts. Time is proportional to their fields, names and portable
@@ -319,18 +413,21 @@ pub fn same_type(
         if !assumed.insert((left, right)) {
             continue;
         }
-        let lf = l.fields.as_ref().ok_or(DeclError::Undefined(left))?;
-        let rf = r.fields.as_ref().ok_or(DeclError::Undefined(right))?;
+        let lf = l.body.as_ref().ok_or(DeclError::Undefined(left))?;
+        let rf = r.body.as_ref().ok_or(DeclError::Undefined(right))?;
         let mismatch = || DeclError::SameKeyDifferentShape { key: l.key.clone() };
-        if lf.len() != rf.len() {
+        if std::mem::discriminant(lf) != std::mem::discriminant(rf) || lf.len() != rf.len() {
             return Err(mismatch());
         }
-        for ((ln, lt), (rn, rt)) in lf.iter().zip(rf) {
+        for index in 0..lf.len() {
+            let (ln, lt) = lf.entry(index).expect("in bounds");
+            let (rn, rt) = rf.entry(index).expect("in bounds");
             if ln != rn {
                 return Err(mismatch());
             }
-            match (*lt, *rt) {
-                (FieldType::Type(x), FieldType::Type(y)) => {
+            match (lt, rt) {
+                (None, None) => {}
+                (Some(FieldType::Type(x)), Some(FieldType::Type(y))) => {
                     let x =
                         a.1.nodes
                             .get(x.0 as usize)
@@ -343,8 +440,8 @@ pub fn same_type(
                         return Err(mismatch());
                     }
                 }
-                (FieldType::Named(x), FieldType::Named(y))
-                | (FieldType::Reference(x), FieldType::Reference(y)) => {
+                (Some(FieldType::Named(x)), Some(FieldType::Named(y)))
+                | (Some(FieldType::Reference(x)), Some(FieldType::Reference(y))) => {
                     stack.push((x, y, Some(l.key.clone())));
                 }
                 _ => return Err(mismatch()),
@@ -667,6 +764,128 @@ mod tests {
         assert_eq!(
             decls.signature(&types, &[], FieldType::Type(TypeId(999))),
             Err(DeclError::UnknownType(TypeId(999)))
+        );
+    }
+    #[test]
+    fn enum_recursive_identity_and_layout_rejection() {
+        let types = TypeStore::default();
+        let mut a = Declarations::default();
+        let list_a = a.declare(key("List")).unwrap();
+        let node_a = a.declare(key("Node")).unwrap();
+        a.define_enum(
+            list_a,
+            vec![
+                ("Nil".into(), None),
+                ("Cons".into(), Some(FieldType::Named(node_a))),
+            ],
+        )
+        .unwrap();
+        a.define(node_a, vec![field("next", FieldType::Reference(list_a))])
+            .unwrap();
+        let mut b = Declarations::default();
+        let node_b = b.declare(key("Node")).unwrap();
+        let list_b = b.declare(key("List")).unwrap();
+        b.define(node_b, vec![field("next", FieldType::Reference(list_b))])
+            .unwrap();
+        b.define_enum(
+            list_b,
+            vec![
+                ("Nil".into(), None),
+                ("Cons".into(), Some(FieldType::Named(node_b))),
+            ],
+        )
+        .unwrap();
+        a.check().unwrap();
+        b.check().unwrap();
+        assert_eq!(
+            same_type((&a, &types, list_a), (&b, &types, list_b)),
+            Ok(true)
+        );
+        let sig = |d: &Declarations, id| d.signature(&types, &[], FieldType::Named(id)).unwrap();
+        assert_eq!(sig(&a, list_a), sig(&b, list_b));
+        assert!(matches!(
+            a.layout(&types, list_a, StorageDomain::Frame),
+            Err(DeclError::Unsupported)
+        ));
+        assert!(matches!(
+            a.layout(&types, node_a, StorageDomain::Frame),
+            Err(DeclError::Unsupported)
+        ));
+        let independent = a.declare(key("Independent")).unwrap();
+        a.define(independent, vec![]).unwrap();
+        assert!(a.layout(&types, independent, StorageDomain::Frame).is_ok());
+    }
+
+    #[test]
+    fn enum_shapes_and_signatures_agree() {
+        let types = TypeStore::default();
+        let mut a = Declarations::default();
+        let id = a.declare(key("E")).unwrap();
+        a.define_enum(id, vec![("A".into(), None), ("B".into(), None)])
+            .unwrap();
+        let original = a.signature(&types, &[], FieldType::Named(id)).unwrap();
+        for cases in [
+            vec![("B".into(), None), ("A".into(), None)],
+            vec![("A".into(), None), ("C".into(), None)],
+            vec![
+                ("A".into(), Some(FieldType::Reference(DeclId(0)))),
+                ("B".into(), None),
+            ],
+        ] {
+            let mut b = Declarations::default();
+            let other = b.declare(key("E")).unwrap();
+            b.define_enum(other, cases).unwrap();
+            assert_eq!(
+                same_type((&a, &types, id), (&b, &types, other)),
+                Err(DeclError::SameKeyDifferentShape { key: key("E") })
+            );
+            assert_ne!(
+                original,
+                b.signature(&types, &[], FieldType::Named(other)).unwrap()
+            );
+        }
+        let mut product = Declarations::default();
+        let other = product.declare(key("E")).unwrap();
+        product.define(other, vec![]).unwrap();
+        assert_eq!(
+            same_type((&a, &types, id), (&product, &types, other)),
+            Err(DeclError::SameKeyDifferentShape { key: key("E") })
+        );
+        assert_ne!(
+            original,
+            product
+                .signature(&types, &[], FieldType::Named(other))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn enum_definition_errors_and_inline_cycle() {
+        let mut d = Declarations::default();
+        let id = d.declare(key("E")).unwrap();
+        assert_eq!(d.define_enum(id, vec![]), Err(DeclError::EmptyEnum));
+        assert_eq!(
+            d.define_enum(id, vec![("A".into(), None), ("A".into(), None)]),
+            Err(DeclError::DuplicateCase("A".into()))
+        );
+        assert_eq!(
+            d.define_enum(
+                id,
+                vec![("A".into(), Some(FieldType::Reference(DeclId(99))))]
+            ),
+            Err(DeclError::UnknownDecl(DeclId(99)))
+        );
+        d.define_enum(id, vec![("A".into(), Some(FieldType::Named(id)))])
+            .unwrap();
+        assert_eq!(
+            d.define_enum(id, vec![("A".into(), None)]),
+            Err(DeclError::AlreadyDefined(id))
+        );
+        assert_eq!(
+            d.check(),
+            Err(DeclError::InlineCycle {
+                keys: vec![key("E")]
+            })
         );
     }
     #[test]
