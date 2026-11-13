@@ -1,0 +1,11 @@
+//! host: test
+import test from "test"
+struct Inner { value: i64, text: string }
+extend Inner { mutating fn add() -> void { self.value += 1 } }
+struct Outer { inner: Inner }
+extend Outer {
+    mutating fn update() -> void { inner.value += 2; inner.add(); inner.text = "new" }
+}
+var outer = Outer { inner: Inner { value: 4, text: "old" } }
+outer.update()
+test.check(outer.inner.value == 7 && outer.inner.text == "new")

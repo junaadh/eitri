@@ -814,6 +814,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             offset += self.field_offset(id, index);
             node = base;
         }
+        if let Res::SelfField(owner_binding, index) = self.checked.resolutions[node] {
+            debug_assert_eq!(binding, owner_binding);
+            let Ty::Struct(owner) = self.checked.bindings[binding].ty else {
+                unreachable!()
+            };
+            offset += self.field_offset(owner, index);
+        }
         self.slots[binding] + offset
     }
 
@@ -2302,7 +2309,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             unreachable!("called on a call");
         };
         let (target, returns) = match checked.resolutions[e] {
-            Res::Function(f) | Res::Method(f) | Res::MutMethod(f, _) => (
+            Res::Function(f)
+            | Res::Method(f)
+            | Res::MutMethod(f, _)
+            | Res::BareMethod(f, _)
+            | Res::BareMutMethod(f, _) => (
                 CallTarget::Script(FunctionId::from_u32(f.as_u32() + 1)),
                 checked.signatures[f].ret != Ty::Void,
             ),
@@ -2325,7 +2336,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         } else {
             None
         };
-        let receiver_width = receiver.map_or(0, |base| self.width(checked.types[base]));
+        let bare_receiver = match checked.resolutions[e] {
+            Res::BareMethod(_, binding) | Res::BareMutMethod(_, binding) => Some(binding),
+            _ => None,
+        };
+        let receiver_width = if let Some(binding) = bare_receiver {
+            self.width(checked.bindings[binding].ty)
+        } else {
+            receiver.map_or(0, |base| self.width(checked.types[base]))
+        };
         let argument_slots: u32 = receiver_width
             + args
                 .iter()
@@ -2336,6 +2355,19 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             let save = self.top;
             self.expr(receiver, Some(first))?;
             self.top = save;
+        }
+        if let Some(binding) = bare_receiver {
+            for offset in 0..receiver_width {
+                self.asm.emit(
+                    Op::Mov,
+                    Operands::abc(
+                        (first + offset).into(),
+                        (self.slots[binding] + offset).into(),
+                        0,
+                    ),
+                    ast.span(e),
+                )?;
+            }
         }
         let mut offset = receiver_width;
         for &arg in args {
@@ -2350,7 +2382,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             0
         };
         let mutation = match checked.resolutions[e] {
-            Res::MutMethod(_, binding) => Some(binding),
+            Res::MutMethod(_, binding) | Res::BareMutMethod(_, binding) => Some(binding),
             _ => None,
         };
         let result = if mutation.is_some() {
@@ -2386,8 +2418,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         };
         self.asm.call(site, ast.span(e))?;
         if let Some(binding) = mutation {
-            let receiver = receiver.expect("mutating receiver");
-            let destination = self.field_address(receiver, binding);
+            let destination = receiver.map_or(self.slots[binding], |receiver| {
+                self.field_address(receiver, binding)
+            });
             for offset in 0..receiver_width {
                 self.asm.emit(
                     Op::Mov,

@@ -2083,3 +2083,16 @@ the added statement-index scratch; fresh creation used 197 allocations versus
 196. The scalar workload does not exercise these writes. Samples:
 `/private/tmp/eitri-t017-18-samples.csv`; report:
 `/private/tmp/eitri-t017-18-bench.txt`.
+
+### T017-19 nested bare field writes
+
+Nested paths rooted at a bare receiver field now support assignment and
+mutating calls. Read-only checks include the root field; the oracle rebuilds
+the value path. Managed values are tested under forced collection on both
+interpreters and lowering modes.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,667/12,200 ns, execution 250/375 ns, total 8,917/12,500 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+nested aggregate methods. Samples: `/private/tmp/eitri-t017-19-samples.csv`;
+report: `/private/tmp/eitri-t017-19-bench.txt`.

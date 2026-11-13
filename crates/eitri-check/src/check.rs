@@ -48,6 +48,8 @@ pub enum Res {
     Function(FnId),
     Method(FnId),
     MutMethod(FnId, BindingId),
+    BareMethod(FnId, BindingId),
+    BareMutMethod(FnId, BindingId),
     Host(HostFnId),
     StringLen,
     StringIsEmpty,
@@ -1253,7 +1255,7 @@ impl<'i> Checker<'_, 'i> {
                 }
                 let binding = match self.ast().exprs[root] {
                     Expr::Name(_) | Expr::SelfValue(_) => match self.out.resolutions[root] {
-                        Res::Binding(b) => Some(b),
+                        Res::Binding(b) | Res::SelfField(b, _) => Some(b),
                         _ => None,
                     },
                     _ => None,
@@ -2152,6 +2154,18 @@ impl<'i> Checker<'_, 'i> {
             }
             expr = base;
         }
+        if let Res::SelfField(binding, index) = self.out.resolutions[expr] {
+            let Ty::Struct(id) = self.out.bindings[binding].ty else {
+                unreachable!()
+            };
+            if self.input.ast.params(self.input.ast.structs[id].fields)[index as usize].readonly {
+                self.report(
+                    Code::AssignToImmutable,
+                    "cannot assign through a read-only field",
+                    self.span(expr),
+                );
+            }
+        }
     }
 
     fn member_value(&mut self, expr: ExprId, base: ExprId, name: TokenId) -> Ty {
@@ -2209,6 +2223,45 @@ impl<'i> Checker<'_, 'i> {
         let ast = self.input.ast;
         if matches!(ast.exprs[callee], Expr::Name(token) if self.symbol(token).is_type_name()) {
             return self.conversion(expr, callee, ast.args(args), true);
+        }
+        if let Expr::Name(name) = ast.exprs[callee]
+            && self.receiver_field(name).is_none()
+            && !matches!(self.lookup(self.symbol(name)), Some(Name::Binding(binding)) if self.out.bindings[binding].owner.is_some())
+            && let Some(binding) = self.current.and_then(|current| current.self_binding)
+            && let Some(method) = self.methods.iter().copied().find(|&id| {
+                let decl = ast.fns[id];
+                !decl.is_static
+                    && decl.receiver.is_some()
+                    && self.symbol(decl.name) == self.symbol(name)
+                    && self.out.param_types[self.out.signatures[id].params].first()
+                        == Some(&self.out.bindings[binding].ty)
+            })
+        {
+            let signature = self.out.signatures[method];
+            let params = signature.params;
+            if ast.args(args).len() != params.len() - 1 {
+                self.report(
+                    Code::ArgumentCount,
+                    format!("method takes {} arguments", params.len() - 1),
+                    self.span(expr),
+                );
+            }
+            for (index, &arg) in ast.args(args).iter().enumerate() {
+                self.value(arg, self.out.param_types[params].get(index + 1).copied());
+            }
+            if ast.fns[method].mutating {
+                if !self.out.bindings[binding].mutable {
+                    self.report(
+                        Code::AssignToImmutable,
+                        "mutating method requires a mutable receiver",
+                        self.token_span(name),
+                    );
+                }
+                self.out.resolutions[expr] = Res::BareMutMethod(method, binding);
+            } else {
+                self.out.resolutions[expr] = Res::BareMethod(method, binding);
+            }
+            return signature.ret;
         }
         if let Expr::Member { base, name } = ast.exprs[callee]
             && let Expr::Name(owner) = ast.exprs[base]
@@ -2281,7 +2334,7 @@ impl<'i> Checker<'_, 'i> {
                             root = base;
                         }
                         let binding = match self.out.resolutions[root] {
-                            Res::Binding(binding) => Some(binding),
+                            Res::Binding(binding) | Res::SelfField(binding, _) => Some(binding),
                             _ => None,
                         };
                         if !binding.is_some_and(|binding| self.out.bindings[binding].mutable) {

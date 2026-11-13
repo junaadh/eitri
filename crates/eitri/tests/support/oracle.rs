@@ -439,6 +439,9 @@ impl Eval<'_> {
                     path.push(field as usize);
                     node = base;
                 }
+                if let Res::SelfField(_, field) = self.checked.resolutions[node] {
+                    path.push(field as usize);
+                }
                 path.reverse();
                 let mut current = self.read(binding);
                 let mut parents = Vec::new();
@@ -595,6 +598,9 @@ impl Eval<'_> {
             };
             path.push(field as usize);
             node = base;
+        }
+        if let Res::SelfField(_, field) = self.checked.resolutions[node] {
+            path.push(field as usize);
         }
         path.reverse();
         let mut current = self.read(binding);
@@ -1002,14 +1008,26 @@ impl Eval<'_> {
                     };
                     values.push(self.expr(host, base)?);
                 }
+                if let Res::BareMethod(_, binding) | Res::BareMutMethod(_, binding) =
+                    self.checked.resolutions[e]
+                {
+                    values.push(self.read(binding));
+                }
                 for &arg in self.ast.args(args) {
                     values.push(self.expr(host, arg)?);
                 }
                 // The callee starts only after the debit.
                 self.debit(span)?;
                 match self.checked.resolutions[e] {
-                    Res::Function(f) | Res::Method(f) => {
+                    Res::Function(f) | Res::Method(f) | Res::BareMethod(f, _) => {
                         self.call_script(host, f, &values, span, None)
+                    }
+                    Res::BareMutMethod(f, binding) => {
+                        let mut updated = None;
+                        let result =
+                            self.call_script(host, f, &values, span, Some(&mut updated))?;
+                        self.locals[binding.index()] = Some(updated.expect("mutating receiver"));
+                        Ok(result)
                     }
                     Res::MutMethod(f, binding) => {
                         let Expr::Member { base, .. } = self.ast.exprs[callee] else {

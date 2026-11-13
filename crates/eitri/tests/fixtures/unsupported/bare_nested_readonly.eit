@@ -1,0 +1,3 @@
+struct Inner { value: i64 }
+struct Outer { let inner: Inner }
+extend Outer { mutating fn change() -> void { inner.value = 1 } }

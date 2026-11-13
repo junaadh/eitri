@@ -846,6 +846,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   aggregate fields and string values, with local and parameter shadowing.
 - T017-18: mutating methods can assign bare receiver fields, with immutable
   methods and read-only fields rejecting writes.
+- T017-19: nested bare receiver fields support writes and mutating calls;
+  read-only enclosing fields still reject mutation.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 
