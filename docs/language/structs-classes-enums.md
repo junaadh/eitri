@@ -3,6 +3,7 @@
 The current implementation accepts structs with up to 256 scalar, string or
 nested aggregate fields, literals, field reads and writes, and copies in local
 bindings and control flow. `let` fields cannot be changed after construction.
+Struct update literals copy omitted fields from a final `..base` expression.
 Fields occupy frame slots, so strings remain collector roots. Recursive inline
 layouts are rejected. Structs can pass and return through script calls;
 host-initiated calls reject aggregate signatures for now.

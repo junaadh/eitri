@@ -218,6 +218,7 @@ pub struct Param {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FieldInit {
+    /// A `..` token denotes the final struct-update base expression.
     pub name: TokenId,
     pub value: ExprId,
 }

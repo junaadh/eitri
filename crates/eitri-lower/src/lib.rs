@@ -1437,10 +1437,19 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 };
                 let end = self.top;
                 let declared = ast.params(ast.structs[id].fields);
+                let entries = &ast.field_inits[fields];
+                let base = entries
+                    .last()
+                    .filter(|field| {
+                        self.input.tokens.kind(field.name) == eitri_syntax::TokenKind::DotDot
+                    })
+                    .map(|field| field.value);
                 if declared.is_empty() {
                     self.asm.load(slot, 0, ValueType::I64, span)?;
                 }
-                for field in &ast.field_inits[fields] {
+                for field in entries.iter().filter(|field| {
+                    self.input.tokens.kind(field.name) != eitri_syntax::TokenKind::DotDot
+                }) {
                     let symbol = self.input.tokens.symbol(field.name);
                     let index = declared
                         .iter()
@@ -1452,12 +1461,50 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     )?;
                     self.top = end;
                 }
+                if let Some(base) = base {
+                    let copy = self.top;
+                    self.top += width;
+                    self.expr(base, Some(copy))?;
+                    for (index, field) in declared.iter().enumerate() {
+                        if !entries
+                            .iter()
+                            .filter(|init| {
+                                self.input.tokens.kind(init.name) != eitri_syntax::TokenKind::DotDot
+                            })
+                            .any(|init| {
+                                self.input.tokens.symbol(init.name)
+                                    == self.input.tokens.symbol(field.name)
+                            })
+                        {
+                            let offset = self.field_offset(id, index as u32);
+                            let ty = checked.param_types[checked.struct_fields[id]][index];
+                            for part in 0..self.width(ty) {
+                                self.asm.emit(
+                                    Op::Mov,
+                                    Operands::abc(
+                                        (slot + offset + part).into(),
+                                        (copy + offset + part).into(),
+                                        0,
+                                    ),
+                                    span,
+                                )?;
+                            }
+                        }
+                    }
+                    self.top = end;
+                }
                 for (index, field) in declared.iter().enumerate() {
-                    if let Some(default) = field.default
-                        && !ast.field_inits[fields].iter().any(|init| {
-                            self.input.tokens.symbol(init.name)
-                                == self.input.tokens.symbol(field.name)
-                        })
+                    if base.is_none()
+                        && let Some(default) = field.default
+                        && !entries
+                            .iter()
+                            .filter(|init| {
+                                self.input.tokens.kind(init.name) != eitri_syntax::TokenKind::DotDot
+                            })
+                            .any(|init| {
+                                self.input.tokens.symbol(init.name)
+                                    == self.input.tokens.symbol(field.name)
+                            })
                     {
                         self.expr(default, Some(slot + self.field_offset(id, index as u32)))?;
                         self.top = end;

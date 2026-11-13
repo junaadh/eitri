@@ -738,6 +738,13 @@ impl Parser<'_> {
             self.expect(T::LBrace, "`{`")?;
             self.skip_separators();
             while !self.at(T::RBrace) && !self.at(T::Eof) {
+                if let Some(name) = self.eat(T::DotDot) {
+                    let value = self.expr(false)?;
+                    self.field_inits.push(crate::ast::FieldInit { name, value });
+                    self.eat(T::Comma);
+                    self.skip_separators();
+                    break;
+                }
                 let field = self.expect(T::Ident, "a field name")?;
                 self.expect(T::Colon, "`:`")?;
                 let value = self.expr(false)?;

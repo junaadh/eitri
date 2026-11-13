@@ -658,7 +658,15 @@ impl Eval<'_> {
                 };
                 let declared = self.ast.params(self.ast.structs[id].fields);
                 let mut result = vec![Value::Void; declared.len()];
-                for field in &self.ast.field_inits[fields] {
+                let entries = &self.ast.field_inits[fields];
+                let base = entries
+                    .last()
+                    .filter(|field| self.tokens.kind(field.name) == eitri_syntax::TokenKind::DotDot)
+                    .map(|field| field.value);
+                for field in entries
+                    .iter()
+                    .filter(|field| self.tokens.kind(field.name) != eitri_syntax::TokenKind::DotDot)
+                {
                     let symbol = self.tokens.symbol(field.name);
                     let index = declared
                         .iter()
@@ -666,8 +674,19 @@ impl Eval<'_> {
                         .unwrap();
                     result[index] = self.expr(host, field.value)?;
                 }
+                if let Some(base) = base {
+                    let Value::Struct(_, index) = self.expr(host, base)? else {
+                        unreachable!()
+                    };
+                    for (slot, value) in result.iter_mut().zip(&self.structs[index as usize]) {
+                        if matches!(*slot, Value::Void) {
+                            *slot = *value;
+                        }
+                    }
+                }
                 for (index, field) in declared.iter().enumerate() {
-                    if let Some(default) = field.default
+                    if base.is_none()
+                        && let Some(default) = field.default
                         && matches!(result[index], Value::Void)
                     {
                         result[index] = self.expr(host, default)?;

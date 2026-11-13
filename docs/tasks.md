@@ -858,6 +858,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   not count toward exhaustiveness.
 - T017-24: fully qualified enum case patterns verify the subject type and
   support payload bindings and forced collection.
+- T017-25: struct update literals copy omitted fields from a final `..base`,
+  preserving explicit initializer order and managed fields.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

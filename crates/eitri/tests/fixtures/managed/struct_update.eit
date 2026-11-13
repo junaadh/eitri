@@ -1,0 +1,9 @@
+//! host: test
+import test from "test"
+struct Inner { text: string }
+struct Item { number: i64 = 10, inner: Inner, flag: bool = false }
+fn make() -> Item { test.emit(2); return Item { number: 3, inner: Inner { text: "kept" }, flag: true } }
+let original = make()
+let changed = Item { number: test.id(1), ..make() }
+test.check(changed.number == 1 && changed.inner.text == "kept" && changed.flag)
+test.check(original.number == 3)

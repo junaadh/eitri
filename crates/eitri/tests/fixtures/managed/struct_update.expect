@@ -1,0 +1,6 @@
+effect: test.emit(2)
+effect: test.id(1)
+effect: test.emit(2)
+effect: test.check(true)
+effect: test.check(true)
+ok

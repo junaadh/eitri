@@ -558,6 +558,13 @@ impl Parser<'_> {
         let mut fields = Vec::new();
         self.skip_separators();
         while !self.at(T::RBrace) && !self.at(T::Eof) {
+            if let Some(name) = self.eat(T::DotDot) {
+                let value = self.expr(false)?;
+                fields.push(crate::ast::FieldInit { name, value });
+                self.eat(T::Comma);
+                self.skip_separators();
+                break;
+            }
             let field = self.expect(T::Ident, "a field name")?;
             self.expect(T::Colon, "`:`")?;
             let value = self.expr(false)?;

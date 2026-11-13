@@ -2133,7 +2133,15 @@ impl<'i> Checker<'_, 'i> {
             return Ty::Error;
         }
         let mut seen = [false; 256];
-        for field in &self.input.ast.field_inits[fields] {
+        let entries = &self.input.ast.field_inits[fields];
+        let base = entries
+            .last()
+            .filter(|field| self.input.tokens.kind(field.name) == eitri_syntax::TokenKind::DotDot)
+            .map(|field| field.value);
+        for field in entries
+            .iter()
+            .filter(|field| self.input.tokens.kind(field.name) != eitri_syntax::TokenKind::DotDot)
+        {
             let index = declared
                 .iter()
                 .position(|f| self.symbol(f.name) == self.symbol(field.name));
@@ -2155,10 +2163,14 @@ impl<'i> Checker<'_, 'i> {
                 self.value(field.value, None);
             }
         }
-        if declared
-            .iter()
-            .enumerate()
-            .any(|(index, field)| !seen[index] && field.default.is_none())
+        if let Some(base) = base {
+            self.value(base, Some(Ty::Struct(id)));
+        }
+        if base.is_none()
+            && declared
+                .iter()
+                .enumerate()
+                .any(|(index, field)| !seen[index] && field.default.is_none())
         {
             self.report(Code::TypeMismatch, "missing struct field", self.span(expr));
         }

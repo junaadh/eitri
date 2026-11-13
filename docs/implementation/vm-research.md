@@ -2158,3 +2158,17 @@ p50/p99 8,542/14,900 ns, execution 209/334 ns, total 8,750/15,200 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 patterns. Samples: `/private/tmp/eitri-t017-24-samples.csv`; report:
 `/private/tmp/eitri-t017-24-bench.txt`.
+
+### T017-25 struct update literals
+
+A final `..base` initializer is represented by its source token in the existing
+initializer list, keeping expression nodes within their size bound. Explicit
+initializers run first, then the base expression; omitted fields are copied
+from its snapshot. Field lookup remains bounded by the 256-field limit. Forced
+GC verifies nested strings and effects on both execution paths.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,125/14,100 ns, execution 250/292 ns, total 9,375/14,300 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+struct updates. Samples: `/private/tmp/eitri-t017-25-samples.csv`; report:
+`/private/tmp/eitri-t017-25-bench.txt`.
