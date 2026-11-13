@@ -12,7 +12,10 @@
 //! paths that meet). Reading an uninitialized or conflicting slot, an
 //! operand of the wrong type, or a `bool` literal other than 0 or 1 is
 //! rejected. The lattice has height two per slot, so the pass is
-//! O(instructions × frame slots).
+//! O(instructions × frame slots). Root structural/coverage checks add work
+//! proportional to root metadata and visited facts, plus a linear revisit of
+//! reachable instructions, with O(root metadata + visited facts) scratch. No
+//! additional instruction-by-frame matrix is kept.
 
 use std::fmt;
 
@@ -20,7 +23,7 @@ use eitri_base::IndexVec;
 
 use crate::encoding::{DecodeError, Decoded, decode};
 use crate::function::{CallTarget, Function, FunctionId, Signature, ValueType};
-use crate::spec::{BRANCH, Cond, END, Op, Role, Sem, Test};
+use crate::spec::{AllocationClass, BRANCH, Cond, END, Op, POLL, Role, Sem, Test};
 
 /// The signatures calls are checked against.
 pub struct Callees<'a> {
@@ -58,6 +61,11 @@ pub enum ErrorKind {
     DynamicRootsOverlap(u32),
     InitializedSpanOutsideFrame,
     RootCallCountMismatch,
+    MissingSafepoint,
+    RootNotInitialized(u32),
+    RootWrongShape(u32),
+    RootMissing(u32),
+    InvalidDynamicPair(u32, u32),
     UntypedLiteral,
     /// A `bool` literal that is not 0 or 1.
     BadBool(u64),
@@ -109,6 +117,15 @@ impl fmt::Display for VerifyError {
             ErrorKind::RootCallCountMismatch => {
                 write!(f, "root call state count differs from call sites")
             }
+            ErrorKind::MissingSafepoint => write!(f, "missing safepoint root state"),
+            ErrorKind::RootNotInitialized(slot) => {
+                write!(f, "root slot r{slot} is not definitely initialized")
+            }
+            ErrorKind::RootWrongShape(slot) => write!(f, "root slot r{slot} has the wrong shape"),
+            ErrorKind::RootMissing(slot) => write!(f, "live root slot r{slot} is missing"),
+            ErrorKind::InvalidDynamicPair(a, b) => {
+                write!(f, "invalid dynamic root pair r{a}, r{b}")
+            }
             ErrorKind::UntypedLiteral => write!(f, "a literal load without a type"),
             ErrorKind::InvalidScalar(message) => f.write_str(message),
             ErrorKind::BadBool(v) => write!(f, "`bool` literal {v} is neither 0 nor 1"),
@@ -151,6 +168,7 @@ impl Slot {
 pub fn verify(function: &Function, callees: &Callees<'_>) -> Result<(), VerifyError> {
     let insns = structure(function, callees)?;
     root_structure(function)?;
+    required_roots(function, &insns)?;
     types(function, callees, &insns)
 }
 
@@ -238,6 +256,132 @@ fn root_structure(function: &Function) -> Result<(), VerifyError> {
         previous = Some(*pc);
     }
     Ok(())
+}
+
+/// Check a root map against independent per-slot initialization, shape and
+/// liveness facts. All live initialized references must be present; marked
+/// slots must be initialized and have the correct shape even when dead.
+/// Dynamic recipes must name reciprocal, distinct, initialized slot pairs.
+/// Work and scratch are O(facts + bitmap words + dynamic recipes), expected
+/// hash-set time; collisions can increase that bound.
+pub fn verify_root_state(facts: &[crate::RootFact], map: &crate::RootMap) -> Result<(), ErrorKind> {
+    use crate::RootShape;
+    let mut covered = eitri_base::FxHashSet::default();
+    for (word_index, &word) in map.ordinary.iter().enumerate() {
+        let mut bits = word;
+        while bits != 0 {
+            let index = word_index
+                .checked_mul(64)
+                .and_then(|n| n.checked_add(bits.trailing_zeros() as usize))
+                .unwrap_or(usize::MAX);
+            let slot = u32::try_from(index).unwrap_or(u32::MAX);
+            let fact = facts.get(index).ok_or(ErrorKind::RootOutsideFrame(slot))?;
+            if !fact.initialized {
+                return Err(ErrorKind::RootNotInitialized(slot));
+            }
+            if fact.shape != RootShape::Reference {
+                return Err(ErrorKind::RootWrongShape(slot));
+            }
+            covered.insert(slot);
+            bits &= bits - 1;
+        }
+    }
+    for &(ty, payload) in &map.dynamic {
+        let a = facts
+            .get(ty as usize)
+            .ok_or(ErrorKind::RootOutsideFrame(ty))?;
+        let b = facts
+            .get(payload as usize)
+            .ok_or(ErrorKind::RootOutsideFrame(payload))?;
+        if !a.initialized {
+            return Err(ErrorKind::RootNotInitialized(ty));
+        }
+        if !b.initialized {
+            return Err(ErrorKind::RootNotInitialized(payload));
+        }
+        if ty == payload
+            || a.shape != (RootShape::DynamicType { payload })
+            || b.shape != (RootShape::DynamicPayload { type_slot: ty })
+            || !covered.insert(ty)
+            || !covered.insert(payload)
+        {
+            return Err(ErrorKind::InvalidDynamicPair(ty, payload));
+        }
+    }
+    for (slot, fact) in facts.iter().enumerate() {
+        if fact.initialized && fact.live && !matches!(fact.shape, RootShape::Scalar) {
+            let slot = u32::try_from(slot).map_err(|_| ErrorKind::RootOutsideFrame(u32::MAX))?;
+            if !covered.contains(&slot) {
+                return Err(ErrorKind::RootMissing(slot));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Scalar-only production facts need no frame-wide scan at each safepoint:
+/// inspect the sparse marked roots and declared initialized spans directly.
+fn scalar_root_state(
+    slots: &[Slot],
+    map: &crate::RootMap,
+    spans: &[crate::SlotRange],
+) -> Result<(), ErrorKind> {
+    for span in spans {
+        for slot in span.slots() {
+            if !matches!(slots[slot as usize], Slot::Ty(_)) {
+                return Err(ErrorKind::RootNotInitialized(slot));
+            }
+        }
+    }
+    for (word_index, &word) in map.ordinary.iter().enumerate() {
+        if word != 0 {
+            let slot = (word_index * 64 + word.trailing_zeros() as usize) as u32;
+            return Err(match slots[slot as usize] {
+                Slot::Ty(_) => ErrorKind::RootWrongShape(slot),
+                _ => ErrorKind::RootNotInitialized(slot),
+            });
+        }
+    }
+    if let Some(&(ty, payload)) = map.dynamic.first() {
+        for slot in [ty, payload] {
+            if !matches!(slots[slot as usize], Slot::Ty(_)) {
+                return Err(ErrorKind::RootNotInitialized(slot));
+            }
+        }
+        return Err(ErrorKind::InvalidDynamicPair(ty, payload));
+    }
+    Ok(())
+}
+
+fn required_roots(function: &Function, insns: &[Insn]) -> Result<(), VerifyError> {
+    let mut points = function.roots.safepoints.iter().peekable();
+    for insn in insns {
+        while points.peek().is_some_and(|(pc, _)| pc.0 < insn.pc) {
+            points.next();
+        }
+        if needs_safepoint(insn.pc, &insn.decoded)
+            && !points.peek().is_some_and(|(pc, _)| pc.0 == insn.pc)
+        {
+            return Err(error(insn.pc, ErrorKind::MissingSafepoint));
+        }
+    }
+    Ok(())
+}
+
+/// Calls use CallRoots; branch polls occur only on taken backward edges.
+pub(crate) fn needs_safepoint(pc: u32, decoded: &Decoded) -> bool {
+    if matches!(decoded.op.info().sem, Sem::Call(_)) {
+        return false;
+    }
+    if decoded.op.allocation_class() != AllocationClass::None {
+        return true;
+    }
+    decoded.op.info().effects.contains(POLL)
+        && branch_target(&Insn {
+            pc,
+            decoded: *decoded,
+        })
+        .is_some_and(|target| target <= pc as i64)
 }
 
 /// A decoded instruction and its PC.
@@ -447,6 +591,48 @@ fn types(function: &Function, callees: &Callees<'_>, insns: &[Insn]) -> Result<(
             if changed && !queued[j] {
                 queued[j] = true;
                 work.push(j);
+            }
+        }
+    }
+    // Revisit only reachable blocks after convergence, using the same block
+    // states; no per-instruction frame snapshots or root-fact matrix.
+    let roots = &function.roots;
+    let map = |id: crate::RootMapId| &roots.maps[id.0 as usize];
+    let check = |slots: &[Slot], root: &crate::RootState, pc| {
+        scalar_root_state(slots, map(root.map), &root.initialized).map_err(|kind| error(pc, kind))
+    };
+    scalar_root_state(
+        states[0].as_ref().expect("entry reachable"),
+        map(roots.entry),
+        &[],
+    )
+    .map_err(|kind| error(0, kind))?;
+    let mut points = roots.safepoints.iter().peekable();
+    for (b, initial) in states.iter().enumerate() {
+        let Some(initial) = initial else { continue };
+        state.clear();
+        state.extend_from_slice(initial);
+        let end = starts.get(b + 1).copied().unwrap_or(insns.len());
+        for insn in &insns[starts[b]..end] {
+            while points.peek().is_some_and(|(pc, _)| pc.0 < insn.pc) {
+                points.next();
+            }
+            if points.peek().is_some_and(|(pc, _)| pc.0 == insn.pc) {
+                let (_, root) = points.next().expect("peeked");
+                check(&state, root, insn.pc)?;
+            }
+            let call = if matches!(insn.decoded.op.info().sem, Sem::Call(_)) {
+                Some(&roots.calls[insn.decoded.operands.b as usize])
+            } else {
+                None
+            };
+            if let Some(call) = call {
+                check(&state, &call.pre, insn.pc)?;
+                check(&state, &call.suspended, insn.pc)?;
+            }
+            transfer(function, callees, insn, &mut state)?;
+            if let Some(call) = call {
+                check(&state, &call.post, insn.pc)?;
             }
         }
     }

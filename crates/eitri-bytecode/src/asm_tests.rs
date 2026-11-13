@@ -583,3 +583,131 @@ fn allocation_classes_cover_call_boundaries() {
     assert_eq!(Op::Mov.allocation_class(), None);
     assert_eq!(crate::spec::ALLOCATION_CLASSES.len(), Op::ALL.len());
 }
+
+#[test]
+fn required_root_states_and_call_initialization() {
+    let loop_function = branch_over(4, false);
+    assert_eq!(loop_function.roots.safepoints.len(), 1);
+    check(&loop_function).unwrap();
+    let mut missing_poll = loop_function.clone();
+    missing_poll.roots.safepoints.clear();
+    assert_eq!(kind(&missing_poll), ErrorKind::MissingSafepoint);
+
+    let mut asm = Assembler::new();
+    asm.call(
+        CallSite {
+            target: CallTarget::Host(1),
+            args: SlotRange { first: 1, count: 1 },
+            result: SlotRange { first: 0, count: 1 },
+        },
+        S,
+    )
+    .unwrap();
+    asm.load(2, 9, I64, S).unwrap();
+    asm.ret(S).unwrap();
+    let f = asm.finish("caller", sig(&[Bool], &[Bool])).unwrap();
+    check(&f).unwrap();
+    let mut missing_call = f.clone();
+    missing_call.roots.calls.clear();
+    assert_eq!(kind(&missing_call), ErrorKind::RootCallCountMismatch);
+    for suspended in [false, true] {
+        let mut changed = f.clone();
+        changed.roots.maps.push(RootMap {
+            ordinary: vec![1],
+            dynamic: vec![],
+        });
+        let call = &mut changed.roots.calls[0];
+        if suspended {
+            call.suspended.map = RootMapId(1);
+        } else {
+            call.pre.map = RootMapId(1);
+        }
+        assert_eq!(kind(&changed), ErrorKind::RootNotInitialized(0));
+    }
+    let mut changed = f.clone();
+    changed.roots.calls[0]
+        .post
+        .initialized
+        .push(SlotRange { first: 2, count: 1 });
+    assert_eq!(kind(&changed), ErrorKind::RootNotInitialized(2));
+    changed.roots.calls[0].post.initialized = vec![SlotRange { first: 0, count: 1 }];
+    check(&changed).unwrap();
+    changed.roots.maps.push(RootMap {
+        ordinary: vec![1],
+        dynamic: vec![],
+    });
+    changed.roots.calls[0].post.map = RootMapId(1);
+    assert_eq!(kind(&changed), ErrorKind::RootWrongShape(0));
+}
+
+#[test]
+fn synthetic_root_facts_check_coverage_and_shape() {
+    use RootShape::*;
+    let fact = |shape, initialized, live| RootFact {
+        shape,
+        initialized,
+        live,
+    };
+    let facts = [
+        fact(Scalar, true, true),
+        fact(Reference, true, true),
+        fact(DynamicType { payload: 3 }, true, true),
+        fact(DynamicPayload { type_slot: 2 }, true, true),
+        fact(Reference, false, false),
+    ];
+    let map = RootMap {
+        ordinary: vec![1 << 1],
+        dynamic: vec![(2, 3)],
+    };
+    assert_eq!(verify_root_state(&facts, &map), Ok(()));
+    assert_eq!(
+        verify_root_state(
+            &facts,
+            &RootMap {
+                ordinary: vec![0],
+                dynamic: vec![(2, 3)]
+            }
+        ),
+        Err(ErrorKind::RootMissing(1))
+    );
+    assert_eq!(
+        verify_root_state(
+            &facts,
+            &RootMap {
+                ordinary: vec![1],
+                dynamic: vec![(2, 3)]
+            }
+        ),
+        Err(ErrorKind::RootWrongShape(0))
+    );
+    assert_eq!(
+        verify_root_state(
+            &facts,
+            &RootMap {
+                ordinary: vec![1 << 4],
+                dynamic: vec![(2, 3)]
+            }
+        ),
+        Err(ErrorKind::RootNotInitialized(4))
+    );
+    assert_eq!(
+        verify_root_state(
+            &facts,
+            &RootMap {
+                ordinary: vec![1 << 1],
+                dynamic: vec![(2, 0)]
+            }
+        ),
+        Err(ErrorKind::InvalidDynamicPair(2, 0))
+    );
+    assert_eq!(
+        verify_root_state(
+            &facts,
+            &RootMap {
+                ordinary: vec![1 << 1],
+                dynamic: vec![]
+            }
+        ),
+        Err(ErrorKind::RootMissing(2))
+    );
+}

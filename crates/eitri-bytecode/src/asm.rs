@@ -485,6 +485,21 @@ impl<const RECORD: bool> Assembler<RECORD> {
         let frame_size = self
             .frame
             .max(signature.param_base() + signature.params.len() as u32);
+        let mut roots = crate::FunctionRoots::scalar(self.sites.len());
+        let mut pc = 0usize;
+        while pc < code.len() {
+            let decoded = crate::decode(&code, pc).expect("assembler emitted valid code");
+            if crate::verify::needs_safepoint(pc as u32, &decoded) {
+                roots.safepoints.push((
+                    crate::SafepointPc(pc as u32),
+                    crate::RootState {
+                        map: crate::RootMapId(0),
+                        initialized: Vec::new(),
+                    },
+                ));
+            }
+            pc += decoded.words as usize;
+        }
         Ok(Function {
             name: name.into(),
             signature,
@@ -494,7 +509,7 @@ impl<const RECORD: bool> Assembler<RECORD> {
             // capacity for the next function.
             consts: self.consts.as_slice().into(),
             sites: self.sites.as_slice().into(),
-            roots: crate::FunctionRoots::scalar(self.sites.len()),
+            roots,
             literal_types,
             starts: starts.into_boxed_slice(),
             spans: spans.into_boxed_slice(),

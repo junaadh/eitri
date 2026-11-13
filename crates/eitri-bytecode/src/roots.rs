@@ -17,6 +17,20 @@ pub struct RootMap {
     /// Type and payload slot for each dynamic value.
     pub dynamic: Vec<(u32, u32)>,
 }
+/// Independently derived slot shape, including the partner of a dynamic slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RootShape {
+    Scalar,
+    Reference,
+    DynamicType { payload: u32 },
+    DynamicPayload { type_slot: u32 },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RootFact {
+    pub shape: RootShape,
+    pub initialized: bool,
+    pub live: bool,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RootState {
     pub map: RootMapId,
