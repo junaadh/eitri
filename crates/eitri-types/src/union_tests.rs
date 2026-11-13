@@ -682,3 +682,89 @@ fn thousand_case_metadata_and_tag_bound() {
         );
     }
 }
+
+#[test]
+fn named_enum_layouts_trace_and_initialize_active_cases() {
+    use crate::{DeclError, DeclKey, Declarations, FieldType};
+    let key = |name: &str| DeclKey {
+        module: "m".into(),
+        name: name.into(),
+    };
+    let mut types = TypeStore::default();
+    let integer = types.intern(TypeDesc::Scalar(ScalarKind::I64)).unwrap();
+    let mut decls = Declarations::default();
+    let list = decls.declare(key("List")).unwrap();
+    let node = decls.declare(key("Node")).unwrap();
+    let wrapper = decls.declare(key("Wrapper")).unwrap();
+    decls
+        .define_enum(
+            list,
+            vec![
+                ("Nil".into(), None),
+                ("Cons".into(), Some(FieldType::Named(node))),
+                ("Number".into(), Some(FieldType::Type(integer))),
+                ("Link".into(), Some(FieldType::Reference(node))),
+            ],
+        )
+        .unwrap();
+    decls
+        .define(
+            node,
+            vec![
+                ("next".into(), FieldType::Reference(list)),
+                ("value".into(), FieldType::Type(integer)),
+            ],
+        )
+        .unwrap();
+    decls
+        .define(
+            wrapper,
+            vec![
+                ("list".into(), FieldType::Named(list)),
+                ("other".into(), FieldType::Type(integer)),
+            ],
+        )
+        .unwrap();
+    for domain in [StorageDomain::Frame, StorageDomain::Heap] {
+        let layouts = decls.layout(&types, list, domain).unwrap();
+        let union = layouts.get(layouts.root()).unwrap().union.as_ref().unwrap();
+        assert_eq!(
+            union.cases.iter().map(|c| c.init.tag).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        assert!(union.cases[0].payload.is_none());
+        assert!(union.references.bytes >= size_of::<*const ()>());
+        for case in &union.cases {
+            assert_eq!(case.init.null_references, union.references);
+        }
+        let nil = check(&layouts, &Value::Case(0, None));
+        assert!(
+            nil[union.references.offset..union.references.offset + union.references.bytes]
+                .iter()
+                .all(|c| *c == Cell::Reference(None))
+        );
+        let cons = case(
+            1,
+            Value::Product(vec![Value::Reference(42), Value::Scalar(17)]),
+        );
+        let storage = check(&layouts, &cons);
+        assert_eq!(storage[union.references.offset], Cell::Reference(Some(42)));
+        check(&layouts, &case(3, Value::Reference(77)));
+        let scalar = check(&layouts, &case(2, Value::Scalar(9)));
+        assert!(
+            scalar[union.references.offset..union.references.offset + union.references.bytes]
+                .iter()
+                .all(|c| *c == Cell::Reference(None))
+        );
+        let wrapped = decls.layout(&types, wrapper, domain).unwrap();
+        check(&wrapped, &Value::Product(vec![cons, Value::Scalar(19)]));
+        check(
+            &wrapped,
+            &Value::Product(vec![Value::Case(0, None), Value::Scalar(19)]),
+        );
+    }
+    assert!(matches!(
+        decls.layout(&types, list, StorageDomain::ExternC),
+        Err(DeclError::Layout(LayoutError::Unsupported))
+    ));
+}

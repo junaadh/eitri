@@ -370,12 +370,16 @@ pub(crate) fn named_layout(
 ) -> Result<LayoutStore, LayoutError> {
     let base = types.nodes.len();
     let refs_base = base.checked_add(decls.len()).ok_or(LayoutError::Overflow)?;
-    let mut products = Vec::with_capacity(decls.len());
+    use crate::declarations::Body;
+    enum NamedShape {
+        Product(Vec<usize>),
+        Union(Vec<Option<usize>>),
+    }
+    let mut shapes = Vec::with_capacity(decls.len());
     let mut refs = Vec::new();
     for n in 0..decls.len() {
-        let mut fields = Vec::new();
-        for (_, ty) in decls.fields(n) {
-            fields.push(match *ty {
+        let mut map_type = |ty: crate::FieldType| -> Result<usize, LayoutError> {
+            Ok(match ty {
                 crate::FieldType::Type(id) => {
                     if types.nodes.get(id.0 as usize).is_none() {
                         return Err(LayoutError::InvalidId);
@@ -395,9 +399,22 @@ pub(crate) fn named_layout(
                     );
                     index
                 }
-            });
-        }
-        products.push(fields);
+            })
+        };
+        shapes.push(match decls.body(n) {
+            Body::Product(fields) => NamedShape::Product(
+                fields
+                    .iter()
+                    .map(|(_, ty)| map_type(*ty))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Body::Enum(cases) => NamedShape::Union(
+                cases
+                    .iter()
+                    .map(|(_, ty)| ty.map(&mut map_type).transpose())
+                    .collect::<Result<_, _>>()?,
+            ),
+        });
     }
     let count = refs_base
         .checked_add(refs.len())
@@ -422,7 +439,10 @@ pub(crate) fn named_layout(
                 });
             }
             if id < refs_base {
-                Ok(Shape::Product(&products[id - base]))
+                Ok(match &shapes[id - base] {
+                    NamedShape::Product(fields) => Shape::Product(fields),
+                    NamedShape::Union(cases) => Shape::Union(cases),
+                })
             } else {
                 Ok(Shape::ManagedReference(refs[id - refs_base]))
             }

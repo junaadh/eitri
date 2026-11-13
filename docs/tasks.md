@@ -711,7 +711,7 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   inline-cycle validation, plus synthetic named-product layout, are implemented.
   Cross-store shape equality uses iterative coinductive pair comparison (9b2);
   portable recursive signatures use bounded, iterative path back-references (9b3);
-  Named enum graph, identity and signatures landed (9c1); enum layout, language and registration remain later work.
+  Named enum graph and split-union layouts landed (9c1–9c2); language and registration remain later work.
 
 ### T015 — Implement allocation and non-moving collection
 

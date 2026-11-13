@@ -25,7 +25,6 @@ pub enum DeclError {
     DuplicateField(String),
     DuplicateCase(String),
     EmptyEnum,
-    Unsupported,
     Undefined(DeclId),
     InlineCycle { keys: Vec<DeclKey> },
     Layout(crate::LayoutError),
@@ -36,7 +35,7 @@ struct Declaration {
     key: DeclKey,
     body: Option<Body>,
 }
-enum Body {
+pub(crate) enum Body {
     Product(Vec<(String, FieldType)>),
     Enum(Vec<(String, Option<FieldType>)>),
 }
@@ -200,28 +199,6 @@ impl Declarations {
                 }
             }
         }
-        // References are reachable too, even though their layouts are not inlined.
-        let mut seen = vec![false; self.declarations.len()];
-        let mut stack = vec![root];
-        while let Some(id) = stack.pop() {
-            if std::mem::replace(&mut seen[id.0 as usize], true) {
-                continue;
-            }
-            let body = self.declarations[id.0 as usize]
-                .body
-                .as_ref()
-                .expect("checked");
-            if matches!(body, Body::Enum(_)) {
-                return Err(DeclError::Unsupported);
-            }
-            for index in 0..body.len() {
-                if let Some(FieldType::Named(child) | FieldType::Reference(child)) =
-                    body.entry(index).expect("in bounds").1
-                {
-                    stack.push(child);
-                }
-            }
-        }
         crate::layout::named_layout(types, self, root, domain).map_err(DeclError::Layout)
     }
     /// Snapshot a signature with named declarations using the same anonymous type
@@ -372,13 +349,8 @@ impl Declarations {
     pub(crate) fn len(&self) -> usize {
         self.declarations.len()
     }
-    pub(crate) fn fields(&self, id: usize) -> &[(String, FieldType)] {
-        match self.declarations[id].body.as_ref().expect("checked") {
-            Body::Product(fields) => fields,
-            // The layout builder enumerates all declarations; reachable enums were
-            // rejected above, so this placeholder cannot enter the result.
-            Body::Enum(_) => &[],
-        }
+    pub(crate) fn body(&self, id: usize) -> &Body {
+        self.declarations[id].body.as_ref().expect("checked")
     }
 }
 
@@ -767,7 +739,7 @@ mod tests {
         );
     }
     #[test]
-    fn enum_recursive_identity_and_layout_rejection() {
+    fn enum_recursive_identity_and_layout() {
         let types = TypeStore::default();
         let mut a = Declarations::default();
         let list_a = a.declare(key("List")).unwrap();
@@ -803,14 +775,8 @@ mod tests {
         );
         let sig = |d: &Declarations, id| d.signature(&types, &[], FieldType::Named(id)).unwrap();
         assert_eq!(sig(&a, list_a), sig(&b, list_b));
-        assert!(matches!(
-            a.layout(&types, list_a, StorageDomain::Frame),
-            Err(DeclError::Unsupported)
-        ));
-        assert!(matches!(
-            a.layout(&types, node_a, StorageDomain::Frame),
-            Err(DeclError::Unsupported)
-        ));
+        assert!(a.layout(&types, list_a, StorageDomain::Frame).is_ok());
+        assert!(a.layout(&types, node_a, StorageDomain::Frame).is_ok());
         let independent = a.declare(key("Independent")).unwrap();
         a.define(independent, vec![]).unwrap();
         assert!(a.layout(&types, independent, StorageDomain::Frame).is_ok());
