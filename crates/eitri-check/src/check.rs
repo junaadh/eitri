@@ -44,6 +44,7 @@ pub enum Res {
     #[default]
     None,
     Binding(BindingId),
+    SelfField(BindingId, u32),
     Function(FnId),
     Method(FnId),
     MutMethod(FnId, BindingId),
@@ -1749,7 +1750,28 @@ impl<'i> Checker<'_, 'i> {
         to
     }
 
+    fn receiver_field(&self, token: TokenId) -> Option<(BindingId, u32, Ty)> {
+        if matches!(self.lookup(self.symbol(token)), Some(Name::Binding(binding)) if self.out.bindings[binding].owner.is_some())
+        {
+            return None;
+        }
+        let binding = self.current?.self_binding?;
+        let Ty::Struct(id) = self.out.bindings[binding].ty else {
+            return None;
+        };
+        let fields = self.input.ast.params(self.input.ast.structs[id].fields);
+        let index = fields
+            .iter()
+            .position(|field| self.symbol(field.name) == self.symbol(token))?;
+        let ty = *self.out.param_types[self.out.struct_fields[id]].get(index)?;
+        Some((binding, index as u32, ty))
+    }
+
     fn name(&mut self, expr: ExprId, token: TokenId) -> Ty {
+        if let Some((binding, index, ty)) = self.receiver_field(token) {
+            self.out.resolutions[expr] = Res::SelfField(binding, index);
+            return ty;
+        }
         match self.resolve(token) {
             Some(Name::Binding(b)) => {
                 self.out.resolutions[expr] = Res::Binding(b);
@@ -2104,7 +2126,9 @@ impl<'i> Checker<'_, 'i> {
                 Some(Name::Binding(binding)) => {
                     matches!(self.out.bindings[binding].ty, Ty::Struct(_))
                 }
-                _ => false,
+                _ => self
+                    .receiver_field(token)
+                    .is_some_and(|(_, _, ty)| matches!(ty, Ty::Struct(_))),
             },
             _ => true,
         };
@@ -2558,6 +2582,9 @@ impl<'i> Checker<'_, 'i> {
             && let Some(Some(Name::Binding(binding))) = self.heads.get(self.symbol(token).index())
         {
             return Some(self.out.bindings[*binding].ty);
+        }
+        if let Expr::Name(token) = self.ast().exprs[expr] {
+            return self.receiver_field(token).map(|(_, _, ty)| ty);
         }
         None
     }

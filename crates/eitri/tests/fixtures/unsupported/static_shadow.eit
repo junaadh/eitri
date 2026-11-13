@@ -1,0 +1,5 @@
+struct Item {}
+extend Item {
+    static fn make() -> i64 { return 1 }
+    static fn bad(make: i64) -> i64 { return make() }
+}

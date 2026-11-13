@@ -690,6 +690,12 @@ impl Eval<'_> {
             Expr::Bool(value) => Ok(Value::Bool(value)),
             Expr::SelfValue(_) | Expr::Name(_) => match self.checked.resolutions[e] {
                 Res::Binding(binding) => Ok(self.read(binding)),
+                Res::SelfField(binding, field) => {
+                    let Value::Struct(_, index) = self.read(binding) else {
+                        unreachable!()
+                    };
+                    Ok(self.structs[index as usize][field as usize])
+                }
                 other => unreachable!("a name used as a value resolves to a binding: {other:?}"),
             },
             Expr::Unary { op, operand } => {

@@ -1498,10 +1498,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             Expr::SelfValue(_) | Expr::Name(_) => {
-                let Res::Binding(binding) = checked.resolutions[e] else {
-                    unreachable!("checked value names are bindings");
+                let slot = match checked.resolutions[e] {
+                    Res::Binding(binding) => self.slots[binding],
+                    Res::SelfField(binding, index) => {
+                        let Ty::Struct(id) = checked.bindings[binding].ty else {
+                            unreachable!()
+                        };
+                        self.slots[binding] + self.field_offset(id, index)
+                    }
+                    _ => unreachable!("checked value names resolve to bindings or fields"),
                 };
-                let slot = self.slots[binding];
                 if matches!(checked.types[e], Ty::Struct(_) | Ty::Enum(_)) {
                     let width = self.width(checked.types[e]);
                     let target = match dst {

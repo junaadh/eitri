@@ -2044,3 +2044,15 @@ p50/p99 9,875/14,100 ns, execution 250/333 ns, total 10,100/14,400 ns.
 This scalar workload does not exercise static functions. Samples:
 `/private/tmp/eitri-t017-15-samples.csv`; report:
 `/private/tmp/eitri-t017-15-bench.txt`.
+
+### T017-16 bare static function calls
+
+Methods can call static functions on their own type by bare name; local
+bindings take precedence. The existing 256-method module limit bounds lookup.
+Both interpreters and lowerers cover managed return values under forced GC.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,958/11,800 ns, execution 250/334 ns, total 10,200/12,000 ns.
+This scalar workload does not exercise static functions. Samples:
+`/private/tmp/eitri-t017-16-samples.csv`; report:
+`/private/tmp/eitri-t017-16-bench.txt`.
