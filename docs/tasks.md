@@ -862,6 +862,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   preserving explicit initializer order and managed fields.
 - T017-26: enum payload patterns support reordered field labels and mixed
   positional and labeled bindings with duplicate and order checks.
+- T017-27: matches retain the evaluated subject across guards that mutate its
+  source, including managed payload roots under forced collection.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

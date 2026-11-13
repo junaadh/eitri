@@ -1,0 +1,17 @@
+//! host: test
+import test from "test"
+enum State { First(text: string), Second }
+struct Holder { state: State }
+extend Holder {
+    mutating fn change() -> bool { state = State.Second; return false }
+    mutating fn run() -> string {
+        return match state {
+            .First(text) if change() => "wrong",
+            .First(text) => text,
+            .Second => "changed",
+        }
+    }
+}
+var holder = Holder { state: State.First(text: "original") }
+test.check(holder.run() == "original")
+test.check(match holder.state { .First(_) => false, .Second => true })

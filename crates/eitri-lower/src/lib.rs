@@ -2584,10 +2584,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
         };
-        let subject = self.expr(node.subject, None)?;
         let Ty::Enum(enum_id) = self.checked.types[node.subject] else {
             unreachable!()
         };
+        // A guard may mutate the source lvalue. Match the value evaluated
+        // before any arm or guard runs, even on the optimized lowering path.
+        let subject = self.top;
+        self.top += self.width(Ty::Enum(enum_id));
+        self.expr(node.subject, Some(subject))?;
         let cases = &ast.enum_cases[ast.enums[enum_id].cases];
         let end = self.asm.label();
         let all_arms = &ast.match_arms[node.arms];

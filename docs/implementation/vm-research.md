@@ -2185,3 +2185,16 @@ p50/p99 9,042/10,900 ns, execution 250/292 ns, total 9,250/11,200 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 patterns. Samples: `/private/tmp/eitri-t017-26-samples.csv`; report:
 `/private/tmp/eitri-t017-26-bench.txt`.
+
+### T017-27 match subject snapshots
+
+Matches copy their enum subject into a temporary window before evaluating any
+guard. This preserves the original value when a guard mutates the source and
+keeps managed payloads rooted. The reproducer previously returned the changed
+case only on optimized lowering; forced-GC tests now agree across all modes.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,958/13,900 ns, execution 250/334 ns, total 10,200/14,100 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+matches. Samples: `/private/tmp/eitri-t017-27-samples.csv`; report:
+`/private/tmp/eitri-t017-27-bench.txt`.
