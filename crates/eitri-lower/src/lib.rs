@@ -685,39 +685,109 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     }
 
     fn flatten_type(&mut self, ty: Ty, output: &mut Vec<ValueType>) -> Lowered<()> {
+        self.flatten_with_nullable(ty, false, output)
+    }
+
+    fn flatten_with_nullable(
+        &mut self,
+        ty: Ty,
+        nullable: bool,
+        output: &mut Vec<ValueType>,
+    ) -> Lowered<()> {
         if !matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
-            output.push(value_type(ty));
+            output.push(if nullable && ty == Ty::String {
+                ValueType::NullableString
+            } else {
+                value_type(ty)
+            });
             return Ok(());
         }
-        // The graph is acyclic. Pending nodes are bounded by leaves plus the
-        // declaration depth; the vector is charged to compiler memory.
-        let capacity = self.width(ty) as usize + self.input.ast.structs.len();
+        let capacity =
+            self.width(ty) as usize + self.input.ast.structs.len() + self.input.ast.enums.len();
         let mut pending = self.asm.temporary_vec(capacity)?;
-        pending.push(ty);
-        while let Some(next) = pending.pop() {
-            if let Ty::Struct(id) = next {
-                pending.extend(
+        pending.push((ty, nullable));
+        while let Some((next, nullable)) = pending.pop() {
+            match next {
+                Ty::Struct(id) => pending.extend(
                     self.checked.param_types[self.checked.struct_fields[id]]
                         .iter()
                         .rev()
-                        .copied(),
-                );
-            } else if let Ty::Enum(id) = next {
-                output.push(ValueType::I64);
-                let start = self.checked.enum_starts[id] as usize;
-                let count = self.input.ast.enum_cases[self.input.ast.enums[id].cases].len();
-                for &list in &self.checked.enum_case_types[start..start + count] {
-                    for &ty in &self.checked.param_types[list] {
-                        output.push(if ty == Ty::String {
-                            ValueType::NullableString
-                        } else {
-                            value_type(ty)
-                        });
+                        .map(|&ty| (ty, nullable)),
+                ),
+                Ty::Enum(id) => {
+                    output.push(ValueType::I64);
+                    let start = self.checked.enum_starts[id] as usize;
+                    let count = self.input.ast.enum_cases[self.input.ast.enums[id].cases].len();
+                    for &list in self.checked.enum_case_types[start..start + count]
+                        .iter()
+                        .rev()
+                    {
+                        pending.extend(
+                            self.checked.param_types[list]
+                                .iter()
+                                .rev()
+                                .map(|&ty| (ty, true)),
+                        );
                     }
                 }
-            } else {
-                output.push(value_type(next));
+                Ty::String if nullable => output.push(ValueType::NullableString),
+                _ => output.push(value_type(next)),
             }
+        }
+        Ok(())
+    }
+
+    fn enum_case_offset(&self, id: eitri_syntax::ast::EnumId, case: usize) -> u32 {
+        let start = self.checked.enum_starts[id] as usize;
+        1 + self.checked.enum_case_types[start..start + case]
+            .iter()
+            .map(|&list| {
+                self.checked.param_types[list]
+                    .iter()
+                    .map(|&ty| self.width(ty))
+                    .sum::<u32>()
+            })
+            .sum::<u32>()
+    }
+
+    fn enum_field_offset(&self, id: eitri_syntax::ast::EnumId, case: usize, field: usize) -> u32 {
+        let types = self.checked.enum_case_types[self.checked.enum_starts[id] as usize + case];
+        self.enum_case_offset(id, case)
+            + self.checked.param_types[types][..field]
+                .iter()
+                .map(|&ty| self.width(ty))
+                .sum::<u32>()
+    }
+
+    fn move_nullable(
+        &mut self,
+        ty: Ty,
+        source: u32,
+        dest: u32,
+        wrapping: bool,
+        span: Span,
+    ) -> Lowered<()> {
+        let mut types = self.asm.temporary_vec(self.width(ty) as usize)?;
+        self.flatten_type(ty, &mut types)?;
+        for (offset, value_ty) in types.into_iter().enumerate() {
+            let op = if value_ty == ValueType::String {
+                if wrapping {
+                    Op::NullableWrap
+                } else {
+                    Op::NullableUnwrap
+                }
+            } else {
+                Op::Mov
+            };
+            self.asm.emit(
+                op,
+                Operands::abc(
+                    (dest + offset as u32).into(),
+                    (source + offset as u32).into(),
+                    0,
+                ),
+                span,
+            )?;
         }
         Ok(())
     }
@@ -886,7 +956,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let slot = self.field_address(target, binding);
                 match op {
                     AssignOp::Set => {
-                        if matches!(checked.types[target], Ty::Struct(_)) {
+                        if matches!(checked.types[target], Ty::Struct(_) | Ty::Enum(_)) {
                             let source = self.expr(value, None)?;
                             if source != slot {
                                 let width = self.width(checked.types[target]);
@@ -1262,30 +1332,22 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             };
             let end = self.top;
             self.asm.load(slot, case as u64, ValueType::I64, span)?;
-            let start = checked.enum_starts[id] as usize;
             let cases = &ast.enum_cases[ast.enums[id].cases];
-            let mut offset = 1u32;
-            for case_index in 0..cases.len() {
-                let types = checked.enum_case_types[start + case_index];
-                for &ty in &checked.param_types[types] {
-                    if ty == Ty::String {
-                        self.asm.emit(
-                            Op::NullableNull,
-                            Operands::abc((slot + offset).into(), 0, 0),
-                            span,
-                        )?;
-                    } else {
-                        self.asm.load(slot + offset, 0, value_type(ty), span)?;
-                    }
-                    offset += 1;
+            let mut layout = self.asm.temporary_vec(width as usize)?;
+            self.flatten_type(Ty::Enum(id), &mut layout)?;
+            for (offset, &ty) in layout.iter().enumerate().skip(1) {
+                if ty == ValueType::NullableString {
+                    self.asm.emit(
+                        Op::NullableNull,
+                        Operands::abc((slot + offset as u32).into(), 0, 0),
+                        span,
+                    )?;
+                } else {
+                    self.asm.load(slot + offset as u32, 0, ty, span)?;
                 }
             }
             if let Expr::NamedCall { args, .. } = ast.exprs[e] {
                 let fields = ast.params(cases[case as usize].fields);
-                let base = 1
-                    + (0..case as usize)
-                        .map(|i| ast.params(cases[i].fields).len() as u32)
-                        .sum::<u32>();
                 for arg in &ast.field_inits[args] {
                     let index = fields
                         .iter()
@@ -1293,18 +1355,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             self.input.tokens.symbol(f.name) == self.input.tokens.symbol(arg.name)
                         })
                         .expect("checked payload");
-                    let ty =
-                        checked.param_types[checked.enum_case_types[start + case as usize]][index];
-                    if ty == Ty::String {
-                        let value = self.expr(arg.value, None)?;
-                        self.asm.emit(
-                            Op::NullableWrap,
-                            Operands::abc((slot + base + index as u32).into(), value.into(), 0),
-                            span,
-                        )?;
-                    } else {
-                        self.expr(arg.value, Some(slot + base + index as u32))?;
-                    }
+                    let types =
+                        checked.enum_case_types[checked.enum_starts[id] as usize + case as usize];
+                    let ty = checked.param_types[types][index];
+                    let value = self.expr(arg.value, None)?;
+                    self.move_nullable(
+                        ty,
+                        value,
+                        slot + self.enum_field_offset(id, case as usize, index),
+                        true,
+                        span,
+                    )?;
                     self.top = end;
                 }
             }
@@ -2342,24 +2403,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     self.asm.load(tag, index as u64, ValueType::I64, span)?;
                     self.asm.branch_if(Cond::Ne, subject, tag, next, span)?;
                 }
-                let base = 1
-                    + (0..index)
-                        .map(|i| ast.params(cases[i].fields).len() as u32)
-                        .sum::<u32>();
                 let types = self.checked.enum_case_types
                     [self.checked.enum_starts[enum_id] as usize + index];
                 for (offset, &token) in ast.match_bindings[arm.bindings].iter().enumerate() {
                     if let Some(binding) = self.checked.pattern_bindings[token] {
-                        let target = self.temp();
+                        let ty = self.checked.param_types[types][offset];
+                        let target = self.top;
+                        self.top += self.width(ty);
                         self.slots[binding] = target;
-                        let source = subject + base + offset as u32;
-                        let op = if self.checked.param_types[types][offset] == Ty::String {
-                            Op::NullableUnwrap
-                        } else {
-                            Op::Mov
-                        };
-                        self.asm
-                            .emit(op, Operands::abc(target.into(), source.into(), 0), span)?;
+                        let source = subject + self.enum_field_offset(enum_id, index, offset);
+                        self.move_nullable(ty, source, target, false, span)?;
                     }
                 }
             }

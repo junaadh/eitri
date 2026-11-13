@@ -10,8 +10,8 @@ using `extend`, explicit `self`, and `mutating` methods on mutable receivers
 also work, with up to 256 methods per module. Bare field names inside methods,
 static methods and defaults remain future work. Enums with scalar and string
 payloads, construction, and exhaustive case matching with positional bindings
-execute on both interpreters. Aggregate payloads and richer patterns remain
-future work. The rest of
+execute on both interpreters. Structs and enums can contain each other, with
+inline cycles rejected. Richer patterns remain future work. The rest of
 this chapter is the language contract for those features.
 
 ## Declaration identity across contexts

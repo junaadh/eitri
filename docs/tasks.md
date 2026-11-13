@@ -819,7 +819,9 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   method fixture with forced collection. Other method features remain open.
 - T017-5: enum construction and exhaustive case matching with scalar/string
   payload bindings run on both interpreters and survive forced collection.
-  Aggregate payloads, enum fields in structs, and richer patterns remain open.
+  Richer patterns remain open.
+- T017-6: nested struct and enum payloads run with inline-cycle checking and
+  forced collection, including values passed through calls and loop branches.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

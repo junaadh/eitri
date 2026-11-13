@@ -1920,3 +1920,18 @@ p50/p99 8,083/12,500 ns, execution 209/292 ns, total 8,292/12,700 ns,
 48 allocations (4,762 B) and 30,275 retained bytes. This scalar workload does
 not exercise enums. Samples: `/private/tmp/eitri-t017-5-samples.csv`; report:
 `/private/tmp/eitri-t017-5-bench.txt`.
+
+### T017-6 nested enum and struct values
+
+The iterative aggregate layout walk now traverses struct fields and all enum
+payload fields, rejects inline cycles and limits flattened values to 65,536
+slots. Construction and matching convert string leaves between ordinary and
+nullable root slots. Forced-GC tests cover nested active payloads, calls, loop
+branches and copies; cross-kind recursive cycles are rejected.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 11,500/18,500 ns, first execution 292/500 ns, total 11,800/19,000 ns,
+48 allocations (4,762 B) and 30,275 retained bytes. This scalar workload does
+not exercise aggregate layouts, and system noise was substantial. Samples:
+`/private/tmp/eitri-t017-6-samples.csv`; report:
+`/private/tmp/eitri-t017-6-bench.txt`.

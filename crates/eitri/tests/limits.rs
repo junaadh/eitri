@@ -204,3 +204,9 @@ fn method_count_limit_rejects_before_execution() {
     source += "}\n";
     assert!(run(&source).starts_with("error[E0002]"));
 }
+
+#[test]
+fn enum_struct_inline_cycles_are_rejected() {
+    let source = "struct A { value: B }\nenum B { Next(value: A), End }\n";
+    assert!(run(source).starts_with("error[E0301]"));
+}

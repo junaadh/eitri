@@ -185,7 +185,7 @@ pub struct CheckScratch {
     struct_names: Vec<Option<eitri_syntax::ast::StructId>>,
     enum_names: Vec<Option<eitri_syntax::ast::EnumId>>,
     struct_states: Vec<u8>,
-    struct_stack: Vec<(eitri_syntax::ast::StructId, usize, u32)>,
+    struct_stack: Vec<(Ty, usize, usize, u32)>,
     methods: Vec<FnId>,
     /// Hidden heads to restore when scopes close.
     undo: Vec<(Symbol, Option<Name>)>,
@@ -234,7 +234,7 @@ impl CheckScratch {
             + self.struct_names.capacity() * size_of::<Option<eitri_syntax::ast::StructId>>()
             + self.enum_names.capacity() * size_of::<Option<eitri_syntax::ast::EnumId>>()
             + self.struct_states.capacity() * size_of::<u8>()
-            + self.struct_stack.capacity() * size_of::<(eitri_syntax::ast::StructId, usize, u32)>()
+            + self.struct_stack.capacity() * size_of::<(Ty, usize, usize, u32)>()
             + self.methods.capacity() * size_of::<FnId>()
             + self.undo.capacity() * size_of::<(Symbol, Option<Name>)>()
             + self.spine.capacity() * size_of::<ExprId>()
@@ -402,7 +402,7 @@ struct Checker<'a, 'i> {
     struct_names: &'a mut Vec<Option<eitri_syntax::ast::StructId>>,
     enum_names: &'a mut Vec<Option<eitri_syntax::ast::EnumId>>,
     struct_states: &'a mut Vec<u8>,
-    struct_stack: &'a mut Vec<(eitri_syntax::ast::StructId, usize, u32)>,
+    struct_stack: &'a mut Vec<(Ty, usize, usize, u32)>,
     methods: &'a mut Vec<FnId>,
     undo: &'a mut Vec<(Symbol, Option<Name>)>,
     spine: &'a mut Vec<ExprId>,
@@ -723,13 +723,6 @@ impl<'i> Checker<'_, 'i> {
                 let mut types = [Ty::Error; 256];
                 for (index, field) in fields.iter().enumerate() {
                     let ty = self.ty(field.ty, false);
-                    if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
-                        self.report(
-                            Code::Unsupported,
-                            "not supported yet: aggregate enum payload",
-                            self.token_span(field.name),
-                        );
-                    }
                     if fields
                         .iter()
                         .filter(|other| self.symbol(other.name) == self.symbol(field.name))
@@ -781,13 +774,6 @@ impl<'i> Checker<'_, 'i> {
             }
             for field in ast.params(decl.fields) {
                 let ty = self.ty(field.ty, false);
-                if matches!(ty, Ty::Enum(_)) {
-                    self.report(
-                        Code::Unsupported,
-                        "not supported yet: enum struct fields",
-                        self.token_span(field.name),
-                    );
-                }
                 if ast
                     .params(decl.fields)
                     .iter()
@@ -937,54 +923,104 @@ impl<'i> Checker<'_, 'i> {
         }
     }
 
-    /// Iterative DFS is O(declarations + fields), with O(declarations) scratch.
-    /// Flattened values are bounded by the 65,536-slot bytecode frame.
+    /// Iterative DFS traverses each field once, O(declarations + fields)
+    /// time and O(declarations) scratch; no source depth consumes Rust stack.
     fn struct_layouts(&mut self) {
-        let count = self.input.ast.structs.len();
-        self.struct_states.resize(count, 0);
-        self.out.struct_widths.resize(count, 1);
-        for root in self.input.ast.structs.indices().iter() {
-            if self.struct_states[root.index()] != 0 {
+        let structs = self.input.ast.structs.len();
+        let enums = self.input.ast.enums.len();
+        self.struct_states.resize(structs + enums, 0);
+        self.out.struct_widths.resize(structs, 1);
+        for root in 0..structs + enums {
+            if self.struct_states[root] != 0 {
                 continue;
             }
-            self.struct_states[root.index()] = 1;
-            self.struct_stack.push((root, 0, 0));
-            while let Some(&(id, next, width)) = self.struct_stack.last() {
-                let list = self.out.struct_fields[id];
+            let ty = if root < structs {
+                Ty::Struct(eitri_syntax::ast::StructId::new(root))
+            } else {
+                Ty::Enum(eitri_syntax::ast::EnumId::new(root - structs))
+            };
+            self.struct_states[root] = 1;
+            self.struct_stack
+                .push((ty, 0, 0, u32::from(matches!(ty, Ty::Enum(_)))));
+            while let Some(&(node, case, field, width)) = self.struct_stack.last() {
+                let (index, name, list) = match node {
+                    Ty::Struct(id) => (
+                        id.index(),
+                        self.input.ast.structs[id].name,
+                        Some(self.out.struct_fields[id]),
+                    ),
+                    Ty::Enum(id) => {
+                        let cases = &self.input.ast.enum_cases[self.input.ast.enums[id].cases];
+                        (
+                            structs + id.index(),
+                            self.input.ast.enums[id].name,
+                            (case < cases.len()).then(|| {
+                                self.out.enum_case_types[self.out.enum_starts[id] as usize + case]
+                            }),
+                        )
+                    }
+                    _ => unreachable!(),
+                };
+                let Some(list) = list else {
+                    if let Ty::Enum(id) = node {
+                        self.out.enum_widths[id] = width;
+                    }
+                    self.struct_states[index] = 2;
+                    self.struct_stack.pop();
+                    continue;
+                };
                 let fields = &self.out.param_types[list];
-                if next == fields.len() {
-                    self.out.struct_widths[id] = width.max(1);
-                    self.struct_states[id.index()] = 2;
+                if field == fields.len() {
+                    if matches!(node, Ty::Enum(_)) {
+                        *self.struct_stack.last_mut().unwrap() = (node, case + 1, 0, width);
+                        continue;
+                    }
+                    if let Ty::Struct(id) = node {
+                        self.out.struct_widths[id] = width.max(1);
+                    }
+                    self.struct_states[index] = 2;
                     self.struct_stack.pop();
                     continue;
                 }
-                let field = fields[next];
-                let field_width = match field {
-                    Ty::Struct(child) if self.struct_states[child.index()] == 0 => {
-                        self.struct_states[child.index()] = 1;
-                        self.struct_stack.push((child, 0, 0));
-                        continue;
+                let child = fields[field];
+                let child_index = match child {
+                    Ty::Struct(id) => Some(id.index()),
+                    Ty::Enum(id) => Some(structs + id.index()),
+                    _ => None,
+                };
+                if let Some(child_index) = child_index
+                    && self.struct_states[child_index] == 0
+                {
+                    self.struct_states[child_index] = 1;
+                    self.struct_stack
+                        .push((child, 0, 0, u32::from(matches!(child, Ty::Enum(_)))));
+                    continue;
+                }
+                let field_width = if let Some(child_index) = child_index
+                    && self.struct_states[child_index] == 1
+                {
+                    self.report(
+                        Code::TypeMismatch,
+                        "recursive inline struct type",
+                        self.token_span(name),
+                    );
+                    1
+                } else {
+                    match child {
+                        Ty::Struct(id) => self.out.struct_widths[id],
+                        Ty::Enum(id) => self.out.enum_widths[id],
+                        _ => 1,
                     }
-                    Ty::Struct(child) if self.struct_states[child.index()] == 1 => {
-                        self.report(
-                            Code::TypeMismatch,
-                            "recursive inline struct type",
-                            self.token_span(self.input.ast.structs[id].name),
-                        );
-                        1
-                    }
-                    Ty::Struct(child) => self.out.struct_widths[child],
-                    _ => 1,
                 };
                 let total = width.saturating_add(field_width);
                 if total > 65_536 {
                     self.report(
                         Code::Limit,
-                        "implementation limit: struct exceeds 65536 slots",
-                        self.token_span(self.input.ast.structs[id].name),
+                        "implementation limit: aggregate exceeds 65536 slots",
+                        self.token_span(name),
                     );
                 }
-                *self.struct_stack.last_mut().unwrap() = (id, next + 1, total.min(65_537));
+                *self.struct_stack.last_mut().unwrap() = (node, case, field + 1, total.min(65_537));
             }
         }
     }

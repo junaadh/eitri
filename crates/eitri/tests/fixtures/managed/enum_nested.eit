@@ -1,0 +1,25 @@
+//! host: test
+import test from "test"
+struct Leaf { value: i64, text: string }
+enum Inner { Empty, Data(item: Leaf) }
+struct Boxed { contents: Inner, marker: i64 }
+enum Outer { Nothing, Wrapped(box: Boxed) }
+let leaf = Leaf { value: 7, text: "seven" }
+let wrapped = Outer.Wrapped(box: Boxed { contents: Inner.Data(item: leaf), marker: 3 })
+let result = match wrapped {
+    .Nothing => 0,
+    .Wrapped(box) => match box.contents {
+        .Empty => 0,
+        .Data(item) => item.value + box.marker,
+    },
+}
+test.emit(result)
+let text = match wrapped { .Nothing => "none", .Wrapped(box) => match box.contents { .Empty => "empty", .Data(item) => item.text } }
+test.check(text == "seven")
+fn identity(value: Outer) -> Outer { return value }
+var saved = identity(wrapped)
+for i in 0..3 {
+    if i == 1 { saved = Outer.Nothing }
+    if i == 2 { saved = identity(wrapped) }
+}
+test.emit(match saved { .Nothing => 0, .Wrapped(box) => box.marker })
