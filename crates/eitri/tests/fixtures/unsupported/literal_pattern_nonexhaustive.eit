@@ -1,0 +1,2 @@
+enum Value { One(n: i64) }
+let n = match Value.One(n: 1) { .One(1) => 1 }

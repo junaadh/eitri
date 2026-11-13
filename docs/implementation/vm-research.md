@@ -2198,3 +2198,16 @@ p50/p99 9,958/13,900 ns, execution 250/334 ns, total 10,200/14,100 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 matches. Samples: `/private/tmp/eitri-t017-27-samples.csv`; report:
 `/private/tmp/eitri-t017-27-bench.txt`.
+
+### T017-28 literal payload patterns
+
+Enum payload patterns compare scalar and string literals, with IEEE float
+equality. Such partial patterns do not alone cover a case. Managed string
+comparisons, labels, fallback and float boundaries are checked under forced GC
+on both interpreters and lowerers.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 10,100/11,700 ns, execution 250/333 ns, total 10,400/11,900 ns;
+retained context memory was 30,683 B, unchanged for this non-matching scalar
+workload. Samples: `/private/tmp/eitri-t017-28-samples.csv`; report:
+`/private/tmp/eitri-t017-28-bench.txt`.

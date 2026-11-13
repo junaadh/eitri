@@ -581,13 +581,27 @@ impl Parser<'_> {
                         } else {
                             None
                         };
-                        let name = if self.at(T::Wildcard) {
+                        let literal = if matches!(
+                            self.kind(),
+                            T::Int | T::Float | T::Str | T::Char | T::True | T::False | T::Minus
+                        ) {
+                            let name = self.token();
+                            Some((name, self.prefix(true)?))
+                        } else {
+                            None
+                        };
+                        let name = if let Some((name, _)) = literal {
+                            name
+                        } else if self.at(T::Wildcard) {
                             self.bump()
                         } else {
                             self.expect(T::Ident, "a binding")?
                         };
-                        self.match_bindings
-                            .push(crate::ast::MatchBinding { label, name });
+                        self.match_bindings.push(crate::ast::MatchBinding {
+                            label,
+                            name,
+                            literal: literal.map(|(_, expr)| expr),
+                        });
                         if self.eat(T::Comma).is_none() {
                             break;
                         }

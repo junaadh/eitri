@@ -864,6 +864,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   positional and labeled bindings with duplicate and order checks.
 - T017-27: matches retain the evaluated subject across guards that mutate its
   source, including managed payload roots under forced collection.
+- T017-28: enum payload patterns support scalar and string literals with
+  IEEE float matching and conservative exhaustiveness checks.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

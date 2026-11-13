@@ -1083,6 +1083,7 @@ impl Eval<'_> {
                         self.locals[binding.index()] = Some(Value::Enum(enum_id, case, payload));
                     }
                     let fields = ast.params(cases[case as usize].fields);
+                    let mut matched = true;
                     for (position, pattern) in ast.match_bindings[arm.bindings].iter().enumerate() {
                         let index = pattern.label.map_or(position, |label| {
                             fields
@@ -1092,10 +1093,23 @@ impl Eval<'_> {
                                 })
                                 .expect("checked field label")
                         });
-                        if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
+                        if let Some(literal) = pattern.literal {
+                            let expected = self.expr(host, literal)?;
+                            let actual = self.structs[payload as usize][index];
+                            if !self
+                                .binary_values(BinaryOp::Eq, actual, expected, ast.span(literal))?
+                                .bool()
+                            {
+                                matched = false;
+                                break;
+                            }
+                        } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
                             self.locals[binding.index()] =
                                 Some(self.structs[payload as usize][index]);
                         }
+                    }
+                    if !matched {
+                        continue;
                     }
                     if let Some(guard) = arm.guard
                         && !self.expr(host, guard)?.bool()

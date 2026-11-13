@@ -2595,9 +2595,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let cases = &ast.enum_cases[ast.enums[enum_id].cases];
         let end = self.asm.label();
         let all_arms = &ast.match_arms[node.arms];
-        // A final guarded arm is unreachable: preceding unguarded arms must
-        // already be exhaustive, as guards do not contribute to coverage.
-        let arms = if all_arms.last().is_some_and(|arm| arm.guard.is_some()) {
+        // A final partial arm is unreachable: preceding complete arms must
+        // already be exhaustive, as guards and literal patterns do not cover a case.
+        let arms = if all_arms.last().is_some_and(|arm| {
+            arm.guard.is_some()
+                || ast.match_bindings[arm.bindings]
+                    .iter()
+                    .any(|pattern| pattern.literal.is_some())
+        }) {
             &all_arms[..all_arms.len() - 1]
         } else {
             all_arms
@@ -2630,7 +2635,44 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             })
                             .expect("checked field label")
                     });
-                    if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
+                    if let Some(literal) = pattern.literal {
+                        let ty = self.checked.param_types[types][offset];
+                        let source = subject + self.enum_field_offset(enum_id, index, offset);
+                        let source = if ty == Ty::String {
+                            let slot = self.temp();
+                            self.move_nullable(ty, source, slot, false, span)?;
+                            slot
+                        } else {
+                            source
+                        };
+                        let value = self.expr(literal, None)?;
+                        if ty == Ty::String {
+                            let cmp = self.temp();
+                            let zero = self.temp();
+                            self.asm.load(zero, 0, ValueType::I64, span)?;
+                            self.asm.emit(
+                                Op::StrCompare,
+                                Operands::abc(cmp.into(), source.into(), value.into()),
+                                span,
+                            )?;
+                            self.asm.branch_if(Cond::Ne, cmp, zero, next, span)?;
+                        } else if ty.float() {
+                            let equal = self.temp();
+                            let op = if ty == Ty::F32 {
+                                Op::FcsetFeqF32
+                            } else {
+                                Op::FcsetFeqF64
+                            };
+                            self.asm.emit(
+                                op,
+                                Operands::abc(equal.into(), source.into(), value.into()),
+                                span,
+                            )?;
+                            self.asm.branch_test(Test::False, equal, next, span);
+                        } else {
+                            self.asm.branch_if(Cond::Ne, source, value, next, span)?;
+                        }
+                    } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
                         let ty = self.checked.param_types[types][offset];
                         let target = self.top;
                         self.top += self.width(ty);

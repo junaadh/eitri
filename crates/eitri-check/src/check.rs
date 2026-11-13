@@ -1912,7 +1912,11 @@ impl<'i> Checker<'_, 'i> {
                     .iter()
                     .position(|item| self.symbol(item.name) == self.symbol(case))
                 {
-                    if arm.guard.is_none() {
+                    if arm.guard.is_none()
+                        && self.ast().match_bindings[arm.bindings]
+                            .iter()
+                            .all(|pattern| pattern.literal.is_none())
+                    {
                         covered[index] = true;
                     }
                     let fields = self.ast().params(cases[index].fields);
@@ -1966,14 +1970,33 @@ impl<'i> Checker<'_, 'i> {
                                 self.token_span(pattern.label.unwrap_or(pattern.name)),
                             );
                         }
-                        if self.input.tokens.kind(pattern.name) == eitri_syntax::TokenKind::Wildcard
-                        {
-                            continue;
-                        }
                         let ty = self.out.param_types[types]
                             .get(index)
                             .copied()
                             .unwrap_or(Ty::Error);
+                        if let Some(literal) = pattern.literal {
+                            if !matches!(
+                                self.ast().exprs[literal],
+                                Expr::Int { .. }
+                                    | Expr::Float { .. }
+                                    | Expr::Bool(_)
+                                    | Expr::Char(_)
+                                    | Expr::String(_)
+                            ) {
+                                self.report(
+                                    Code::Unsupported,
+                                    "not supported yet: this literal pattern",
+                                    self.span(literal),
+                                );
+                            } else {
+                                self.value(literal, Some(ty));
+                            }
+                            continue;
+                        }
+                        if self.input.tokens.kind(pattern.name) == eitri_syntax::TokenKind::Wildcard
+                        {
+                            continue;
+                        }
                         let binding = self.new_binding(pattern.name, false, ty);
                         self.out.pattern_bindings[pattern.name] = Some(binding);
                     }

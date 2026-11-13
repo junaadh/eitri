@@ -232,6 +232,7 @@ pub enum MatchBody {
 pub struct MatchBinding {
     pub label: Option<TokenId>,
     pub name: TokenId,
+    pub literal: Option<ExprId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

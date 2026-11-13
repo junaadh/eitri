@@ -1,0 +1,19 @@
+//! host: test
+import test from "test"
+enum Message { Empty, Value(number: i64, word: string, enabled: bool) }
+fn classify(m: Message) -> i64 {
+    return match m {
+        .Empty => 0,
+        .Value(-1, "yes", true) => 1,
+        .Value(number: n, enabled: false, word: "no") => n,
+        .Value(_, _, _) => 3,
+    }
+}
+test.emit(classify(Message.Value(number: -1, word: "yes", enabled: true)))
+test.emit(classify(Message.Value(number: 7, word: "no", enabled: false)))
+test.emit(classify(Message.Value(number: 2, word: "no", enabled: true)))
+enum FloatBox { Value(value: f64) }
+let zero = FloatBox.Value(value: 0.0)
+let nan = FloatBox.Value(value: 0.0 / 0.0)
+test.check(match zero { .Value(-0.0) => true, .Value(_) => false })
+test.check(match nan { .Value(0.0) => false, .Value(_) => true })
