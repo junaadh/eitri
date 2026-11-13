@@ -1060,9 +1060,43 @@ impl Eval<'_> {
             })
     }
 
+    fn aggregate_equal(&self, a: Value, b: Value) -> bool {
+        let mut pending = vec![(a, b)];
+        while let Some((a, b)) = pending.pop() {
+            match (a, b) {
+                (Value::Struct(ta, ia), Value::Struct(tb, ib)) if ta == tb => {
+                    pending.extend(
+                        self.structs[ia as usize]
+                            .iter()
+                            .copied()
+                            .zip(self.structs[ib as usize].iter().copied()),
+                    );
+                }
+                (Value::Enum(ta, ca, ia), Value::Enum(tb, cb, ib)) if ta == tb && ca == cb => {
+                    pending.extend(
+                        self.structs[ia as usize]
+                            .iter()
+                            .copied()
+                            .zip(self.structs[ib as usize].iter().copied()),
+                    );
+                }
+                (Value::String(a), Value::String(b))
+                    if self.strings[a as usize] == self.strings[b as usize] => {}
+                (a, b) if a.ty().float() && a.ty() == b.ty() && a.float() == b.float() => {}
+                (a, b) if !a.ty().float() && a == b => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
     fn binary_values(&mut self, op: BinaryOp, a: Value, b: Value, span: Span) -> Flow<Value> {
         use BinaryOp::*;
         let ty = a.ty();
+        if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+            let equal = self.aggregate_equal(a, b);
+            return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
+        }
         if let (Value::String(left), Value::String(right)) = (a, b) {
             let lhs = &self.strings[left as usize];
             let rhs = &self.strings[right as usize];

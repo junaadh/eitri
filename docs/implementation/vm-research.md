@@ -1935,3 +1935,15 @@ p50/p99 11,500/18,500 ns, first execution 292/500 ns, total 11,800/19,000 ns,
 not exercise aggregate layouts, and system noise was substantial. Samples:
 `/private/tmp/eitri-t017-6-samples.csv`; report:
 `/private/tmp/eitri-t017-6-bench.txt`.
+
+### T017-7 aggregate equality
+
+Struct and enum equality compares flattened slots by value, including nullable
+string content and IEEE floating-point equality. The left operand is saved before
+the right is evaluated. Both interpreters exercise nested values under forced GC.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,375/10,400 ns, first execution 250/292 ns, total 8,584/10,700 ns,
+48 allocations (4,762 B) and 30,275 retained bytes. This scalar workload does
+not exercise aggregate equality. Samples: `/private/tmp/eitri-t017-7-samples.csv`;
+report: `/private/tmp/eitri-t017-7-bench.txt`.

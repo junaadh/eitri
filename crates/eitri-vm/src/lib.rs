@@ -1510,6 +1510,18 @@ fn execute(
                     };
                 }
                 match op {
+                    Op::NullableEq => {
+                        let left = m.references[base + b!()];
+                        let right = m.references[base + c!()];
+                        s[a!()] = u64::from(match (left, right) {
+                            (None, None) => true,
+                            (Some(a), Some(b)) => {
+                                m.heap.string(a).expect("live string root")
+                                    == m.heap.string(b).expect("live string root")
+                            }
+                            _ => false,
+                        });
+                    }
                     Op::NullableNull => {
                         if m.force_gc {
                             collect_at(

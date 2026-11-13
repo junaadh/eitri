@@ -1599,6 +1599,25 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 Ok(slot)
             }
             Expr::Binary {
+                op: BinaryOp::Eq | BinaryOp::NotEq,
+                lhs,
+                rhs,
+            } if matches!(checked.types[lhs], Ty::Struct(_) | Ty::Enum(_)) => self
+                .aggregate_equality(
+                    lhs,
+                    rhs,
+                    checked.types[lhs],
+                    matches!(
+                        ast.exprs[e],
+                        Expr::Binary {
+                            op: BinaryOp::NotEq,
+                            ..
+                        }
+                    ),
+                    dst,
+                    span,
+                ),
+            Expr::Binary {
                 op: BinaryOp::Coalesce,
                 ..
             } => self.coalesce(e, dst),
@@ -2358,6 +2377,72 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
         }
         Ok(result.first)
+    }
+
+    fn aggregate_equality(
+        &mut self,
+        left: ExprId,
+        right: ExprId,
+        ty: Ty,
+        negate: bool,
+        dst: Option<u32>,
+        span: Span,
+    ) -> Lowered<u32> {
+        let a = self.top;
+        self.top += self.width(ty);
+        self.expr(left, Some(a))?;
+        let b = self.expr(right, None)?;
+        let result = self.dst(dst);
+        let temp = self.temp();
+        let zero = self.temp();
+        self.asm.load(zero, 0, ValueType::I64, span)?;
+        let fail = self.asm.label();
+        let done = self.asm.label();
+        let mut types = self.asm.temporary_vec(self.width(ty) as usize)?;
+        self.flatten_type(ty, &mut types)?;
+        for (offset, ty) in types.into_iter().enumerate() {
+            let (left, right) = (a + offset as u32, b + offset as u32);
+            match ty {
+                ValueType::String => {
+                    self.asm.emit(
+                        Op::StrCompare,
+                        Operands::abc(temp.into(), left.into(), right.into()),
+                        span,
+                    )?;
+                    self.asm.branch_if(Cond::Ne, temp, zero, fail, span)?;
+                }
+                ValueType::NullableString => {
+                    self.asm.emit(
+                        Op::NullableEq,
+                        Operands::abc(temp.into(), left.into(), right.into()),
+                        span,
+                    )?;
+                    self.asm.branch_test(Test::False, temp, fail, span);
+                }
+                ValueType::F32 | ValueType::F64 => {
+                    let op = if ty == ValueType::F32 {
+                        Op::FcsetFeqF32
+                    } else {
+                        Op::FcsetFeqF64
+                    };
+                    self.asm.emit(
+                        op,
+                        Operands::abc(temp.into(), left.into(), right.into()),
+                        span,
+                    )?;
+                    self.asm.branch_test(Test::False, temp, fail, span);
+                }
+                _ => self.asm.branch_if(Cond::Ne, left, right, fail, span)?,
+            }
+        }
+        self.asm
+            .load(result, u64::from(!negate), ValueType::Bool, span)?;
+        self.asm.jump(done, span);
+        self.asm.bind(fail)?;
+        self.asm
+            .load(result, u64::from(negate), ValueType::Bool, span)?;
+        self.asm.bind(done)?;
+        Ok(result)
     }
 
     fn match_value(

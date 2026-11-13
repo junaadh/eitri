@@ -827,11 +827,18 @@ impl<'i> Checker<'_, 'i> {
             }
             if let Some(receiver) = decl.receiver {
                 let ty = self.ty(TypeExpr::Named(receiver), false);
-                if !matches!(ty, Ty::Struct(_) | Ty::Error) {
+                if !matches!(ty, Ty::Struct(_) | Ty::Enum(_) | Ty::Error) {
                     self.report(
                         Code::TypeMismatch,
-                        "extension requires a struct",
+                        "extension requires a struct or enum",
                         self.token_span(receiver),
+                    );
+                }
+                if matches!(ty, Ty::Enum(_)) && decl.mutating {
+                    self.report(
+                        Code::TypeMismatch,
+                        "enum methods cannot be mutating",
+                        self.token_span(decl.name),
                     );
                 }
                 params.push(ty);
@@ -2071,20 +2078,15 @@ impl<'i> Checker<'_, 'i> {
             && !matches!(ast.exprs[base], Expr::Name(token) if matches!(self.lookup(self.symbol(token)), Some(Name::Module(_))))
         {
             let receiver = self.value(base, None);
-            if let Ty::Struct(owner) = receiver {
+            if matches!(receiver, Ty::Struct(_) | Ty::Enum(_)) {
                 let method = self
                     .methods
                     .iter()
                     .copied()
                     .map(|id| (id, &ast.fns[id]))
-                    .find(|(_, method)| {
-                        method.receiver.is_some_and(|token| {
-                            self.struct_names
-                                .get(self.symbol(token).index())
-                                .copied()
-                                .flatten()
-                                == Some(owner)
-                        }) && self.symbol(method.name) == self.symbol(name)
+                    .find(|(id, method)| {
+                        method.receiver.is_some() && self.symbol(method.name) == self.symbol(name)
+                            && self.out.param_types[self.out.signatures[*id].params].first() == Some(&receiver)
                     })
                     .map(|(id, _)| id);
                 if let Some(method) = method {
@@ -2128,7 +2130,7 @@ impl<'i> Checker<'_, 'i> {
                 }
                 self.report(
                     Code::UnknownName,
-                    "unknown struct method",
+                    "unknown aggregate method",
                     self.token_span(name),
                 );
                 for &arg in ast.args(args) {
@@ -2516,7 +2518,7 @@ fn valid_operand(op: BinaryOp, ty: Ty) -> bool {
     match op {
         Coalesce => false,
         And | Or => ty == Ty::Bool,
-        Eq | NotEq => ty != Ty::Void && !matches!(ty, Ty::Struct(_) | Ty::Enum(_)),
+        Eq | NotEq => ty != Ty::Void,
         Lt | LtEq | Gt | GtEq => ty.numeric() || matches!(ty, Ty::Char | Ty::String),
         Add => ty.numeric() || ty == Ty::String,
         Sub | Mul | Div | Rem => ty.numeric(),

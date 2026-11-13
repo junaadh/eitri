@@ -4,6 +4,11 @@ struct Leaf { value: i64, text: string }
 enum Inner { Empty, Data(item: Leaf) }
 struct Boxed { contents: Inner, marker: i64 }
 enum Outer { Nothing, Wrapped(box: Boxed) }
+extend Outer {
+    fn marker() -> i64 {
+        return match self { .Nothing => 0, .Wrapped(box) => box.marker }
+    }
+}
 let leaf = Leaf { value: 7, text: "seven" }
 let wrapped = Outer.Wrapped(box: Boxed { contents: Inner.Data(item: leaf), marker: 3 })
 let result = match wrapped {
@@ -22,4 +27,14 @@ for i in 0..3 {
     if i == 1 { saved = Outer.Nothing }
     if i == 2 { saved = identity(wrapped) }
 }
-test.emit(match saved { .Nothing => 0, .Wrapped(box) => box.marker })
+test.emit(saved.marker())
+test.check(saved == wrapped)
+test.check(Outer.Nothing != wrapped)
+test.check(leaf == Leaf { value: 7, text: "seven" })
+test.check(leaf != Leaf { value: 8, text: "seven" })
+struct FloatBox { value: f64 }
+let zero = FloatBox { value: 0.0 }
+let negative_zero = FloatBox { value: -0.0 }
+let nan = FloatBox { value: 0.0 / 0.0 }
+test.check(zero == negative_zero)
+test.check(nan != nan)

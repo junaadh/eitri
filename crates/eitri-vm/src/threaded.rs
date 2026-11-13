@@ -341,6 +341,18 @@ fn managed_op(
 ) -> Result<Option<u64>, FaultKind> {
     let end = st.base + st.function.frame_size as usize;
     match op {
+        Op::NullableEq => {
+            let left = st.m.references[st.base + b];
+            let right = st.m.references[st.base + c];
+            Ok(Some(u64::from(match (left, right) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    st.m.heap.string(a).expect("live string root")
+                        == st.m.heap.string(b).expect("live string root")
+                }
+                _ => false,
+            })))
+        }
         Op::NullableNull => {
             if st.m.force_gc {
                 trace(st, pc)?;
@@ -705,6 +717,7 @@ managed_handler!(str_len, Op::StrLen);
 managed_handler!(str_concat, Op::StrConcat);
 managed_handler!(str_compare, Op::StrCompare);
 managed_handler!(str_join, Op::StrJoin);
+managed_handler!(nullable_eq, Op::NullableEq);
 managed_handler!(nullable_null, Op::NullableNull);
 managed_handler!(nullable_wrap, Op::NullableWrap);
 managed_handler!(nullable_unwrap, Op::NullableUnwrap);
@@ -855,6 +868,7 @@ extern "rust-preserve-none" fn wide(
                 | Op::StrConcat
                 | Op::StrCompare
                 | Op::StrJoin
+                | Op::NullableEq
                 | Op::NullableNull
                 | Op::NullableWrap
                 | Op::NullableUnwrap
@@ -1282,6 +1296,7 @@ static TABLE: [Handler; 256] = {
     table[Op::StrConcat as usize] = str_concat;
     table[Op::StrCompare as usize] = str_compare;
     table[Op::StrJoin as usize] = str_join;
+    table[Op::NullableEq as usize] = nullable_eq;
     table[Op::NullableNull as usize] = nullable_null;
     table[Op::NullableWrap as usize] = nullable_wrap;
     table[Op::NullableUnwrap as usize] = nullable_unwrap;

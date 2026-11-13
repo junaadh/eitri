@@ -190,7 +190,7 @@ pub fn verify_budgeted(
     let managed = insns.iter().any(|insn| {
         matches!(
             insn.decoded.op,
-            Op::NullableNull | Op::NullableWrap | Op::NullableUnwrap
+            Op::NullableNull | Op::NullableWrap | Op::NullableUnwrap | Op::NullableEq
         )
     }) || !function.strings.is_empty()
         || function
@@ -1186,6 +1186,11 @@ fn transfer(
     let [a, b, c] = columns(d);
     let write = |state: &mut [Slot], slot: i64, ty| state[slot as usize] = Slot::Ty(ty);
     match d.op.info().sem {
+        Sem::NullableEq => {
+            read(state, pc, b, Some(ValueType::NullableString))?;
+            read(state, pc, c, Some(ValueType::NullableString))?;
+            write(state, a, Bool);
+        }
         Sem::NullableNull => write(state, a, ValueType::NullableString),
         Sem::NullableWrap => {
             read(state, pc, b, Some(ValueType::String))?;

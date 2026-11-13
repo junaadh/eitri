@@ -372,6 +372,7 @@ pub enum Sem {
     NullableNull,
     NullableWrap,
     NullableUnwrap,
+    NullableEq,
     StringNextChar,
     StringNextLine,
     StringReplace,
@@ -692,6 +693,7 @@ ops! {
     StrConcat = "STR.CONCAT", "STR", Abc, [Dst, Src, Src], Sem::StringConcat, FAULT, true, Managed;
     StrCompare = "STR.COMPARE", "STR", Abc, [Dst, Src, Src], Sem::StringCompare, NONE, true, None;
     StrJoin = "STR.JOIN", "STR", Abc, [Dst, Src, Src], Sem::StringJoin, FAULT, true, Managed;
+    NullableEq = "NULLABLE.EQ", "STR", Abc, [Dst, Src, Src], Sem::NullableEq, NONE, true, None;
     NullableNull = "NULLABLE.NULL", "STR", Abc, [Dst, None, None], Sem::NullableNull, FAULT, true, Managed;
     NullableWrap = "NULLABLE.WRAP", "STR", Abc, [Dst, Src, None], Sem::NullableWrap, NONE, true, None;
     NullableUnwrap = "NULLABLE.UNWRAP", "STR", Abc, [Dst, Src, None], Sem::NullableUnwrap, FAULT, true, None;
