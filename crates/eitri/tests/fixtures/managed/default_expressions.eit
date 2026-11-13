@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+struct Item { number: i64 = test.id(1) + test.id(2), text: string = test.decorate("a") }
+let a = Item {}
+let b = Item { number: 8, text: "override" }
+let c = Item {}
+test.check(a.number == 3 && b.number == 8 && c.number == 3 && a.text == "[a]" && c.text == "[a]")

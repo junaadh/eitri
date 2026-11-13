@@ -1,0 +1,8 @@
+effect: test.id(1)
+effect: test.id(2)
+effect: test.decorate([a])
+effect: test.id(1)
+effect: test.id(2)
+effect: test.decorate([a])
+effect: test.check(true)
+ok

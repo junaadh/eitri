@@ -918,15 +918,7 @@ impl<'i> Checker<'_, 'i> {
         for (id, decl) in ast.structs.iter_enumerated() {
             for (index, field) in ast.params(decl.fields).iter().enumerate() {
                 if let Some(default) = field.default {
-                    if matches!(
-                        ast.exprs[default],
-                        Expr::Int { .. }
-                            | Expr::Float { .. }
-                            | Expr::Char(_)
-                            | Expr::String(_)
-                            | Expr::Bool(_)
-                    ) || matches!(ast.exprs[default], Expr::Call { callee, args } if ast.args(args).is_empty() && matches!(ast.exprs[callee], Expr::Name(_) | Expr::Member { .. }))
-                    {
+                    if self.default_expression_supported(default) {
                         if let Some(&ty) =
                             self.out.param_types[self.out.struct_fields[id]].get(index)
                         {
@@ -949,6 +941,40 @@ impl<'i> Checker<'_, 'i> {
                 Item::Stmt(stmt) => self.stmt(stmt),
             }
         }
+    }
+
+    /// Visit each default-expression node once using reusable compiler scratch.
+    /// Struct literals and names are excluded until default cycles and lexical
+    /// captures are implemented; calls resolve only through module names.
+    fn default_expression_supported(&mut self, root: ExprId) -> bool {
+        let ast = self.input.ast;
+        self.spine.clear();
+        self.spine.push(root);
+        while let Some(expr) = self.spine.pop() {
+            match ast.exprs[expr] {
+                Expr::Int { .. }
+                | Expr::Float { .. }
+                | Expr::Char(_)
+                | Expr::String(_)
+                | Expr::Bool(_) => {}
+                Expr::Unary { operand, .. } => self.spine.push(operand),
+                Expr::Binary { lhs, rhs, .. } => {
+                    self.spine.push(lhs);
+                    self.spine.push(rhs);
+                }
+                Expr::Call { callee, args }
+                    if matches!(ast.exprs[callee], Expr::Name(_) | Expr::Member { .. }) =>
+                {
+                    self.spine.extend_from_slice(ast.args(args))
+                }
+                Expr::Convert { value, .. } => self.spine.push(value),
+                _ => {
+                    self.spine.clear();
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     /// Iterative DFS traverses each field once, O(declarations + fields)

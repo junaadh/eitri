@@ -8,7 +8,7 @@ Recursive inline layouts are rejected. Structs can pass and return through
 script calls; host-initiated calls reject aggregate signatures for now. Methods
 using `extend` and explicit `self` work for structs and enums; `mutating`
 struct methods require mutable receivers. Up to 256 methods per module are supported. Bare field names inside methods,
-static methods and other default expressions remain future work. Literal defaults and calls without arguments are supported. Enums with scalar and string
+static methods and other default expressions remain future work. Literal, arithmetic and call defaults are supported; defaults that capture names or construct aggregates are still unsupported. Enums with scalar and string
 payloads, construction, and exhaustive case matching with positional bindings
 execute on both interpreters. Structs and enums can contain each other, with
 inline cycles rejected. Richer patterns remain future work. The rest of

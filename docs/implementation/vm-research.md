@@ -2019,3 +2019,16 @@ p50/p99 8,250/10,200 ns, execution 208/292 ns, total 8,458/10,500 ns.
 This scalar workload does not exercise field defaults. Samples:
 `/private/tmp/eitri-t017-13-samples.csv`; report:
 `/private/tmp/eitri-t017-13-bench.txt`.
+
+### T017-14 expression field defaults
+
+Default expressions can use scalar operations and function calls with
+arguments. An iterative check visits expression nodes once using reusable
+scratch; name captures and aggregate construction are still rejected. Forced
+collection verifies ordered host effects and strings in both interpreters.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,667/18,800 ns, execution 250/542 ns, total 8,875/19,400 ns.
+This scalar workload does not exercise field defaults; the noisy p99 is retained.
+Samples: `/private/tmp/eitri-t017-14-samples.csv`; report:
+`/private/tmp/eitri-t017-14-bench.txt`.

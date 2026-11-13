@@ -836,6 +836,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   at construction; nonliteral defaults remain unsupported.
 - T017-13: field defaults can call a function without arguments, evaluated
   separately at each construction that omits the field.
+- T017-14: field defaults support scalar operations and calls with arguments;
+  captured names and aggregate construction remain unsupported.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 
