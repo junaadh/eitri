@@ -860,6 +860,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   support payload bindings and forced collection.
 - T017-25: struct update literals copy omitted fields from a final `..base`,
   preserving explicit initializer order and managed fields.
+- T017-26: enum payload patterns support reordered field labels and mixed
+  positional and labeled bindings with duplicate and order checks.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

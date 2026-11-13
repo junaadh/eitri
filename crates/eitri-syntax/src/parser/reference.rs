@@ -411,12 +411,19 @@ impl Parser<'_> {
             let parenthesized = self.eat(T::LParen).is_some();
             if parenthesized {
                 while !self.at(T::RParen) {
+                    let label = if self.at(T::Ident) && self.nth(1) == T::Colon {
+                        let label = self.bump();
+                        self.bump();
+                        Some(label)
+                    } else {
+                        None
+                    };
                     let name = if self.at(T::Wildcard) {
                         self.bump()
                     } else {
                         self.expect(T::Ident, "a binding")?
                     };
-                    bindings.push(name);
+                    bindings.push(crate::ast::MatchBinding { label, name });
                     if self.eat(T::Comma).is_none() {
                         break;
                     }

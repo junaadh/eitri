@@ -229,12 +229,18 @@ pub enum MatchBody {
     Block(Block),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MatchBinding {
+    pub label: Option<TokenId>,
+    pub name: TokenId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MatchArm {
     pub case: Option<TokenId>,
     pub qualifier: Option<TokenId>,
     pub catch_binding: Option<TokenId>,
     pub parenthesized: bool,
-    pub bindings: List<TokenId>,
+    pub bindings: List<MatchBinding>,
     pub guard: Option<ExprId>,
     pub body: MatchBody,
 }
@@ -301,7 +307,7 @@ pub struct Ast {
     pub enum_cases: ListPool<EnumCase>,
     pub matches: IndexVec<MatchId, MatchExpr>,
     pub match_arms: ListPool<MatchArm>,
-    pub match_bindings: ListPool<TokenId>,
+    pub match_bindings: ListPool<MatchBinding>,
     pub field_inits: ListPool<FieldInit>,
     pub stmts: IndexVec<StmtId, Stmt>,
     pub exprs: IndexVec<ExprId, Expr>,

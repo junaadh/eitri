@@ -2615,8 +2615,18 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
                 let types = self.checked.enum_case_types
                     [self.checked.enum_starts[enum_id] as usize + index];
-                for (offset, &token) in ast.match_bindings[arm.bindings].iter().enumerate() {
-                    if let Some(binding) = self.checked.pattern_bindings[token] {
+                let fields = ast.params(cases[index].fields);
+                for (position, pattern) in ast.match_bindings[arm.bindings].iter().enumerate() {
+                    let offset = pattern.label.map_or(position, |label| {
+                        fields
+                            .iter()
+                            .position(|field| {
+                                self.input.tokens.symbol(field.name)
+                                    == self.input.tokens.symbol(label)
+                            })
+                            .expect("checked field label")
+                    });
+                    if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
                         let ty = self.checked.param_types[types][offset];
                         let target = self.top;
                         self.top += self.width(ty);

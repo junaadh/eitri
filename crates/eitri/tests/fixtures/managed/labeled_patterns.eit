@@ -1,0 +1,6 @@
+//! host: test
+import test from "test"
+enum Pair { Empty, Data(first: i64, text: string, last: i64) }
+let pair = Pair.Data(first: 1, text: "hello", last: 3)
+test.check(match pair { .Empty => false, .Data(last: z, first: x, text: s) => x == 1 && z == 3 && s == "hello" })
+test.check(match pair { .Empty => false, .Data(x, last: z, text: _) => x + z == 4 })

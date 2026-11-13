@@ -1082,8 +1082,17 @@ impl Eval<'_> {
                             self.checked.pattern_bindings[token].expect("checked catch binding");
                         self.locals[binding.index()] = Some(Value::Enum(enum_id, case, payload));
                     }
-                    for (index, &token) in ast.match_bindings[arm.bindings].iter().enumerate() {
-                        if let Some(binding) = self.checked.pattern_bindings[token] {
+                    let fields = ast.params(cases[case as usize].fields);
+                    for (position, pattern) in ast.match_bindings[arm.bindings].iter().enumerate() {
+                        let index = pattern.label.map_or(position, |label| {
+                            fields
+                                .iter()
+                                .position(|field| {
+                                    self.tokens.symbol(field.name) == self.tokens.symbol(label)
+                                })
+                                .expect("checked field label")
+                        });
+                        if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
                             self.locals[binding.index()] =
                                 Some(self.structs[payload as usize][index]);
                         }

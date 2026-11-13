@@ -1926,16 +1926,56 @@ impl<'i> Checker<'_, 'i> {
                     }
                     let types =
                         self.out.enum_case_types[self.out.enum_starts[enum_id] as usize + index];
-                    for (i, &token) in bindings.iter().enumerate() {
-                        if self.input.tokens.kind(token) == eitri_syntax::TokenKind::Wildcard {
+                    let mut seen = [false; 256];
+                    let mut labeled = false;
+                    for (i, pattern) in bindings.iter().enumerate() {
+                        let index = if let Some(label) = pattern.label {
+                            labeled = true;
+                            match fields
+                                .iter()
+                                .take(256)
+                                .position(|field| self.symbol(field.name) == self.symbol(label))
+                            {
+                                Some(index) => index,
+                                None => {
+                                    self.report(
+                                        Code::UnknownName,
+                                        "unknown enum payload field",
+                                        self.token_span(label),
+                                    );
+                                    continue;
+                                }
+                            }
+                        } else {
+                            if labeled {
+                                self.report(
+                                    Code::TypeMismatch,
+                                    "positional pattern follows a labeled pattern",
+                                    self.token_span(pattern.name),
+                                );
+                            }
+                            i
+                        };
+                        if index < fields.len()
+                            && index < seen.len()
+                            && std::mem::replace(&mut seen[index], true)
+                        {
+                            self.report(
+                                Code::DuplicateName,
+                                "duplicate enum payload field pattern",
+                                self.token_span(pattern.label.unwrap_or(pattern.name)),
+                            );
+                        }
+                        if self.input.tokens.kind(pattern.name) == eitri_syntax::TokenKind::Wildcard
+                        {
                             continue;
                         }
                         let ty = self.out.param_types[types]
-                            .get(i)
+                            .get(index)
                             .copied()
                             .unwrap_or(Ty::Error);
-                        let binding = self.new_binding(token, false, ty);
-                        self.out.pattern_bindings[token] = Some(binding);
+                        let binding = self.new_binding(pattern.name, false, ty);
+                        self.out.pattern_bindings[pattern.name] = Some(binding);
                     }
                 } else {
                     self.report(

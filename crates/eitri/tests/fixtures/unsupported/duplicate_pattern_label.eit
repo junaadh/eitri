@@ -1,0 +1,2 @@
+enum Pair { Data(first: i64, last: i64) }
+let x = match Pair.Data(first: 1, last: 2) { .Data(first: a, first: b) => 0 }

@@ -50,7 +50,7 @@ pub struct ParseScratch {
     field_inits: Vec<crate::ast::FieldInit>,
     enum_cases: Vec<crate::ast::EnumCase>,
     match_arms: Vec<crate::ast::MatchArm>,
-    match_bindings: Vec<TokenId>,
+    match_bindings: Vec<crate::ast::MatchBinding>,
     links: Vec<IfLink>,
 }
 
@@ -77,7 +77,7 @@ impl ParseScratch {
             + self.field_inits.capacity() * size_of::<crate::ast::FieldInit>()
             + self.enum_cases.capacity() * size_of::<crate::ast::EnumCase>()
             + self.match_arms.capacity() * size_of::<crate::ast::MatchArm>()
-            + self.match_bindings.capacity() * size_of::<TokenId>()
+            + self.match_bindings.capacity() * size_of::<crate::ast::MatchBinding>()
             + self.links.capacity() * size_of::<IfLink>()
     }
 
@@ -236,7 +236,7 @@ struct Parser<'a> {
     field_inits: &'a mut Vec<crate::ast::FieldInit>,
     enum_cases: &'a mut Vec<crate::ast::EnumCase>,
     match_arms: &'a mut Vec<crate::ast::MatchArm>,
-    match_bindings: &'a mut Vec<TokenId>,
+    match_bindings: &'a mut Vec<crate::ast::MatchBinding>,
     links: &'a mut Vec<IfLink>,
     pos: u32,
     limit: u32,
@@ -574,12 +574,20 @@ impl Parser<'_> {
                 let parenthesized = self.eat(T::LParen).is_some();
                 if parenthesized {
                     while !self.at(T::RParen) {
+                        let label = if self.at(T::Ident) && self.nth(1) == T::Colon {
+                            let label = self.bump();
+                            self.bump();
+                            Some(label)
+                        } else {
+                            None
+                        };
                         let name = if self.at(T::Wildcard) {
                             self.bump()
                         } else {
                             self.expect(T::Ident, "a binding")?
                         };
-                        self.match_bindings.push(name);
+                        self.match_bindings
+                            .push(crate::ast::MatchBinding { label, name });
                         if self.eat(T::Comma).is_none() {
                             break;
                         }

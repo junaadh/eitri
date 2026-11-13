@@ -2172,3 +2172,16 @@ p50/p99 9,125/14,100 ns, execution 250/292 ns, total 9,375/14,300 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 struct updates. Samples: `/private/tmp/eitri-t017-25-samples.csv`; report:
 `/private/tmp/eitri-t017-25-bench.txt`.
+
+### T017-26 labeled payload patterns
+
+Payload bindings can name fields out of order, or follow positional patterns.
+Duplicate, unknown and out-of-order labels are rejected. Field lookup is
+bounded by the 256-field limit, including malformed declarations. Both
+interpreters and lowerers cover managed payloads under forced collection.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,042/10,900 ns, execution 250/292 ns, total 9,250/11,200 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+patterns. Samples: `/private/tmp/eitri-t017-26-samples.csv`; report:
+`/private/tmp/eitri-t017-26-bench.txt`.
