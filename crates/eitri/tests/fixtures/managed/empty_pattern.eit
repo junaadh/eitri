@@ -1,0 +1,4 @@
+//! host: test
+import test from "test"
+enum Item { Empty, Full(value: i64) }
+test.check(match Item.Empty { .Empty() => true, .Full => false })

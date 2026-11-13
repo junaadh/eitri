@@ -2109,3 +2109,15 @@ p50/p99 9,291/13,500 ns, execution 250/334 ns, total 9,500/13,800 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 aggregate methods. Samples: `/private/tmp/eitri-t017-20-samples.csv`; report:
 `/private/tmp/eitri-t017-20-bench.txt`.
+
+### T017-21 enum pattern arity
+
+Parenthesized enum case patterns now retain the presence of parentheses and
+enforce exact payload arity. An unparenthesized case still matches any payload.
+Malformed wildcard payload patterns are rejected before execution.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,375/10,500 ns, execution 250/334 ns, total 9,625/10,800 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+patterns. Samples: `/private/tmp/eitri-t017-21-samples.csv`; report:
+`/private/tmp/eitri-t017-21-bench.txt`.

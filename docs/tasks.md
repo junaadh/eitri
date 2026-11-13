@@ -850,6 +850,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   read-only enclosing fields still reject mutation.
 - T017-20: bare receiver method calls work in struct and enum methods,
   preserving receiver updates and mutability checks.
+- T017-21: parenthesized enum case patterns enforce payload arity, including
+  the distinction between `.Case` and `.Case()`.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 
