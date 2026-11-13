@@ -356,6 +356,7 @@ pub enum Sem {
     LoadConst,
     StringAlloc,
     StringLen,
+    StringConcat,
     Int {
         op: IntOp,
         mode: Mode,
@@ -664,6 +665,7 @@ ops! {
     FremF64 = "FREM.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Rem, precision: Precision::F64 }, NONE, true, None;
     StrNew = "STR.NEW", "STR", ABx, [Dst, Index16, None], Sem::StringAlloc, FAULT, true, Managed;
     StrLen = "STR.LEN", "STR", Abc, [Dst, Src, None], Sem::StringLen, NONE, true, None;
+    StrConcat = "STR.CONCAT", "STR", Abc, [Dst, Src, Src], Sem::StringConcat, FAULT, true, Managed;
 
 }
 

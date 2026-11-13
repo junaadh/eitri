@@ -12,9 +12,7 @@
 //! limited by the Rust stack; only nesting (bounded by the parser) recurses.
 //! The whole check is linear in the size of the syntax tree.
 
-use eitri_base::{
-    FxHashSet, IdRange, Idx, IndexVec, Interner, List, ListPool, SourceId, Span, Symbol,
-};
+use eitri_base::{IdRange, Idx, IndexVec, Interner, List, ListPool, SourceId, Span, Symbol};
 use eitri_diag::{Code, Diagnostic, Diagnostics, Label};
 use eitri_syntax::ast::{
     AssignOp, Ast, BinaryOp, Block, Else, Expr, ExprId, FnId, IfExpr, Item, Stmt, StmtId, TypeExpr,
@@ -49,6 +47,7 @@ pub enum Res {
     Function(FnId),
     Host(HostFnId),
     StringLen,
+    StringIsEmpty,
     StringLiteral(u32),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
@@ -121,6 +120,31 @@ enum Name {
     Poisoned,
 }
 
+/// A context-local set indexed by the interner's dense symbol IDs. Its
+/// backing capacity can be measured and reserved before checking.
+#[derive(Default)]
+struct SymbolSet {
+    present: Vec<bool>,
+}
+
+impl SymbolSet {
+    fn clear(&mut self) {
+        self.present.fill(false);
+    }
+    fn contains(&self, symbol: &Symbol) -> bool {
+        self.present.get(symbol.index()).copied().unwrap_or(false)
+    }
+    fn insert(&mut self, symbol: Symbol) -> bool {
+        let index = symbol.index();
+        if self.present.len() <= index {
+            self.present.resize(index + 1, false);
+        }
+        let old = self.present[index];
+        self.present[index] = true;
+        !old
+    }
+}
+
 /// The checker's reusable working memory (D44).
 #[derive(Default)]
 pub struct CheckScratch {
@@ -133,8 +157,8 @@ pub struct CheckScratch {
     spine: Vec<ExprId>,
     /// Pending outer links of `else if` chains used as values.
     links: Vec<IfLink>,
-    module_bindings: FxHashSet<Symbol>,
-    unknown: FxHashSet<Symbol>,
+    module_bindings: SymbolSet,
+    unknown: SymbolSet,
 }
 
 /// An `else if` link whose type waits on the rest of its chain: the nested
@@ -148,6 +172,78 @@ struct IfLink {
 impl CheckScratch {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Retained checker vectors, excluding allocator bookkeeping.
+    pub fn vector_bytes(&self) -> usize {
+        let c = &self.checked;
+        c.bindings.capacity() * size_of::<Binding>()
+            + c.types.capacity() * size_of::<Ty>()
+            + c.resolutions.capacity() * size_of::<Res>()
+            + c.stmt_bindings.capacity() * size_of::<Option<BindingId>>()
+            + c.signatures.capacity() * size_of::<Signature>()
+            + c.param_types.heap_bytes()
+            + c.params.capacity() * size_of::<IdRange<BindingId>>()
+            + c.ints.capacity() * size_of::<i64>()
+            + c.strings.capacity() * size_of::<String>()
+            + c.strings.iter().map(String::capacity).sum::<usize>()
+            + c.imports.capacity() * size_of::<Option<HostModuleId>>()
+            + self.heads.capacity() * size_of::<Option<Name>>()
+            + self.undo.capacity() * size_of::<(Symbol, Option<Name>)>()
+            + self.spine.capacity() * size_of::<ExprId>()
+            + self.links.capacity() * size_of::<IfLink>()
+            + self.module_bindings.present.capacity() * size_of::<bool>()
+            + self.unknown.present.capacity() * size_of::<bool>()
+    }
+
+    /// Payload bytes in currently retained checked string literals.
+    pub fn string_payload_bytes(&self) -> usize {
+        self.checked.strings.iter().map(String::capacity).sum()
+    }
+
+    /// Pre-reserve vector storage for checking a parsed source. String
+    /// payloads, temporary values, diagnostics and later phases must also be
+    /// budgeted separately before this can enforce a whole-run limit.
+    pub fn reserve_budgeted(
+        &mut self,
+        token_count: usize,
+        symbol_count: usize,
+        budget: &mut eitri_base::MemoryBudget,
+    ) -> Result<(), eitri_base::OutOfMemory> {
+        let count = token_count
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(1))
+            .ok_or(eitri_base::OutOfMemory)?;
+        let c = &mut self.checked;
+        c.bindings
+            .reserve_budgeted(count.saturating_sub(c.bindings.len()), budget)?;
+        c.types
+            .reserve_budgeted(count.saturating_sub(c.types.len()), budget)?;
+        c.resolutions
+            .reserve_budgeted(count.saturating_sub(c.resolutions.len()), budget)?;
+        c.stmt_bindings
+            .reserve_budgeted(count.saturating_sub(c.stmt_bindings.len()), budget)?;
+        c.signatures
+            .reserve_budgeted(count.saturating_sub(c.signatures.len()), budget)?;
+        c.param_types.reserve_budgeted(count, budget)?;
+        c.params
+            .reserve_budgeted(count.saturating_sub(c.params.len()), budget)?;
+        macro_rules! reserve_total {
+            ($values:expr, $total:expr) => {{
+                let additional = $total.saturating_sub($values.len());
+                budget.reserve_vec($values, additional)?;
+            }};
+        }
+        reserve_total!(&mut c.ints, count);
+        reserve_total!(&mut c.strings, count);
+        reserve_total!(&mut c.imports, count);
+        reserve_total!(&mut self.heads, symbol_count);
+        reserve_total!(&mut self.undo, count);
+        reserve_total!(&mut self.spine, count);
+        reserve_total!(&mut self.links, count);
+        reserve_total!(&mut self.module_bindings.present, symbol_count);
+        reserve_total!(&mut self.unknown.present, symbol_count);
+        Ok(())
     }
 
     pub fn checked(&self) -> &Checked {
@@ -224,11 +320,11 @@ struct Checker<'a, 'i> {
     undo: &'a mut Vec<(Symbol, Option<Name>)>,
     spine: &'a mut Vec<ExprId>,
     links: &'a mut Vec<IfLink>,
-    module_bindings: &'a mut FxHashSet<Symbol>,
+    module_bindings: &'a mut SymbolSet,
     /// Spellings already reported as unknown: a misspelled name is one
     /// mistake however often it is used (as while typing), so later uses
     /// are silent.
-    unknown: &'a mut FxHashSet<Symbol>,
+    unknown: &'a mut SymbolSet,
     current: Option<FnContext>,
 }
 
@@ -443,11 +539,21 @@ impl<'i> Checker<'_, 'i> {
 
         // Every signature before any body, so calls may come first.
         for (id, decl) in ast.fns.iter_enumerated() {
-            let params: Vec<Ty> = ast
-                .params(decl.params)
-                .iter()
-                .map(|p| self.ty(p.ty, false))
-                .collect();
+            let mut params = Vec::new();
+            if params
+                .try_reserve_exact(ast.params(decl.params).len())
+                .is_err()
+            {
+                self.report(
+                    Code::OutOfMemory,
+                    "runtime memory limit exceeded",
+                    self.token_span(decl.name),
+                );
+                return;
+            }
+            for param in ast.params(decl.params) {
+                params.push(self.ty(param.ty, false));
+            }
             let ret = self.ty(decl.ret, true);
             let params = self.out.param_types.push(&params);
             self.out.signatures.push(Signature { params, ret });
@@ -712,17 +818,29 @@ impl<'i> Checker<'_, 'i> {
             }
             Expr::String(token) => {
                 let spelling = &self.input.text[self.token_span(token).range()];
-                if let Some(value) = string_value(spelling) {
-                    self.out.resolutions[expr] = Res::StringLiteral(self.out.strings.len() as u32);
-                    self.out.strings.push(value);
-                    Ty::String
-                } else {
-                    self.report(
-                        Code::Unsupported,
-                        "not supported yet: interpolated or multiline string literals",
-                        self.token_span(token),
-                    );
-                    Ty::Error
+                match string_value(spelling) {
+                    Ok(Some(value)) => {
+                        self.out.resolutions[expr] =
+                            Res::StringLiteral(self.out.strings.len() as u32);
+                        self.out.strings.push(value);
+                        Ty::String
+                    }
+                    Ok(None) => {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: interpolated or multiline string literals",
+                            self.token_span(token),
+                        );
+                        Ty::Error
+                    }
+                    Err(_) => {
+                        self.report(
+                            Code::OutOfMemory,
+                            "runtime memory limit exceeded",
+                            self.token_span(token),
+                        );
+                        Ty::Error
+                    }
                 }
             }
             Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
@@ -948,7 +1066,7 @@ impl<'i> Checker<'_, 'i> {
             return self.conversion(expr, callee, ast.args(args), true);
         }
         if let Expr::Member { base, name } = ast.exprs[callee]
-            && self.spelling(name) == "len"
+            && matches!(self.spelling(name), "len" | "is_empty")
             && !matches!(ast.exprs[base], Expr::Name(token) if matches!(self.heads.get(self.symbol(token).as_u32() as usize).copied().flatten(), Some(Name::Module(_))))
         {
             self.value(base, Some(Ty::String));
@@ -958,12 +1076,17 @@ impl<'i> Checker<'_, 'i> {
             if !ast.args(args).is_empty() {
                 self.report(
                     Code::ArgumentCount,
-                    "`len` takes 0 arguments",
+                    format!("`{}` takes 0 arguments", self.spelling(name)),
                     self.span(expr),
                 );
             }
-            self.out.resolutions[expr] = Res::StringLen;
-            return Ty::I64;
+            return if self.spelling(name) == "len" {
+                self.out.resolutions[expr] = Res::StringLen;
+                Ty::I64
+            } else {
+                self.out.resolutions[expr] = Res::StringIsEmpty;
+                Ty::Bool
+            };
         }
         let call_span = self.span(expr);
         let target = match ast.exprs[callee] {
@@ -1200,9 +1323,31 @@ impl<'i> Checker<'_, 'i> {
         let mut lhs_span = self.span(leftmost);
         while self.spine.len() > mark {
             let node = self.spine.pop().unwrap();
-            let Expr::Binary { op, rhs, .. } = ast.exprs[node] else {
+            let Expr::Binary { op, lhs, rhs } = ast.exprs[node] else {
                 unreachable!()
             };
+            if op == BinaryOp::Add
+                && lhs_ty == Ty::String
+                && (matches!(
+                    ast.exprs[lhs],
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ) || matches!(
+                    ast.exprs[rhs],
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ))
+            {
+                self.report(
+                    Code::Unsupported,
+                    "not supported yet: string concatenation chains",
+                    self.span(node),
+                );
+            }
             let valid = valid_operand(op, lhs_ty);
             if !valid && lhs_ty == Ty::Void && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
                 self.report(
@@ -1274,7 +1419,8 @@ fn valid_operand(op: BinaryOp, ty: Ty) -> bool {
         And | Or => ty == Ty::Bool,
         Eq | NotEq => !matches!(ty, Ty::Void | Ty::String),
         Lt | LtEq | Gt | GtEq => ty.numeric() || ty == Ty::Char,
-        Add | Sub | Mul | Div | Rem => ty.numeric(),
+        Add => ty.numeric() || ty == Ty::String,
+        Sub | Mul | Div | Rem => ty.numeric(),
         WrapAdd | WrapSub | WrapMul | BitAnd | BitOr | BitXor | Shl | Shr => ty.integer(),
     }
 }
@@ -1354,51 +1500,64 @@ fn exact_integer_float(digits: &str, radix: u32, negative: bool, ty: Ty) -> Opti
     Some(sign | (((bits - 1 + bias) as u64) << fraction_bits) | fraction)
 }
 
-fn string_value(text: &str) -> Option<String> {
+fn string_value(text: &str) -> Result<Option<String>, eitri_base::OutOfMemory> {
     let (raw, text) = text.strip_prefix('r').map_or((false, text), |s| (true, s));
     if text.starts_with("\"\"\"") {
-        return None;
+        return Ok(None);
     }
-    let inner = text.strip_prefix('"')?.strip_suffix('"')?;
+    let Some(inner) = text.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        return Ok(None);
+    };
+    let mut out = String::new();
+    out.try_reserve_exact(inner.len())
+        .map_err(|_| eitri_base::OutOfMemory)?;
     if raw {
-        return Some(inner.to_owned());
+        out.push_str(inner);
+        return Ok(Some(out));
     }
     let mut chars = inner.chars().peekable();
-    let mut out = String::with_capacity(inner.len());
-    while let Some(c) = chars.next() {
-        if c == '$' && chars.peek() == Some(&'{') {
-            return None;
-        }
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        out.push(match chars.next()? {
-            'n' => '\n',
-            'r' => '\r',
-            't' => '\t',
-            '0' => '\0',
-            '\\' => '\\',
-            '"' => '"',
-            '$' => '$',
-            'u' => {
-                if chars.next()? != '{' {
-                    return None;
-                }
-                let mut digits = String::new();
-                loop {
-                    let c = chars.next()?;
-                    if c == '}' {
-                        break;
-                    }
-                    digits.push(c);
-                }
-                char::from_u32(u32::from_str_radix(&digits, 16).ok()?)?
+    let valid = (|| -> Option<()> {
+        while let Some(c) = chars.next() {
+            if c == '$' && chars.peek() == Some(&'{') {
+                return None;
             }
-            _ => return None,
-        });
-    }
-    Some(out)
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            out.push(match chars.next()? {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '0' => '\0',
+                '\\' => '\\',
+                '"' => '"',
+                '$' => '$',
+                'u' => {
+                    if chars.next()? != '{' {
+                        return None;
+                    }
+                    let mut value = 0u32;
+                    let mut count = 0;
+                    loop {
+                        let c = chars.next()?;
+                        if c == '}' {
+                            break;
+                        }
+                        value = value.checked_mul(16)?.checked_add(c.to_digit(16)?)?;
+                        count += 1;
+                    }
+                    if count == 0 {
+                        return None;
+                    }
+                    char::from_u32(value)?
+                }
+                _ => return None,
+            });
+        }
+        Some(())
+    })();
+    Ok(valid.map(|()| out))
 }
 
 fn char_value(text: &str) -> Option<char> {
@@ -1467,11 +1626,17 @@ mod string_literal_tests {
     #[test]
     fn decodes_single_line_strings_and_rejects_interpolation() {
         assert_eq!(
-            string_value(r#""hello\n\u{2603}""#).as_deref(),
+            string_value(r#""hello\n\u{2603}""#).unwrap().as_deref(),
             Some("hello\n☃")
         );
-        assert_eq!(string_value(r#"r"\n${raw}""#).as_deref(), Some(r"\n${raw}"));
-        assert_eq!(string_value(r#""${value}""#), None);
-        assert_eq!(string_value(r#""\${value}""#).as_deref(), Some("${value}"));
+        assert_eq!(
+            string_value(r#"r"\n${raw}""#).unwrap().as_deref(),
+            Some(r"\n${raw}")
+        );
+        assert_eq!(string_value(r#""${value}""#).unwrap(), None);
+        assert_eq!(
+            string_value(r#""\${value}""#).unwrap().as_deref(),
+            Some("${value}")
+        );
     }
 }

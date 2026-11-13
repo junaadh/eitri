@@ -10,6 +10,7 @@
 mod fx;
 mod idx;
 mod list;
+mod memory;
 mod span;
 mod symbol;
 
@@ -20,5 +21,6 @@ pub use idx::{CapacityError, IdIter, IdRange, Idx, IndexVec, MAX_INDEX};
 #[doc(hidden)]
 pub use idx::{encode, encode_usize as __encode_usize};
 pub use list::{List, ListPool};
+pub use memory::{MemoryBudget, OutOfMemory};
 pub use span::{SourceId, Span};
 pub use symbol::{Interner, Symbol, kw, sym};

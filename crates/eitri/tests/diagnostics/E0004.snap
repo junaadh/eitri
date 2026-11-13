@@ -1,0 +1,27 @@
+[
+    Diagnostic {
+        severity: Error,
+        code: Some(
+            OutOfMemory,
+        ),
+        message: "runtime memory limit exceeded",
+        labels: [
+            Label {
+                style: Primary,
+                source: SourceId(0),
+                span: Span {
+                    start: 0,
+                    end: 0,
+                },
+                message: "",
+            },
+        ],
+        notes: [],
+    },
+]
+
+error[E0004]: runtime memory limit exceeded
+  ╭─ memory.eit:1:1
+  │
+1 │ let x = 1
+  │ ^

@@ -1,0 +1,8 @@
+//! host: test
+import test from "test"
+fn is_blank(value: string) -> bool { return value.is_empty(); }
+test.check(is_blank(""))
+test.check(!is_blank("é"))
+var text = ""
+text = text + "x"
+test.check(!text.is_empty())

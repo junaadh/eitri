@@ -10,6 +10,6 @@ mod token;
 #[cfg(test)]
 mod test_support;
 
-pub use lexer::{LexScratch, MAX_NESTING, lex};
-pub use parser::{ModuleKind, ParseScratch, parse};
+pub use lexer::{LexScratch, MAX_NESTING, lex, lex_budgeted};
+pub use parser::{ModuleKind, ParseScratch, parse, parse_budgeted};
 pub use token::{TokenId, TokenKind, Tokens};

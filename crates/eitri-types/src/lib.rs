@@ -92,6 +92,29 @@ fn add_size(a: usize, b: usize, limit: usize) -> Result<usize, TypeError> {
 }
 
 impl TypeStore {
+    /// Retained storage with a conservative hash-table charge.
+    pub fn budget_bytes(&self) -> Result<usize, eitri_base::OutOfMemory> {
+        let nodes = self
+            .nodes
+            .capacity()
+            .checked_mul(size_of::<(TypeDesc, Box<[u8]>)>())
+            .ok_or(eitri_base::OutOfMemory)?;
+        let encoded = self.nodes.iter().try_fold(0usize, |sum, (_, bytes)| {
+            sum.checked_add(bytes.len()).ok_or(eitri_base::OutOfMemory)
+        })?;
+        nodes
+            .checked_add(encoded)
+            .and_then(|n| {
+                n.checked_add(
+                    eitri_base::MemoryBudget::hash_table_bytes::<(TypeDesc, TypeId)>(
+                        self.ids.capacity(),
+                    )
+                    .ok()?,
+                )
+            })
+            .ok_or(eitri_base::OutOfMemory)
+    }
+
     fn node(&self, id: TypeId) -> Result<&(TypeDesc, Box<[u8]>), TypeError> {
         self.nodes.get(id.0 as usize).ok_or(TypeError::InvalidId)
     }
@@ -187,6 +210,25 @@ pub struct PortableSignature {
 impl PortableSignature {
     pub fn heap_bytes(&self) -> usize {
         self.encoding.len()
+    }
+
+    /// Clone the portable encoding with a fallible, budgeted allocation.
+    pub fn try_clone_budgeted(
+        &self,
+        memory: &mut Option<eitri_base::MemoryBudget>,
+    ) -> Result<Self, eitri_base::OutOfMemory> {
+        let mut encoding = Vec::new();
+        if let Some(budget) = memory {
+            budget.reserve_vec(&mut encoding, self.encoding.len())?;
+        } else {
+            encoding
+                .try_reserve_exact(self.encoding.len())
+                .map_err(|_| eitri_base::OutOfMemory)?;
+        }
+        encoding.extend_from_slice(&self.encoding);
+        Ok(Self {
+            encoding: encoding.into_boxed_slice(),
+        })
     }
 }
 

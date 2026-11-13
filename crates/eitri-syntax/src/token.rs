@@ -210,6 +210,27 @@ impl Tokens {
             .min(self.payloads.capacity());
     }
 
+    /// Reserve enough room for every possible token in a source, charging
+    /// each column before it grows. Existing capacities must be charged.
+    pub(crate) fn reserve_source_budgeted(
+        &mut self,
+        count: usize,
+        budget: &mut eitri_base::MemoryBudget,
+    ) -> Result<(), eitri_base::OutOfMemory> {
+        let kinds = count.saturating_sub(self.kinds.len());
+        let spans = count.saturating_sub(self.spans.len());
+        let payloads = count.saturating_sub(self.payloads.len());
+        budget.reserve_vec(&mut self.kinds, kinds)?;
+        budget.reserve_vec(&mut self.spans, spans)?;
+        budget.reserve_vec(&mut self.payloads, payloads)?;
+        self.capacity = self
+            .kinds
+            .capacity()
+            .min(self.spans.capacity())
+            .min(self.payloads.capacity());
+        Ok(())
+    }
+
     /// Append a token. The columns always have equal lengths; growing them
     /// together keeps their capacities equal, so the common path is one
     /// predictable comparison before three stores.

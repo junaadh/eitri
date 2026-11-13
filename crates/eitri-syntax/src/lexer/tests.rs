@@ -600,3 +600,37 @@ fn one_byte_tokens_ignore_what_follows() {
         assert_eq!(lex(text).tokens.kinds()[..2], [kind, kind], "{text:?}");
     }
 }
+
+#[test]
+fn budgeted_lexing_rejects_growth_without_executing_and_remains_reusable() {
+    let source = "fn f(n: i64) -> i64 { return n + 1; }\nf(41)";
+    let mut interner = Interner::new();
+    let mut scratch = LexScratch::new();
+    let baseline = interner.heap_bytes() + scratch.heap_bytes();
+    let mut diagnostics = Diagnostics::new(100);
+    let mut small = eitri_base::MemoryBudget::new(baseline + 1, baseline).unwrap();
+    assert!(
+        super::lex_budgeted(
+            source,
+            SourceId::from_u32(0),
+            &mut interner,
+            &mut diagnostics,
+            &mut scratch,
+            &mut small
+        )
+        .is_err()
+    );
+    let baseline = interner.heap_bytes() + scratch.heap_bytes();
+    let mut sufficient = eitri_base::MemoryBudget::new(0, baseline).unwrap();
+    let tokens = super::lex_budgeted(
+        source,
+        SourceId::from_u32(0),
+        &mut interner,
+        &mut diagnostics,
+        &mut scratch,
+        &mut sufficient,
+    )
+    .unwrap();
+    assert_eq!(tokens.last_kind(), Some(TokenKind::Eof));
+    assert!(!diagnostics.has_errors());
+}

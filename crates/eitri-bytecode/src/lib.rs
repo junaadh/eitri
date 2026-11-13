@@ -26,7 +26,10 @@ pub use roots::{
     RootState, SafepointPc,
 };
 pub use spec::{AllocationClass, OPS, Op, OpInfo};
-pub use verify::{Callees, ErrorKind, VerifyError, string_roots, verify, verify_root_state};
+pub use verify::{
+    Callees, ErrorKind, VerifyError, string_roots, string_roots_budgeted, verify, verify_budgeted,
+    verify_root_state,
+};
 
 #[cfg(test)]
 mod asm_tests;

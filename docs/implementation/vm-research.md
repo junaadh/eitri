@@ -1742,3 +1742,18 @@ work are excluded. The few-microsecond target remains missed. Report and raw
 samples: `/tmp/orchestra/eitri-t015-5-bench.txt` and
 `/tmp/orchestra/eitri-t015-5-samples.csv`. No Lua comparison was run. Host-owned
 string-result copies are outside the managed-object memory limit.
+
+### T015 quota work in progress
+
+On 2026-11-13, `cargo bench --locked -p eitri --bench source_to_result --
+20001` measured 20,001 individual samples per cell in the release profile,
+with the threaded interpreter, macOS 27.0.1 AArch64, Rust 1.101.0-nightly,
+and LLVM 23.1.5; the CPU model was unavailable. The reused scalar module
+measured compile p50/p99 7.750/9.791 µs, execution 0.208/0.292 µs, and
+total 7.958/10.0 µs, with 48 allocations / 4,692 B, 344 code bytes and
+2,978 metadata bytes. Reused host-call execution was 8.250/22.6 µs. These
+unpaired results do not establish a causal change, and do not exercise string
+growth or an enabled quota. Runtime creation, file I/O and host work are
+excluded. The few-microsecond target remains missed. The report and raw
+samples are in `/tmp/orchestra/eitri-t015-quota-wip-bench.txt` and
+`/tmp/orchestra/eitri-t015-quota-wip-samples.csv`; Lua was not rerun.

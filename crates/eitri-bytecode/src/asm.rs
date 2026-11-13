@@ -39,6 +39,7 @@ pub enum AsmError {
     TooManyConstants,
     TooManySites,
     CodeTooLarge,
+    OutOfMemory,
 }
 
 impl From<EncodeError> for AsmError {
@@ -106,6 +107,8 @@ pub struct Assembler<const RECORD: bool = false> {
     items: Vec<ir::Item>,
     /// The last finished function's recorded body.
     recorded: Option<Body>,
+    memory: Option<eitri_base::MemoryBudget>,
+    artifact_charged: usize,
 }
 
 impl Assembler {
@@ -126,6 +129,151 @@ impl Assembler<true> {
 }
 
 impl<const RECORD: bool> Assembler<RECORD> {
+    /// Move the active compilation budget into this assembler.
+    pub fn set_memory_budget(&mut self, memory: Option<eitri_base::MemoryBudget>) {
+        self.memory = memory;
+        self.artifact_charged = 0;
+    }
+
+    /// Recover the active compilation budget after lowering.
+    pub fn take_memory_budget(&mut self) -> (Option<eitri_base::MemoryBudget>, usize) {
+        (
+            self.memory.take(),
+            std::mem::take(&mut self.artifact_charged),
+        )
+    }
+
+    /// Allocate temporary storage under the active compilation budget.
+    pub fn temporary_vec<T>(&mut self, capacity: usize) -> Result<Vec<T>, AsmError> {
+        output_vec(capacity, &mut self.memory)
+    }
+
+    /// Release temporary storage after its owner has been dropped.
+    pub fn release_temporary_bytes(&mut self, bytes: usize) {
+        if let Some(budget) = &mut self.memory {
+            budget.release(bytes);
+        }
+    }
+
+    /// Allocate artifact vector storage and charge it before growing.
+    pub fn artifact_vec<T>(&mut self, capacity: usize) -> Result<Vec<T>, AsmError> {
+        let before = self.memory.as_ref().map(eitri_base::MemoryBudget::used);
+        let values = output_vec(capacity, &mut self.memory)?;
+        if let (Some(before), Some(budget)) = (before, &self.memory) {
+            self.artifact_charged = self
+                .artifact_charged
+                .saturating_add(budget.used().saturating_sub(before));
+        }
+        Ok(values)
+    }
+
+    /// Copy a UTF-8 artifact string, charging before allocation.
+    pub fn artifact_string(&mut self, text: &str) -> Result<Box<str>, AsmError> {
+        let before = self.memory.as_ref().map(eitri_base::MemoryBudget::used);
+        let mut value = String::new();
+        if let Some(budget) = &mut self.memory {
+            budget
+                .reserve_string(&mut value, text.len())
+                .map_err(|_| AsmError::OutOfMemory)?;
+        } else {
+            value
+                .try_reserve_exact(text.len())
+                .map_err(|_| AsmError::OutOfMemory)?;
+        }
+        value.push_str(text);
+        if let (Some(before), Some(budget)) = (before, &self.memory) {
+            self.artifact_charged = self
+                .artifact_charged
+                .saturating_add(budget.used().saturating_sub(before));
+        }
+        Ok(value.into_boxed_str())
+    }
+
+    /// Build managed root metadata under the active compilation budget.
+    pub fn string_roots(
+        &mut self,
+        function: &Function,
+        callees: &crate::Callees<'_>,
+    ) -> Result<crate::FunctionRoots, crate::VerifyError> {
+        let before = self.memory.as_ref().map(eitri_base::MemoryBudget::used);
+        let roots = crate::string_roots_budgeted(function, callees, &mut self.memory)?;
+        if let (Some(before), Some(budget)) = (before, &self.memory) {
+            self.artifact_charged = self
+                .artifact_charged
+                .saturating_add(budget.used().saturating_sub(before));
+        }
+        Ok(roots)
+    }
+
+    /// Release artifact storage replaced during lowering.
+    pub fn release_artifact_bytes(&mut self, bytes: usize) {
+        if let Some(budget) = &mut self.memory {
+            budget.release(bytes);
+            self.artifact_charged = self.artifact_charged.saturating_sub(bytes);
+        }
+    }
+
+    /// Pre-reserve assembler vectors and its constant table using a
+    /// caller-owned budget. `count` is a conservative instruction bound.
+    pub fn reserve_budgeted(
+        &mut self,
+        count: usize,
+        budget: &mut eitri_base::MemoryBudget,
+    ) -> Result<(), eitri_base::OutOfMemory> {
+        macro_rules! reserve_total {
+            ($values:expr) => {{
+                let additional = count.saturating_sub($values.len());
+                budget.reserve_vec($values, additional)?;
+            }};
+        }
+        reserve_total!(&mut self.insns);
+        reserve_total!(&mut self.spans);
+        reserve_total!(&mut self.words);
+        self.labels
+            .reserve_budgeted(count.saturating_sub(self.labels.len()), budget)?;
+        reserve_total!(&mut self.consts);
+        reserve_total!(&mut self.sites);
+        reserve_total!(&mut self.literals);
+        reserve_total!(&mut self.max_pos);
+        reserve_total!(&mut self.short);
+        reserve_total!(&mut self.final_pos);
+        if RECORD {
+            reserve_total!(&mut self.items);
+        }
+        let additional = count.saturating_sub(self.const_index.len());
+        budget.reserve_map(&mut self.const_index, additional)?;
+        Ok(())
+    }
+
+    /// Retained assembler storage with a conservative constant-table charge.
+    pub fn budget_bytes(&self) -> Result<usize, eitri_base::OutOfMemory> {
+        self.vector_bytes()
+            .checked_add(eitri_base::MemoryBudget::hash_table_bytes::<(u64, u32)>(
+                self.const_index.capacity(),
+            )?)
+            .ok_or(eitri_base::OutOfMemory)
+    }
+
+    /// Retained vector allocations. The constant hash table and allocator
+    /// bookkeeping are excluded.
+    pub fn vector_bytes(&self) -> usize {
+        self.insns.capacity() * size_of::<Kind>()
+            + self.spans.capacity() * size_of::<Span>()
+            + self.words.capacity() * size_of::<u32>()
+            + self.labels.capacity() * size_of::<Option<u32>>()
+            + self.consts.capacity() * size_of::<u64>()
+            + self.sites.capacity() * size_of::<CallSite>()
+            + self.literals.capacity() * size_of::<(u32, ValueType)>()
+            + self.max_pos.capacity() * size_of::<u64>()
+            + self.short.capacity() * size_of::<bool>()
+            + self.final_pos.capacity() * size_of::<u32>()
+            + self.items.capacity() * size_of::<ir::Item>()
+            + self
+                .recorded
+                .as_ref()
+                .map_or(0, |body| body.items.capacity() * size_of::<ir::Item>())
+    }
+
     /// The body recorded for the function last finished, with each
     /// instruction's final position; `None` when not recording.
     pub fn take_recorded(&mut self) -> Option<Body> {
@@ -337,13 +485,37 @@ impl<const RECORD: bool> Assembler<RECORD> {
     /// Lay out and encode everything emitted, and reset for the next
     /// function. The frame covers every slot named and the signature.
     pub fn finish(&mut self, name: &str, signature: Signature) -> Result<Function, AsmError> {
-        let result = self.layout(name, signature);
+        let before = self.memory.as_ref().map(eitri_base::MemoryBudget::used);
+        let mut result = self.layout(name, signature);
         if RECORD {
-            self.recorded = result.is_ok().then(|| Body {
-                items: std::mem::take(&mut self.items),
-                labels: self.labels.len() as u32,
-            });
+            self.recorded = None;
+            if result.is_ok() {
+                if self.memory.is_some() {
+                    match output_vec(self.items.len(), &mut self.memory) {
+                        Ok(mut items) => {
+                            items.extend_from_slice(&self.items);
+                            self.recorded = Some(Body {
+                                items,
+                                labels: self.labels.len() as u32,
+                            });
+                        }
+                        Err(error) => result = Err(error),
+                    }
+                } else {
+                    self.recorded = Some(Body {
+                        items: std::mem::take(&mut self.items),
+                        labels: self.labels.len() as u32,
+                    });
+                }
+            }
             self.items.clear();
+        }
+        if let (Some(before), Some(budget)) = (before, &self.memory)
+            && result.is_ok()
+        {
+            self.artifact_charged = self
+                .artifact_charged
+                .saturating_add(budget.used().saturating_sub(before));
         }
         self.insns.clear();
         self.spans.clear();
@@ -438,9 +610,15 @@ impl<const RECORD: bool> Assembler<RECORD> {
             }
         }
 
-        let mut code = Vec::with_capacity(pos as usize);
-        let mut starts = vec![0u64; (pos as usize).div_ceil(64)];
-        let mut spans = Vec::with_capacity(n);
+        let mut code = output_vec(pos as usize, &mut self.memory)?;
+        let start_words = (pos as usize).div_ceil(64);
+        let mut starts = output_vec(start_words, &mut self.memory)?;
+        starts.resize(start_words, 0u64);
+        let extra_spans = self.insns.iter().zip(short.iter()).filter(|(insn, short)| {
+            !**short && matches!(insn, Kind::Branch { branch, .. } if !matches!(branch, Branch::Jump))
+        }).count();
+        let span_count = n.checked_add(extra_spans).ok_or(AsmError::OutOfMemory)?;
+        let mut spans = output_vec(span_count, &mut self.memory)?;
         let mark = |starts: &mut Vec<u64>, at: usize| starts[at / 64] |= 1 << (at % 64);
         for (i, insn) in self.insns.iter().enumerate() {
             let at = code.len();
@@ -477,15 +655,43 @@ impl<const RECORD: bool> Assembler<RECORD> {
             }
         }
 
-        let literal_types = self
-            .literals
-            .iter()
-            .map(|&(i, ty)| (final_pos[i as usize], ty))
-            .collect();
+        let mut literal_types = output_vec(self.literals.len(), &mut self.memory)?;
+        literal_types.extend(
+            self.literals
+                .iter()
+                .map(|&(i, ty)| (final_pos[i as usize], ty)),
+        );
         let frame_size = self
             .frame
             .max(signature.param_base() + signature.params.len() as u32);
-        let mut roots = crate::RootBuilder::scalar(self.sites.len());
+        let mut maps = output_vec(1, &mut self.memory)?;
+        maps.push(crate::RootMap::default());
+        let mut calls = output_vec(self.sites.len(), &mut self.memory)?;
+        let state = crate::RootState {
+            map: crate::RootMapId(0),
+            initialized: Vec::new(),
+        };
+        for _ in &self.sites {
+            calls.push(crate::CallRoots {
+                pre: state.clone(),
+                suspended: state.clone(),
+                post: state.clone(),
+            });
+        }
+        let mut point_count = 0usize;
+        let mut scan = 0usize;
+        while scan < code.len() {
+            let decoded = crate::decode(&code, scan).expect("assembler emitted valid code");
+            point_count += usize::from(crate::verify::needs_safepoint(scan as u32, &decoded));
+            scan += decoded.words as usize;
+        }
+        let safepoints = output_vec(point_count, &mut self.memory)?;
+        let mut roots = crate::FunctionRoots {
+            entry: crate::RootMapId(0),
+            maps,
+            safepoints,
+            calls,
+        };
         let mut pc = 0usize;
         while pc < code.len() {
             let decoded = crate::decode(&code, pc).expect("assembler emitted valid code");
@@ -500,22 +706,54 @@ impl<const RECORD: bool> Assembler<RECORD> {
             }
             pc += decoded.words as usize;
         }
+        let mut function_name = String::new();
+        if let Some(budget) = &mut self.memory {
+            budget
+                .reserve_string(&mut function_name, name.len())
+                .map_err(|_| AsmError::OutOfMemory)?;
+        } else {
+            function_name
+                .try_reserve_exact(name.len())
+                .map_err(|_| AsmError::OutOfMemory)?;
+        }
+        function_name.push_str(name);
+        let mut consts = output_vec(self.consts.len(), &mut self.memory)?;
+        consts.extend_from_slice(&self.consts);
+        let mut sites = output_vec(self.sites.len(), &mut self.memory)?;
+        sites.extend_from_slice(&self.sites);
         Ok(Function {
-            name: name.into(),
+            name: function_name.into_boxed_str(),
             signature,
             frame_size,
             code: code.into_boxed_slice(),
             // Copied at their exact size, so the assembler keeps its
             // capacity for the next function.
-            consts: self.consts.as_slice().into(),
+            consts: consts.into_boxed_slice(),
             strings: Box::default(),
-            sites: self.sites.as_slice().into(),
+            sites: sites.into_boxed_slice(),
             roots,
-            literal_types,
+            literal_types: literal_types.into_boxed_slice(),
             starts: starts.into_boxed_slice(),
             spans: spans.into_boxed_slice(),
         })
     }
+}
+
+fn output_vec<T>(
+    capacity: usize,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<Vec<T>, AsmError> {
+    let mut values = Vec::new();
+    if let Some(budget) = memory {
+        budget
+            .reserve_vec(&mut values, capacity)
+            .map_err(|_| AsmError::OutOfMemory)?;
+    } else {
+        values
+            .try_reserve_exact(capacity)
+            .map_err(|_| AsmError::OutOfMemory)?;
+    }
+    Ok(values)
 }
 
 fn wide(slots: &[u32]) -> u32 {

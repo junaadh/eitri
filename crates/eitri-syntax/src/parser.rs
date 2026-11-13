@@ -64,6 +64,15 @@ impl ParseScratch {
         Self::default()
     }
 
+    /// Retained vector allocations, excluding allocator bookkeeping.
+    pub fn heap_bytes(&self) -> usize {
+        self.ast.heap_bytes()
+            + self.exprs.capacity() * size_of::<ExprId>()
+            + self.stmts.capacity() * size_of::<StmtId>()
+            + self.params.capacity() * size_of::<Param>()
+            + self.links.capacity() * size_of::<IfLink>()
+    }
+
     pub fn ast(&self) -> &Ast {
         &self.ast
     }
@@ -71,6 +80,36 @@ impl ParseScratch {
     pub fn into_ast(self) -> Ast {
         self.ast
     }
+}
+
+/// Reserve parser storage under a caller-owned budget before parsing.
+/// Diagnostics and the other compilation phases still need their own bounds.
+pub fn parse_budgeted<'s>(
+    text: &str,
+    source: SourceId,
+    tokens: &Tokens,
+    kind: ModuleKind,
+    diagnostics: &mut Diagnostics,
+    scratch: &'s mut ParseScratch,
+    budget: &mut eitri_base::MemoryBudget,
+) -> Result<&'s Ast, eitri_base::OutOfMemory> {
+    // The parser creates at most one node/list entry per consumed token;
+    // the additional factor covers recovery nodes and the EOF sentinel.
+    let count = tokens
+        .len()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(1))
+        .ok_or(eitri_base::OutOfMemory)?;
+    scratch.ast.reserve_budgeted(count, budget)?;
+    let exprs = count.saturating_sub(scratch.exprs.len());
+    let stmts = count.saturating_sub(scratch.stmts.len());
+    let params = count.saturating_sub(scratch.params.len());
+    let links = count.saturating_sub(scratch.links.len());
+    budget.reserve_vec(&mut scratch.exprs, exprs)?;
+    budget.reserve_vec(&mut scratch.stmts, stmts)?;
+    budget.reserve_vec(&mut scratch.params, params)?;
+    budget.reserve_vec(&mut scratch.links, links)?;
+    Ok(parse(text, source, tokens, kind, diagnostics, scratch))
 }
 
 /// Parse `tokens` (lexed from `text`) into `scratch`, replacing its previous

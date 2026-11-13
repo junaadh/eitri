@@ -45,6 +45,7 @@ fn every_supported_code_has_a_structured_and_terminal_snapshot() {
             Code::IfWithoutElse => Some("reject/if_value_without_else.eit"),
             Code::MissingReturn => Some("reject/missing_return.eit"),
             Code::HostBindingMismatch
+            | Code::OutOfMemory
             | Code::Limit
             | Code::AsmSyntax
             | Code::AsmMismatch
@@ -54,6 +55,7 @@ fn every_supported_code_has_a_structured_and_terminal_snapshot() {
             Some(path) => (path.to_owned(), fs::read_to_string(root.join("fixtures").join(path)).unwrap()),
             None => match code {
                 Code::HostBindingMismatch => ("binding.eit".into(), "import a from \"a\"\na.effect()\n".into()),
+                Code::OutOfMemory => ("memory.eit".into(), "let x = 1\n".into()),
                 Code::Limit => ("nesting.eit".into(), format!("let x = {}1{}\n", "(".repeat(257), ")".repeat(257))),
                 Code::AsmSyntax => ("syntax.eits".into(), "bogus\n".into()),
                 Code::AsmMismatch => ("mismatch.eits".into(), "define void @<module>() frame(1) {\n    %r0 = ldi i64 100000\n    ret\n}\n".into()),
@@ -62,6 +64,9 @@ fn every_supported_code_has_a_structured_and_terminal_snapshot() {
             },
         };
         let mut context = Context::new();
+        if code == Code::OutOfMemory {
+            context.set_memory_limit(1);
+        }
         let diagnostics = if code == Code::HostBindingMismatch {
             context
                 .register_host_module("a", "pub fn effect() -> void\n")

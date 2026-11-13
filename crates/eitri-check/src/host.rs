@@ -174,6 +174,30 @@ impl Hosts {
         }))
     }
 
+    /// Retained host declarations and types, with conservative hash-table
+    /// accounting and without allocator bookkeeping.
+    pub fn budget_bytes(&self) -> Result<usize, eitri_base::OutOfMemory> {
+        let mut total = self.types.budget_bytes()?;
+        let mut add = |bytes: usize| -> Result<(), eitri_base::OutOfMemory> {
+            total = total.checked_add(bytes).ok_or(eitri_base::OutOfMemory)?;
+            Ok(())
+        };
+        add(self.signatures.capacity() * size_of::<PortableSignature>())?;
+        for signature in self.signatures.iter() {
+            add(signature.heap_bytes())?;
+        }
+        add(self.modules.capacity() * size_of::<HostModule>())?;
+        for module in self.modules.iter() {
+            add(module.path.capacity())?;
+            add(module.fns.capacity() * size_of::<HostFnId>())?;
+        }
+        add(self.fns.capacity() * size_of::<HostFn>())?;
+        for function in self.fns.iter() {
+            add(function.params.capacity() * size_of::<Ty>())?;
+        }
+        Ok(total)
+    }
+
     pub fn find(&self, path: &str) -> Option<HostModuleId> {
         self.modules
             .iter_enumerated()

@@ -53,6 +53,7 @@ codes! {
         Unsupported = 1: "A language feature outside this slice. The message names the feature",
         Limit = 2: "An implementation limit from [Resources](#resources)",
         HostBindingMismatch = 3: "An artifact host index has a different binding in the destination registry",
+        OutOfMemory = 4: "The runtime memory quota or allocator could not satisfy an allocation",
     }
     "lexer and parser" {
         Lexical = 101: "Unexpected character, malformed literal, or unterminated comment or literal",

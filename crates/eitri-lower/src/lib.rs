@@ -85,6 +85,71 @@ impl LowerScratch {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Pre-reserve lowering scratch for a budgeted compilation. The caller
+    /// supplies the token and binding counts and selects the recording path.
+    /// Output artifacts and managed root analysis require separate charges.
+    pub fn reserve_budgeted(
+        &mut self,
+        tokens: usize,
+        bindings: usize,
+        recording: bool,
+        budget: &mut eitri_base::MemoryBudget,
+    ) -> Result<(), eitri_base::OutOfMemory> {
+        let instructions = tokens
+            .checked_mul(16)
+            .and_then(|n| n.checked_add(64))
+            .ok_or(eitri_base::OutOfMemory)?;
+        if recording {
+            self.recording.reserve_budgeted(instructions, budget)?;
+        } else {
+            self.asm.reserve_budgeted(instructions, budget)?;
+        }
+        self.slots
+            .reserve_budgeted(bindings.saturating_sub(self.slots.len()), budget)?;
+        let additional = tokens.saturating_sub(self.stack.len());
+        budget.reserve_vec(&mut self.stack, additional)?;
+        Ok(())
+    }
+
+    /// Retained scratch with conservative assembler hash-table charges.
+    pub fn budget_bytes(&self) -> Result<usize, eitri_base::OutOfMemory> {
+        self.asm
+            .budget_bytes()?
+            .checked_add(self.recording.budget_bytes()?)
+            .and_then(|n| n.checked_add(self.slots.capacity() * size_of::<u32>()))
+            .and_then(|n| n.checked_add(self.stack.capacity() * size_of::<ExprId>()))
+            .ok_or(eitri_base::OutOfMemory)
+    }
+
+    /// Transfer the active compilation budget to the selected assembler.
+    pub fn set_memory_budget(&mut self, budget: Option<eitri_base::MemoryBudget>, recording: bool) {
+        if recording {
+            self.recording.set_memory_budget(budget);
+        } else {
+            self.asm.set_memory_budget(budget);
+        }
+    }
+
+    /// Recover the budget and the artifact bytes already charged by assembly.
+    pub fn take_memory_budget(
+        &mut self,
+        recording: bool,
+    ) -> (Option<eitri_base::MemoryBudget>, usize) {
+        if recording {
+            self.recording.take_memory_budget()
+        } else {
+            self.asm.take_memory_budget()
+        }
+    }
+
+    /// Retained vector allocations, excluding the assemblers' hash tables.
+    pub fn vector_bytes(&self) -> usize {
+        self.asm.vector_bytes()
+            + self.recording.vector_bytes()
+            + self.slots.capacity() * size_of::<u32>()
+            + self.stack.capacity() * size_of::<ExprId>()
+    }
 }
 
 pub fn value_type(ty: Ty) -> ValueType {
@@ -186,11 +251,26 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
     mut lowerer: Lowerer<'_, '_, R, SIMPLE>,
 ) -> Result<Program, Diagnostic> {
     let (input, ast) = (lowerer.input, lowerer.input.ast);
-    let mut bodies = R.then(|| IndexVec::with_capacity(ast.fns.len() + 1));
-    let mut functions = IndexVec::with_capacity(ast.fns.len() + 1);
+    let capacity = ast.fns.len() + 1;
+    let mut bodies = if R {
+        Some(IndexVec::from_raw(
+            lowerer
+                .asm
+                .artifact_vec(capacity)
+                .map_err(|error| lowering_error(error, input, "<module>", Span::default()))?,
+        ))
+    } else {
+        None
+    };
+    let mut functions = IndexVec::from_raw(
+        lowerer
+            .asm
+            .artifact_vec(capacity)
+            .map_err(|error| lowering_error(error, input, "<module>", Span::default()))?,
+    );
     let module = lowerer
         .module()
-        .map_err(|_| too_large(input, "<module>", Span::default()))?;
+        .map_err(|error| lowering_error(error, input, "<module>", Span::default()))?;
     functions.push(module);
     if let Some(bodies) = &mut bodies {
         bodies.push(
@@ -201,9 +281,9 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
         );
     }
     for (id, decl) in ast.fns.iter_enumerated() {
-        let function = lowerer.function(id).map_err(|_| {
+        let function = lowerer.function(id).map_err(|error| {
             let name = input.interner.resolve(input.tokens.symbol(decl.name));
-            too_large(input, name, input.tokens.span(decl.name))
+            lowering_error(error, input, name, input.tokens.span(decl.name))
         })?;
         functions.push(function);
         if let Some(bodies) = &mut bodies {
@@ -234,8 +314,45 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
                 CallTarget::Script(_) => false,
             })
     {
-        let signatures = Program::signatures_of(&functions);
-        let hosts = host_signatures(input.hosts);
+        let temporary_error = |error| lowering_error(error, input, "<module>", Span::default());
+        let mut signature_vec = lowerer
+            .asm
+            .temporary_vec(functions.len())
+            .map_err(temporary_error)?;
+        for function in functions.iter() {
+            let mut params = lowerer
+                .asm
+                .temporary_vec(function.signature.params.len())
+                .map_err(temporary_error)?;
+            params.extend_from_slice(&function.signature.params);
+            let mut results = lowerer
+                .asm
+                .temporary_vec(function.signature.results.len())
+                .map_err(temporary_error)?;
+            results.extend_from_slice(&function.signature.results);
+            signature_vec.push(Signature { params, results });
+        }
+        let signatures = IndexVec::from_raw(signature_vec);
+        let mut hosts = lowerer
+            .asm
+            .temporary_vec(input.hosts.function_count())
+            .map_err(temporary_error)?;
+        for index in 0..input.hosts.function_count() {
+            let host = input.hosts.function(HostFnId::new(index));
+            let mut params = lowerer
+                .asm
+                .temporary_vec(host.params.len())
+                .map_err(temporary_error)?;
+            params.extend(host.params.iter().copied().map(value_type));
+            let mut results = lowerer
+                .asm
+                .temporary_vec(usize::from(host.ret != Ty::Void))
+                .map_err(temporary_error)?;
+            if host.ret != Ty::Void {
+                results.push(value_type(host.ret));
+            }
+            hosts.push(Signature { params, results });
+        }
         let callees = eitri_bytecode::Callees {
             functions: &signatures,
             hosts: &hosts,
@@ -250,27 +367,62 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
                 pc += decoded.words as usize;
             }
             if has_strings {
-                function.strings = lowerer
-                    .checked
-                    .strings
-                    .iter()
-                    .map(|s| s.as_str().into())
-                    .collect();
+                let mut strings = lowerer
+                    .asm
+                    .artifact_vec(lowerer.checked.strings.len())
+                    .map_err(|error| {
+                        lowering_error(
+                            error,
+                            input,
+                            &function.name,
+                            function.span_at(0).unwrap_or_default(),
+                        )
+                    })?;
+                for value in &lowerer.checked.strings {
+                    strings.push(lowerer.asm.artifact_string(value).map_err(|error| {
+                        lowering_error(
+                            error,
+                            input,
+                            &function.name,
+                            function.span_at(0).unwrap_or_default(),
+                        )
+                    })?);
+                }
+                function.strings = strings.into_boxed_slice();
             }
             {
-                function.roots =
-                    eitri_bytecode::string_roots(function, &callees).map_err(|_| {
-                        Diagnostic::error(
-                            Code::Unsupported,
-                            "not supported yet: string values across control flow or calls",
-                        )
-                        .with_label(DiagLabel::primary(
+                let old_root_bytes = function.roots.heap_bytes();
+                function.roots = lowerer
+                    .asm
+                    .string_roots(function, &callees)
+                    .map_err(|error| {
+                        let code = if error.kind == eitri_bytecode::ErrorKind::OutOfMemory {
+                            Code::OutOfMemory
+                        } else {
+                            Code::Unsupported
+                        };
+                        let message = if code == Code::OutOfMemory {
+                            "runtime memory limit exceeded"
+                        } else {
+                            "not supported yet: managed root metadata"
+                        };
+                        Diagnostic::error(code, message).with_label(DiagLabel::primary(
                             input.source,
                             function.span_at(0).unwrap_or_default(),
                         ))
                     })?;
+                lowerer.asm.release_artifact_bytes(old_root_bytes);
             }
         }
+        let mut temporary_bytes = signatures.capacity() * size_of::<Signature>()
+            + hosts.capacity() * size_of::<Signature>();
+        for signature in signatures.iter().chain(&hosts) {
+            temporary_bytes += (signature.params.capacity() + signature.results.capacity())
+                * size_of::<ValueType>();
+        }
+        drop(signatures);
+        drop(hosts);
+        lowerer.asm.release_temporary_bytes(temporary_bytes);
     }
     Ok(Program {
         functions,
@@ -278,6 +430,15 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
         layouts: None,
         bodies,
     })
+}
+
+fn lowering_error(error: AsmError, input: &Input<'_>, name: &str, span: Span) -> Diagnostic {
+    if error == AsmError::OutOfMemory {
+        Diagnostic::error(Code::OutOfMemory, "runtime memory limit exceeded")
+            .with_label(DiagLabel::primary(input.source, span))
+    } else {
+        too_large(input, name, span)
+    }
 }
 
 fn too_large(input: &Input<'_>, name: &str, span: Span) -> Diagnostic {
@@ -370,7 +531,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let (ast, checked) = (self.input.ast, self.checked);
         let decl = ast.fns[id];
         let types = checked.signatures[id];
-        let signature = signature(&checked.param_types[types.params], types.ret);
+        let parameter_types = &checked.param_types[types.params];
+        let mut params = self.asm.artifact_vec(parameter_types.len())?;
+        params.extend(parameter_types.iter().copied().map(value_type));
+        let mut results = self.asm.artifact_vec(usize::from(types.ret != Ty::Void))?;
+        if types.ret != Ty::Void {
+            results.push(value_type(types.ret));
+        }
+        let signature = Signature { params, results };
         let base = signature.param_base();
         for (index, binding) in checked.params[id].iter().enumerate() {
             self.slots[binding] = base + index as u32;
@@ -796,12 +964,29 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 op: BinaryOp::And | BinaryOp::Or,
                 ..
             } => self.logic_value(e, dst),
+            Expr::Binary {
+                op: BinaryOp::Add,
+                lhs,
+                rhs,
+            } if checked.types[e] == Ty::String => {
+                let left = self.expr(lhs, None)?;
+                let right = self.expr(rhs, None)?;
+                let slot = self.dst(dst);
+                self.asm.emit(
+                    Op::StrConcat,
+                    Operands::abc(slot.into(), left.into(), right.into()),
+                    span,
+                )?;
+                Ok(slot)
+            }
             Expr::Binary { .. } => self.chain(e, dst),
             Expr::Call { args, .. } if matches!(checked.resolutions[e], Res::Convert { .. }) => {
                 self.conversion(e, ast.args(args)[0], dst)
             }
             Expr::Convert { value, .. } => self.conversion(e, value, dst),
-            Expr::Call { callee, .. } if checked.resolutions[e] == Res::StringLen => {
+            Expr::Call { callee, .. }
+                if matches!(checked.resolutions[e], Res::StringLen | Res::StringIsEmpty) =>
+            {
                 let Expr::Member { base, .. } = ast.exprs[callee] else {
                     unreachable!()
                 };
@@ -809,6 +994,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let slot = self.dst(dst);
                 self.asm
                     .emit(Op::StrLen, Operands::abc(slot.into(), src.into(), 0), span)?;
+                if checked.resolutions[e] == Res::StringIsEmpty {
+                    let zero = self.temp();
+                    self.asm.load(zero, 0, ValueType::I64, span)?;
+                    self.asm.emit(
+                        Op::CsetEq,
+                        Operands::abc(slot.into(), slot.into(), zero.into()),
+                        span,
+                    )?;
+                }
                 Ok(slot)
             }
             Expr::Call { .. } => self.call(e, dst),

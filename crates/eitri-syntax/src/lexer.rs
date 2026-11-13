@@ -74,6 +74,27 @@ impl LexScratch {
     }
 }
 
+/// Reserve lexical storage before scanning under a caller-owned budget.
+/// This covers lexer/interner storage; diagnostics and later compiler phases
+/// need their own reservations before this can provide a whole-run quota.
+pub fn lex_budgeted<'s>(
+    text: &str,
+    source: SourceId,
+    interner: &mut Interner,
+    diagnostics: &mut Diagnostics,
+    scratch: &'s mut LexScratch,
+    budget: &mut eitri_base::MemoryBudget,
+) -> Result<&'s Tokens, eitri_base::OutOfMemory> {
+    let count = text.len().checked_add(1).ok_or(eitri_base::OutOfMemory)?;
+    interner.reserve_source_budgeted(text.len(), budget)?;
+    scratch.tokens.reserve_source_budgeted(count, budget)?;
+    let delimiters = count.saturating_sub(scratch.delimiters.len());
+    budget.reserve_vec(&mut scratch.delimiters, delimiters)?;
+    let strings = count.saturating_sub(scratch.strings.len());
+    budget.reserve_vec(&mut scratch.strings, strings)?;
+    Ok(lex(text, source, interner, diagnostics, scratch))
+}
+
 /// Lex `text` into `scratch`, replacing its previous tokens, and return them.
 /// The last token is always [`TokenKind::Eof`]. Spellings are interned into
 /// `interner`; errors are pushed to `diagnostics` with spans into `source`.

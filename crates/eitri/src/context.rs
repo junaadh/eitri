@@ -46,6 +46,8 @@ pub struct Context {
     interner: Interner,
     hosts: Hosts,
     limits: Limits,
+    /// Zero disables the full-runtime memory limit.
+    memory_limit: usize,
     /// Execute with the tail-call threaded interpreter (the default) or the
     /// portable `match` loop (E5).
     threaded: bool,
@@ -97,6 +99,8 @@ impl RunError {
 pub struct FaultReport {
     /// A typed pre-execution rejection; runtime faults have no diagnostic code.
     pub code: Option<Code>,
+    /// The typed runtime fault, or `None` for pre-execution rejections.
+    pub kind: Option<eitri_vm::FaultKind>,
     pub message: String,
     pub trace: Vec<TraceFrame>,
 }
@@ -158,11 +162,24 @@ impl Context {
             interner: Interner::new(),
             hosts: Hosts::new(),
             limits: Limits::default(),
+            memory_limit: 0,
             threaded: true,
             tier_threshold: DEFAULT_TIER_THRESHOLD,
             keep_ir: false,
             scratch: Scratch::default(),
         }
+    }
+
+    /// Retained compiler vector storage, excluding hash tables, host registry,
+    /// diagnostics, transient allocations and allocator bookkeeping. This is
+    /// a partial measurement, not a runtime memory quota.
+    pub fn compiler_vector_bytes(&self) -> usize {
+        self.interner.heap_bytes()
+            + self.scratch.lex.heap_bytes()
+            + self.scratch.parse.heap_bytes()
+            + self.scratch.check.vector_bytes()
+            + self.scratch.lower.vector_bytes()
+            + self.scratch.recording.vector_bytes()
     }
 
     /// Steps per run: each call and each taken backward branch costs one.
@@ -178,6 +195,37 @@ impl Context {
     /// Force collection at every legal safepoint in managed programs.
     pub fn set_force_gc(&mut self, enabled: bool) {
         self.scratch.vm.set_force_gc(enabled);
+    }
+
+    /// Set the runtime-memory quota in bytes. Zero means unlimited.
+    ///
+    /// This quota path is under construction: compiler output, verifier,
+    /// diagnostics and some transient allocations are not yet fully charged.
+    pub fn set_memory_limit(&mut self, bytes: usize) {
+        self.memory_limit = bytes;
+    }
+
+    /// Conservative retained runtime bytes, excluding inactive host-owned
+    /// compiled artifacts and allocator bookkeeping.
+    pub fn retained_runtime_bytes(&self) -> usize {
+        self.retained_context_bytes().unwrap_or(usize::MAX)
+    }
+
+    fn retained_context_bytes(&self) -> Result<usize, eitri_base::OutOfMemory> {
+        let mut used = size_of::<Self>();
+        for bytes in [
+            self.interner.heap_bytes(),
+            self.hosts.budget_bytes()?,
+            self.scratch.lex.heap_bytes(),
+            self.scratch.parse.heap_bytes(),
+            self.scratch.check.vector_bytes(),
+            self.scratch.lower.budget_bytes()?,
+            self.scratch.recording.budget_bytes()?,
+            self.scratch.vm.budget_bytes()?,
+        ] {
+            used = used.checked_add(bytes).ok_or(eitri_base::OutOfMemory)?;
+        }
+        Ok(used)
     }
 
     /// Limit accounted managed-object bytes.
@@ -393,24 +441,60 @@ impl Context {
         // compiled code holds names as strings, not symbols.
         self.interner.reset();
         let mut diagnostics = Diagnostics::new(DIAGNOSTIC_LIMIT);
-        let tokens = eitri_syntax::lex(
-            source,
-            Self::SOURCE,
-            &mut self.interner,
-            &mut diagnostics,
-            &mut self.scratch.lex,
-        );
+        let mut memory = if self.memory_limit == 0 {
+            None
+        } else {
+            let used = self
+                .retained_context_bytes()
+                .map_err(|_| vec![out_of_memory_diagnostic()])?;
+            Some(
+                eitri_base::MemoryBudget::new(self.memory_limit, used)
+                    .map_err(|_| vec![out_of_memory_diagnostic()])?,
+            )
+        };
+        let tokens = if let Some(budget) = &mut memory {
+            eitri_syntax::lex_budgeted(
+                source,
+                Self::SOURCE,
+                &mut self.interner,
+                &mut diagnostics,
+                &mut self.scratch.lex,
+                budget,
+            )
+            .map_err(|_| vec![out_of_memory_diagnostic()])?
+        } else {
+            eitri_syntax::lex(
+                source,
+                Self::SOURCE,
+                &mut self.interner,
+                &mut diagnostics,
+                &mut self.scratch.lex,
+            )
+        };
         if diagnostics.has_errors() {
             return Err(diagnostics.into_vec());
         }
-        let ast = eitri_syntax::parse(
-            source,
-            Self::SOURCE,
-            tokens,
-            ModuleKind::Script,
-            &mut diagnostics,
-            &mut self.scratch.parse,
-        );
+        let ast = if let Some(budget) = &mut memory {
+            eitri_syntax::parse_budgeted(
+                source,
+                Self::SOURCE,
+                tokens,
+                ModuleKind::Script,
+                &mut diagnostics,
+                &mut self.scratch.parse,
+                budget,
+            )
+            .map_err(|_| vec![out_of_memory_diagnostic()])?
+        } else {
+            eitri_syntax::parse(
+                source,
+                Self::SOURCE,
+                tokens,
+                ModuleKind::Script,
+                &mut diagnostics,
+                &mut self.scratch.parse,
+            )
+        };
         if diagnostics.has_errors() {
             return Err(diagnostics.into_vec());
         }
@@ -422,23 +506,77 @@ impl Context {
             interner: &self.interner,
             hosts: &self.hosts,
         };
+        if let Some(budget) = &mut memory {
+            self.scratch
+                .check
+                .reserve_budgeted(tokens.len(), self.interner.len(), budget)
+                .map_err(|_| vec![out_of_memory_diagnostic()])?;
+        }
+        let old_string_bytes = self.scratch.check.string_payload_bytes();
+        let transient_credit = tokens
+            .len()
+            .checked_mul(size_of::<eitri_check::Ty>())
+            .ok_or_else(|| vec![out_of_memory_diagnostic()])?;
+        let string_credit = source.len();
+        if let Some(budget) = &mut memory {
+            budget
+                .charge(string_credit)
+                .and_then(|()| budget.charge(transient_credit))
+                .map_err(|_| vec![out_of_memory_diagnostic()])?;
+        }
         let checked = eitri_check::check(&input, &mut diagnostics, &mut self.scratch.check);
+        if let Some(budget) = &mut memory {
+            budget.release(old_string_bytes);
+            let new_string_bytes = checked.strings.iter().map(String::capacity).sum::<usize>();
+            if new_string_bytes > string_credit {
+                budget
+                    .charge(new_string_bytes - string_credit)
+                    .map_err(|_| vec![out_of_memory_diagnostic()])?;
+            } else {
+                budget.release(string_credit - new_string_bytes);
+            }
+            budget.release(transient_credit);
+        }
         if diagnostics.has_errors() {
             return Err(diagnostics.into_vec());
         }
+        if let Some(budget) = &mut memory {
+            self.scratch
+                .lower
+                .reserve_budgeted(tokens.len(), checked.bindings.len(), self.keep_ir, budget)
+                .map_err(|_| vec![out_of_memory_diagnostic()])?;
+        }
+        self.scratch
+            .lower
+            .set_memory_budget(memory.take(), self.keep_ir);
         let program = if SIMPLE {
             eitri_lower::lower_simple(&input, checked, &mut self.scratch.lower, self.keep_ir)
         } else {
             eitri_lower::lower(&input, checked, &mut self.scratch.lower, self.keep_ir)
-        }
-        .map_err(|diagnostic| vec![diagnostic])?;
+        };
+        let (returned_budget, artifact_charged) =
+            self.scratch.lower.take_memory_budget(self.keep_ir);
+        memory = returned_budget;
+        let program = program.map_err(|diagnostic| vec![diagnostic])?;
         // Compiler-produced code is trusted in release builds; debug builds
         // and tests verify every function, so a lowering bug surfaces as a
         // `bug:` diagnostic instead of a wrong answer.
         if cfg!(debug_assertions) {
-            verify(&program, &self.hosts)?;
+            verify(&program, &self.hosts, &mut memory)?;
         }
-        Ok(Compiled::new(program, &self.hosts, &self.interner))
+        let before = memory.as_ref().map(eitri_base::MemoryBudget::used);
+        let compiled = Compiled::new(program, &self.hosts, &self.interner, &mut memory)
+            .map_err(|_| vec![out_of_memory_diagnostic()])?;
+        if let Some(budget) = &mut memory {
+            let newly_charged = budget.used().saturating_sub(before.unwrap_or(0));
+            debug_assert!(
+                compiled.retained_bytes() <= artifact_charged.saturating_add(newly_charged),
+                "artifact retained {} bytes, charged {}",
+                compiled.retained_bytes(),
+                artifact_charged.saturating_add(newly_charged),
+            );
+        }
+        Ok(compiled)
     }
 
     fn check_bindings(&self, compiled: &Compiled) -> Result<(), FaultReport> {
@@ -452,6 +590,7 @@ impl Context {
             if !matches {
                 return Err(FaultReport {
                     code: Some(Code::HostBindingMismatch),
+                    kind: None,
                     message: format!(
                         "host binding at index {} does not match `{}.{}`",
                         binding.index, binding.module, binding.name
@@ -474,6 +613,22 @@ impl Context {
     /// Reentry borrows this validated program and registry for the whole run.
     pub fn execute(&mut self, compiled: &Compiled, host: &mut dyn Host) -> Result<(), FaultReport> {
         self.check_bindings(compiled)?;
+        let memory = if self.memory_limit == 0 {
+            None
+        } else {
+            let result = self.retained_context_bytes().and_then(|used| {
+                let mut budget = eitri_base::MemoryBudget::new(self.memory_limit, used)?;
+                budget.charge(compiled.retained_bytes())?;
+                Ok(budget)
+            });
+            Some(result.map_err(|_| FaultReport {
+                code: None,
+                kind: Some(eitri_vm::FaultKind::OutOfMemory),
+                message: "runtime memory limit exceeded".into(),
+                trace: Vec::new(),
+            })?)
+        };
+        self.scratch.vm.set_runtime_budget(memory);
         compiled.runs.set(compiled.runs.get().saturating_add(1));
         let program = &compiled.program;
         let run = if self.threaded {
@@ -634,7 +789,8 @@ impl Context {
                 return Err(vec![diagnostic]);
             }
         }
-        Ok(Compiled::new(program, &self.hosts, &self.interner))
+        Compiled::new(program, &self.hosts, &self.interner, &mut None)
+            .map_err(|_| vec![out_of_memory_diagnostic()])
     }
 
     /// `compiled` as `.eits` text, with host functions named by this
@@ -757,38 +913,53 @@ struct HostBinding {
 }
 
 impl Compiled {
-    fn new(program: Program, hosts: &Hosts, interner: &Interner) -> Self {
-        // S call sites: O(S log S) time and O(S) temporary space; retained
-        // metadata is O(U + name bytes + parameter types) for U used indexes.
-        let mut indices: Vec<u32> = program
-            .functions
-            .iter()
-            .flat_map(|f| &f.sites)
-            .filter_map(|site| match site.target {
-                CallTarget::Host(index) => Some(index),
-                CallTarget::Script(_) => None,
-            })
-            .collect();
+    fn new(
+        program: Program,
+        hosts: &Hosts,
+        interner: &Interner,
+        memory: &mut Option<eitri_base::MemoryBudget>,
+    ) -> Result<Self, eitri_base::OutOfMemory> {
+        if let Some(budget) = memory.as_mut() {
+            budget.charge(size_of::<Self>())?;
+        }
+        let sites = program.functions.iter().try_fold(0usize, |sum, function| {
+            sum.checked_add(function.sites.len())
+                .ok_or(eitri_base::OutOfMemory)
+        })?;
+        let mut indices = fallible_vec(sites, memory)?;
+        for site in program.functions.iter().flat_map(|f| &f.sites) {
+            if let CallTarget::Host(index) = site.target {
+                indices.push(index);
+            }
+        }
         indices.sort_unstable();
         indices.dedup();
-        let host_bindings = indices
-            .into_iter()
-            .map(|index| {
-                let function = hosts.function(HostFnId::from_u32(index));
-                HostBinding {
-                    index,
-                    module: hosts.module(function.module).path.clone(),
-                    name: interner.resolve(function.name).to_owned(),
-                    signature: hosts.signature(HostFnId::from_u32(index)).clone(),
-                }
-            })
-            .collect();
-        Compiled {
+        let mut host_bindings = fallible_vec(indices.len(), memory)?;
+        for &index in &indices {
+            let function = hosts.function(HostFnId::from_u32(index));
+            let module = fallible_string(&hosts.module(function.module).path, memory)?;
+            let name = fallible_string(interner.resolve(function.name), memory)?;
+            let signature = hosts
+                .signature(HostFnId::from_u32(index))
+                .try_clone_budgeted(memory)?;
+            host_bindings.push(HostBinding {
+                index,
+                module,
+                name,
+                signature,
+            });
+        }
+        let index_bytes = indices.capacity() * size_of::<u32>();
+        drop(indices);
+        if let Some(budget) = memory {
+            budget.release(index_bytes);
+        }
+        Ok(Compiled {
             program,
             host_bindings,
             runs: Cell::new(0),
             optimized: false,
-        }
+        })
     }
 
     /// How many times it has been executed.
@@ -813,6 +984,21 @@ impl Compiled {
             .iter()
             .map(|f| f.code.len() * 4)
             .sum()
+    }
+
+    /// Total retained artifact bytes, including this value, function storage,
+    /// code, metadata, and any recorded logical bodies. Allocator bookkeeping
+    /// and the host's stack/container storage are excluded.
+    pub fn retained_bytes(&self) -> usize {
+        let functions = self.program.functions.capacity() * size_of::<eitri_bytecode::Function>();
+        let bodies = self.program.bodies.as_ref().map_or(0, |bodies| {
+            bodies.capacity() * size_of::<eitri_bytecode::ir::Body>()
+                + bodies
+                    .iter()
+                    .map(|body| body.items.capacity() * size_of::<eitri_bytecode::ir::Item>())
+                    .sum::<usize>()
+        });
+        size_of::<Self>() + functions + self.code_bytes() + self.metadata_bytes() + bodies
     }
 
     /// Bytes of everything else the functions carry: constants, call
@@ -866,20 +1052,108 @@ impl Compiled {
     }
 }
 
-fn verify(program: &Program, hosts: &Hosts) -> Result<(), Vec<Diagnostic>> {
-    let functions = program.signatures();
-    let hosts = eitri_lower::host_signatures(hosts);
+fn fallible_vec<T>(
+    capacity: usize,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<Vec<T>, eitri_base::OutOfMemory> {
+    let mut values = Vec::new();
+    if let Some(budget) = memory {
+        budget.reserve_vec(&mut values, capacity)?;
+    } else {
+        values
+            .try_reserve_exact(capacity)
+            .map_err(|_| eitri_base::OutOfMemory)?;
+    }
+    Ok(values)
+}
+
+fn fallible_string(
+    text: &str,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<String, eitri_base::OutOfMemory> {
+    let mut value = String::new();
+    if let Some(budget) = memory {
+        budget.reserve_string(&mut value, text.len())?;
+    } else {
+        value
+            .try_reserve_exact(text.len())
+            .map_err(|_| eitri_base::OutOfMemory)?;
+    }
+    value.push_str(text);
+    Ok(value)
+}
+
+fn temporary_vec<T>(
+    capacity: usize,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<Vec<T>, Vec<Diagnostic>> {
+    let mut values = Vec::new();
+    if let Some(budget) = memory {
+        budget
+            .reserve_vec(&mut values, capacity)
+            .map_err(|_| vec![out_of_memory_diagnostic()])?;
+    } else {
+        values
+            .try_reserve_exact(capacity)
+            .map_err(|_| vec![out_of_memory_diagnostic()])?;
+    }
+    Ok(values)
+}
+
+fn verify(
+    program: &Program,
+    hosts: &Hosts,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), Vec<Diagnostic>> {
+    use eitri_bytecode::Signature;
+    let mut function_signatures = temporary_vec(program.functions.len(), memory)?;
+    for function in program.functions.iter() {
+        let mut params = temporary_vec(function.signature.params.len(), memory)?;
+        params.extend_from_slice(&function.signature.params);
+        let mut results = temporary_vec(function.signature.results.len(), memory)?;
+        results.extend_from_slice(&function.signature.results);
+        function_signatures.push(Signature { params, results });
+    }
+    let signatures = IndexVec::from_raw(function_signatures);
+    let mut host_signatures = temporary_vec(hosts.function_count(), memory)?;
+    for index in 0..hosts.function_count() {
+        let host = hosts.function(HostFnId::from_u32(index as u32));
+        let mut params = temporary_vec(host.params.len(), memory)?;
+        params.extend(host.params.iter().copied().map(eitri_lower::value_type));
+        let mut results = temporary_vec(usize::from(host.ret != eitri_check::Ty::Void), memory)?;
+        if host.ret != eitri_check::Ty::Void {
+            results.push(eitri_lower::value_type(host.ret));
+        }
+        host_signatures.push(Signature { params, results });
+    }
     let callees = Callees {
-        functions: &functions,
-        hosts: &hosts,
+        functions: &signatures,
+        hosts: &host_signatures,
     };
     for f in program.functions.iter() {
-        if let Err(error) = eitri_bytecode::verify(f, &callees) {
+        if let Err(error) = eitri_bytecode::verify_budgeted(f, &callees, memory) {
+            if error.kind == eitri_bytecode::ErrorKind::OutOfMemory {
+                return Err(vec![out_of_memory_diagnostic()]);
+            }
             let message = format!("lowering produced invalid code in `{}`: {error:?}", f.name);
             return Err(vec![Diagnostic::bug(message)]);
         }
     }
+    if let Some(budget) = memory {
+        let mut bytes = signatures.capacity() * size_of::<Signature>()
+            + host_signatures.capacity() * size_of::<Signature>();
+        for signature in signatures.iter().chain(&host_signatures) {
+            bytes += (signature.params.capacity() + signature.results.capacity())
+                * size_of::<eitri_bytecode::ValueType>();
+        }
+        budget.release(bytes);
+    }
     Ok(())
+}
+
+fn out_of_memory_diagnostic() -> Diagnostic {
+    Diagnostic::error(Code::OutOfMemory, "runtime memory limit exceeded")
+        .with_label(Label::primary(Context::SOURCE, Span::empty(0)))
 }
 
 /// Resolve a fault's trace to names and source spans: the cold path.
@@ -905,12 +1179,10 @@ fn report(program: &Program, fault: Fault, hosts: &Hosts, interner: &Interner) -
             }
         })
         .collect();
-    let message = match fault.kind {
-        eitri_vm::FaultKind::Host(message) => message,
-        kind => kind.message().to_owned(),
-    };
+    let message = fault.kind.message().to_owned();
     FaultReport {
         code: None,
+        kind: Some(fault.kind),
         message,
         trace,
     }
@@ -978,6 +1250,18 @@ mod root_optimizer_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn retained_artifact_size_reflects_recorded_ir_and_survives_context_drop() {
+        let mut context = Context::new();
+        let plain = context.compile(SOURCE).unwrap();
+        context.set_keep_ir(true);
+        let recorded = context.compile(SOURCE).unwrap();
+        assert!(recorded.retained_bytes() > plain.retained_bytes());
+        let size = recorded.retained_bytes();
+        drop(context);
+        assert_eq!(recorded.retained_bytes(), size);
     }
 
     #[test]

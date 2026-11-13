@@ -113,7 +113,7 @@ impl eitri::Host for TestHost {
             return Ok(());
         }
         if index == self.retain_text {
-            self.retained = Some(cx.retain_string_arg(0).ok_or("missing string argument")?);
+            self.retained = Some(cx.retain_string_arg(0)?.ok_or("missing string argument")?);
             self.effects += "effect: test.retain_text()\n";
             return Ok(());
         }

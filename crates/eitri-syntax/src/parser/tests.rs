@@ -690,3 +690,45 @@ fn scalar_operators_follow_the_language_precedence() {
         assert!(errors_only(text).is_empty(), "{text}");
     }
 }
+
+#[test]
+fn budgeted_parse_rejects_small_quota_and_can_retry() {
+    let text = "fn f(n: i64) -> i64 { return n + 1; }\nf(41)";
+    let mut interner = Interner::new();
+    let mut diagnostics = Diagnostics::new(100);
+    let mut lex_scratch = LexScratch::new();
+    let tokens = lex(
+        text,
+        SourceId::from_u32(0),
+        &mut interner,
+        &mut diagnostics,
+        &mut lex_scratch,
+    );
+    let mut scratch = ParseScratch::new();
+    let mut small = eitri_base::MemoryBudget::new(1, 0).unwrap();
+    assert!(
+        parse_budgeted(
+            text,
+            SourceId::from_u32(0),
+            tokens,
+            ModuleKind::Script,
+            &mut diagnostics,
+            &mut scratch,
+            &mut small
+        )
+        .is_err()
+    );
+    let mut large = eitri_base::MemoryBudget::new(0, scratch.heap_bytes()).unwrap();
+    let ast = parse_budgeted(
+        text,
+        SourceId::from_u32(0),
+        tokens,
+        ModuleKind::Script,
+        &mut diagnostics,
+        &mut scratch,
+        &mut large,
+    )
+    .unwrap();
+    assert_eq!(ast.fns.len(), 1);
+    assert!(!diagnostics.has_errors());
+}

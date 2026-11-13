@@ -147,6 +147,37 @@ impl Interner {
         interner
     }
 
+    /// Pre-reserve a source's worst-case spelling and table capacity. Each
+    /// new symbol consumes at least one source byte, so `source_bytes` bounds
+    /// both new symbols and their combined spelling bytes. Existing capacities
+    /// must already be charged to `budget`.
+    pub fn reserve_source_budgeted(
+        &mut self,
+        source_bytes: usize,
+        budget: &mut crate::MemoryBudget,
+    ) -> Result<(), crate::OutOfMemory> {
+        budget.reserve_string(&mut self.bytes, source_bytes)?;
+        self.entries.reserve_budgeted(source_bytes, budget)?;
+        let symbols = self
+            .entries
+            .len()
+            .checked_add(source_bytes)
+            .ok_or(crate::OutOfMemory)?;
+        let slots = symbols
+            .checked_mul(2)
+            .and_then(usize::checked_next_power_of_two)
+            .ok_or(crate::OutOfMemory)?
+            .max(Self::INITIAL_SLOTS);
+        if slots > self.table.len() {
+            let additional = slots - self.table.len();
+            budget.reserve_vec(&mut self.table, additional)?;
+            self.table.resize(slots, 0);
+            self.table.fill(0);
+            self.rehash();
+        }
+        Ok(())
+    }
+
     /// The symbol for `text`, adding it if new.
     ///
     /// # Panics

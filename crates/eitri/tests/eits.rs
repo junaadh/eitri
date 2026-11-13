@@ -50,6 +50,34 @@ fn every_compiling_fixture_round_trips() {
 }
 
 #[test]
+fn budgeted_compilation_accepts_the_fixture_corpus() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut paths = Vec::new();
+    collect(&root.join("tests/fixtures"), &mut paths);
+    collect(&root.join("benches/fixtures"), &mut paths);
+    paths.sort();
+    for path in paths {
+        let source = fs::read_to_string(&path).unwrap();
+        for recorded in [false, true] {
+            let mut unlimited = context();
+            unlimited.set_keep_ir(recorded);
+            let expected = unlimited.compile(&source).is_ok();
+            let mut limited = context();
+            limited.set_keep_ir(recorded);
+            limited.set_memory_limit(128 * 1024 * 1024);
+            let result = limited.compile(&source);
+            assert_eq!(
+                result.is_ok(),
+                expected,
+                "{}: {:?}",
+                path.display(),
+                result.err()
+            );
+        }
+    }
+}
+
+#[test]
 fn golden_listings() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let bless = std::env::var_os("EITRI_BLESS").is_some();

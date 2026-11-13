@@ -48,6 +48,14 @@ parameters, and allocates nothing. Host reentry stays within the validated
 program and borrowed registry. Optimization also rejects mismatched bindings;
 disassembly returns `None` for them.
 
+For the full runtime-memory quota, an inactive `Compiled` artifact is
+host-owned and is outside every runtime quota. The active artifact is charged
+to the context compiling or executing it; simultaneous executions charge each
+context independently. `Compiled::retained_bytes()` reports the artifact's
+retained size so a host can impose an aggregate limit on inactive artifacts.
+The full quota and fallible allocation throughout compilation are not yet
+implemented; `Context::set_heap_limit` currently limits managed objects only.
+
 ## Threading
 
 `Runtime` is **thread-bound** in the first version: it is neither `Send` nor

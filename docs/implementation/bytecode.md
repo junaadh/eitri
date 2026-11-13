@@ -394,7 +394,8 @@ The initial scalar slice lowered to: `MOV`, `LDI`,
 `EQ NE LT LE` (the swapped forms give `GT GE`); `TB` true and false; `J`,
 `J_X`; `CALL` script and host; `RET`; and `WIDE`. The rest can be encoded
 and disassembled, and the verifier rejected them before anything ran. T013
-added the scalar extensions, and T015-1 adds `STR.NEW` and `STR.LEN`.
+added the scalar extensions, T015-1 adds `STR.NEW` and `STR.LEN`, and the
+T015 memory-limit work adds single binary `STR.CONCAT`.
 The latter use a per-function UTF-8 literal pool; `.eits` represents each
 pool entry as `literal h` followed by its hexadecimal bytes. Update this
 manifest with `python3 tools/update_opcode_manifest.py`.
@@ -419,8 +420,8 @@ manifest with `python3 tools/update_opcode_manifest.py`.
 | `LDK_X`, `LDF_X`, `STF_X` | 3 | |
 | `CALL` | 3 | script, host, value |
 | `RET`, `TRAP`, `WIDE` | 3 | |
-| `STR` | 2 | managed string allocation and byte length |
-| **Total** | **167** | 89 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
+| `STR` | 3 | managed string allocation and byte length |
+| **Total** | **168** | 88 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
 
 `SHR` immediate forms need no width, because the amount is checked at
 compile time and a canonical value shifted right stays canonical. `LDF_X`

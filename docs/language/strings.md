@@ -3,8 +3,10 @@
 The current T015-5 implementation supports single-line and raw single-line
 literals, local bindings, script function parameters and returns, and `.len()`
 across control flow and calls, including host function arguments and results.
-String values also cross host-initiated reentrant calls. Other string
-operations, interpolation, and multiline literals remain unsupported. See the
+String values also cross host-initiated reentrant calls. A single binary
+string `+` allocates the result; concatenation chains are rejected until they
+can be merged into one allocation. Other string operations, interpolation,
+and multiline literals remain unsupported. See the
 [implemented slice](../implementation/first-slice.md#managed-strings-t015-1-through-t015-5).
 The rest of this chapter is the language contract for subsequent tasks.
 

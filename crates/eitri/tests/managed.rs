@@ -333,7 +333,7 @@ fn retained_strings_survive_runs_and_reject_stale_or_foreign_tokens() {
     impl eitri::Host for Retainer {
         fn call(&mut self, cx: &mut eitri::Call<'_, '_>, id: u32) -> Result<(), eitri::HostError> {
             if id == self.store {
-                self.value = cx.retain_string_arg(0);
+                self.value = cx.retain_string_arg(0)?;
             } else if id == self.load {
                 cx.set_result_retained_string(
                     0,
@@ -396,7 +396,7 @@ fn released_result_stays_rooted_during_host_reentry() {
     impl eitri::Host for Host {
         fn call(&mut self, cx: &mut eitri::Call<'_, '_>, id: u32) -> Result<(), eitri::HostError> {
             if id == self.store {
-                self.value = cx.retain_string_arg(0);
+                self.value = cx.retain_string_arg(0)?;
             } else if id == self.load {
                 let value = self.value.take().ok_or("missing retained string")?;
                 cx.set_result_retained_string(0, &value)?;
@@ -465,7 +465,7 @@ fn typed_reentry_roots_mixed_and_retained_arguments() {
     struct Callback;
     impl eitri::Host for Callback {
         fn call(&mut self, cx: &mut eitri::Call<'_, '_>, _: u32) -> Result<(), eitri::HostError> {
-            let retained = cx.retain_string_arg(0).ok_or("missing argument")?;
+            let retained = cx.retain_string_arg(0)?.ok_or("missing argument")?;
             let callback = cx.function("callback").ok_or("missing callback")?;
             let result = cx.call_values(
                 self,
@@ -528,7 +528,7 @@ fn typed_reentry_reports_signature_budget_depth_and_allocation_failures() {
         for expected in [
             eitri::FaultKind::Budget,
             eitri::FaultKind::Depth,
-            eitri::FaultKind::Memory,
+            eitri::FaultKind::OutOfMemory,
         ] {
             let mut context = Context::new();
             context.set_threaded(threaded);
@@ -539,7 +539,7 @@ fn typed_reentry_reports_signature_budget_depth_and_allocation_failures() {
             match expected {
                 eitri::FaultKind::Budget => context.set_budget(1),
                 eitri::FaultKind::Depth => context.set_depth(0),
-                eitri::FaultKind::Memory => context.set_heap_limit(0),
+                eitri::FaultKind::OutOfMemory => context.set_heap_limit(0),
                 _ => unreachable!(),
             }
             let compiled = context.compile(source).unwrap();
@@ -578,5 +578,49 @@ fn typed_reentry_returns_scalar_and_void_values() {
         let compiled = context.compile(source).unwrap();
         context.execute(&compiled, &mut Callback).unwrap();
         assert_eq!(context.managed_heap_bytes(), 0);
+    }
+}
+
+#[test]
+fn growing_string_faults_at_heap_limit_and_host_can_continue() {
+    let source = r#"
+import test from "test"
+var text = "a"
+var i = 0
+while i < 512 { text = text + "x"; i = i + 1; }
+test.emit(text.len())
+"#;
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.set_heap_limit(300);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            let fault = context.execute(&compiled, &mut host).unwrap_err();
+            assert_eq!(fault.message, "managed memory limit exceeded");
+            assert_eq!(fault.kind, Some(eitri::FaultKind::OutOfMemory));
+            assert_eq!(host.effects, "");
+            assert_eq!(context.managed_heap_bytes(), 0);
+            let safe = context
+                .compile("import test from \"test\"\ntest.emit(7)")
+                .unwrap();
+            context.execute(&safe, &mut host).unwrap();
+            assert_eq!(host.effects, "effect: test.emit(7)\n");
+        }
+    }
+}
+#[test]
+fn is_empty_rejects_non_strings_and_arguments() {
+    let mut context = eitri::Context::new();
+    for source in ["1.is_empty()", "\"\".is_empty(1)"] {
+        assert!(context.compile(source).is_err(), "{source} was accepted");
     }
 }

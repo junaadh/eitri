@@ -58,8 +58,9 @@ arguments are rooted while the host prepares the call and throughout nested
 execution; string results are copied out before the nested frame is released. Forced-collection tests run both interpreters.
 The managed-object byte limit counts object structures and string payloads;
 allocator overhead, handle tokens and tables, collection scratch, compiler
-storage and code are not yet covered. Collection is expected O(objects + roots), with hash-collision
-worst cases quadratic; reference lookup is expected O(1). Managed root
+storage and code are not yet covered. Collection marks directly through the heap index without temporary allocation;
+it is expected O(objects + roots), with hash-collision worst cases quadratic.
+Reference lookup is expected O(1). Managed root
 analysis currently holds per-instruction slot facts and liveness: O(I × F)
 scratch for I instructions and F frame slots. Its fixpoints can take
 O(I² × F²) work in the worst case, plus map deduplication up to O(S² × F/64)

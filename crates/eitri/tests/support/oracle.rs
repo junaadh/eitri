@@ -451,14 +451,24 @@ impl Eval<'_> {
                     self.binary_values(op, a, b, span)
                 }
             },
-            Expr::Call { callee, .. } if self.checked.resolutions[e] == Res::StringLen => {
+            Expr::Call { callee, .. }
+                if matches!(
+                    self.checked.resolutions[e],
+                    Res::StringLen | Res::StringIsEmpty
+                ) =>
+            {
                 let Expr::Member { base, .. } = self.ast.exprs[callee] else {
                     unreachable!()
                 };
                 let Value::String(index) = self.expr(host, base)? else {
                     unreachable!()
                 };
-                Ok(Value::Int(self.strings[index as usize].len() as i64))
+                let value = &self.strings[index as usize];
+                Ok(if self.checked.resolutions[e] == Res::StringIsEmpty {
+                    Value::Bool(value.is_empty())
+                } else {
+                    Value::Int(value.len() as i64)
+                })
             }
             Expr::Call { args, .. }
                 if matches!(self.checked.resolutions[e], Res::Convert { .. }) =>
@@ -518,9 +528,19 @@ impl Eval<'_> {
             })
     }
 
-    fn binary_values(&self, op: BinaryOp, a: Value, b: Value, span: Span) -> Flow<Value> {
+    fn binary_values(&mut self, op: BinaryOp, a: Value, b: Value, span: Span) -> Flow<Value> {
         use BinaryOp::*;
         let ty = a.ty();
+        if let (Value::String(left), Value::String(right)) = (a, b) {
+            assert_eq!(op, Add);
+            let text = format!(
+                "{}{}",
+                self.strings[left as usize], self.strings[right as usize]
+            );
+            let index = self.strings.len() as u32;
+            self.strings.push(text);
+            return Ok(Value::String(index));
+        }
         if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {
             let order = if ty.float() {
                 a.float().partial_cmp(&b.float())

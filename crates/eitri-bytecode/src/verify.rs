@@ -40,6 +40,7 @@ pub struct VerifyError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ErrorKind {
     Decode(DecodeError),
+    OutOfMemory,
     Unimplemented(Op),
     SlotOutsideFrame(u32),
     NoConstant(u32),
@@ -87,6 +88,7 @@ impl fmt::Display for VerifyError {
         write!(f, "pc {}: ", self.pc)?;
         match &self.kind {
             ErrorKind::Decode(e) => write!(f, "malformed instruction: {e:?}"),
+            ErrorKind::OutOfMemory => write!(f, "runtime memory limit exceeded"),
             ErrorKind::Unimplemented(op) => write!(f, "`{}` is not executable yet", op.name()),
             ErrorKind::SlotOutsideFrame(s) => write!(f, "slot r{s} is outside the frame"),
             ErrorKind::NoConstant(i) => write!(f, "no constant k{i}"),
@@ -172,10 +174,19 @@ impl Slot {
 }
 
 pub fn verify(function: &Function, callees: &Callees<'_>) -> Result<(), VerifyError> {
-    let insns = structure(function, callees)?;
-    root_structure(function)?;
+    verify_budgeted(function, callees, &mut None)
+}
+
+/// Verify with fallible, context-budgeted scratch allocations.
+pub fn verify_budgeted(
+    function: &Function,
+    callees: &Callees<'_>,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), VerifyError> {
+    let insns = structure(function, callees, memory)?;
+    root_structure(function, memory)?;
     required_roots(function, &insns)?;
-    types(function, callees, &insns)?;
+    types(function, callees, &insns, memory)?;
     let managed = !function.strings.is_empty()
         || function
             .signature
@@ -192,7 +203,7 @@ pub fn verify(function: &Function, callees: &Callees<'_>) -> Result<(), VerifyEr
             })
         });
     if managed {
-        let expected = string_roots(function, callees)?;
+        let expected = string_roots_budgeted(function, callees, memory)?;
         let check = |actual: crate::RootMapId,
                      needed: crate::RootMapId,
                      pc|
@@ -223,7 +234,11 @@ pub fn verify(function: &Function, callees: &Callees<'_>) -> Result<(), VerifyEr
             check(actual.suspended.map, needed.suspended.map, 0)?;
             check(actual.post.map, needed.post.map, 0)?;
         }
+        if let Some(budget) = memory {
+            budget.release(expected.heap_bytes());
+        }
     }
+    release_memory(&insns, memory);
     Ok(())
 }
 
@@ -231,7 +246,10 @@ pub fn verify(function: &Function, callees: &Callees<'_>) -> Result<(), VerifyEr
 /// spans), expected time using a hash set, and O(dynamic slots) scratch per
 /// map. No instruction-by-frame matrix is built. Facts and coverage are not
 /// checked here; that is a separate verifier obligation.
-fn root_structure(function: &Function) -> Result<(), VerifyError> {
+fn root_structure(
+    function: &Function,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), VerifyError> {
     let roots = &function.roots;
     let frame = function.frame_size;
     let check_id = |id: crate::RootMapId, pc| {
@@ -275,7 +293,11 @@ fn root_structure(function: &Function) -> Result<(), VerifyError> {
                 ));
             }
         }
-        let mut used = eitri_base::FxHashSet::default();
+        let mut used = if map.dynamic.is_empty() {
+            Vec::new()
+        } else {
+            filled_memory(frame as usize, false, memory)?
+        };
         for &(type_slot, payload_slot) in &map.dynamic {
             for slot in [type_slot, payload_slot] {
                 if slot >= frame {
@@ -285,11 +307,13 @@ fn root_structure(function: &Function) -> Result<(), VerifyError> {
                     .ordinary
                     .get(slot as usize / 64)
                     .is_some_and(|word| word & (1u64 << (slot % 64)) != 0);
-                if ordinary || !used.insert(slot) {
+                if ordinary || used[slot as usize] {
                     return Err(error(0, ErrorKind::DynamicRootsOverlap(slot)));
                 }
+                used[slot as usize] = true;
             }
         }
+        release_memory(&used, memory);
     }
     for map in &roots.maps {
         for recipe in &map.guarded {
@@ -503,55 +527,156 @@ fn branch_target(insn: &Insn) -> Option<i64> {
     Some(end + disp)
 }
 
-/// Compute backwards slot liveness and forward type facts over the CFG.
-/// Scratch is O(instructions * frame); fixpoint work is bounded by the
-/// finite slot sets and CFG edges. Unreachable instructions have empty maps.
+/// Build managed roots with fallible temporary and output allocations.
 pub fn string_roots(
     function: &Function,
     callees: &Callees<'_>,
 ) -> Result<crate::FunctionRoots, VerifyError> {
-    let insns = structure(function, callees)?;
+    string_roots_budgeted(function, callees, &mut None)
+}
+
+fn reserve_memory<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), VerifyError> {
+    if let Some(budget) = memory {
+        budget
+            .reserve_vec(values, additional)
+            .map_err(|_| error(0, ErrorKind::OutOfMemory))
+    } else {
+        values
+            .try_reserve_exact(additional)
+            .map_err(|_| error(0, ErrorKind::OutOfMemory))
+    }
+}
+
+fn filled_memory<T: Clone>(
+    length: usize,
+    value: T,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<Vec<T>, VerifyError> {
+    let mut values = Vec::new();
+    reserve_memory(&mut values, length, memory)?;
+    values.resize(length, value);
+    Ok(values)
+}
+
+fn release_memory<T>(values: &Vec<T>, memory: &mut Option<eitri_base::MemoryBudget>) {
+    if let Some(budget) = memory {
+        budget.release(values.capacity() * size_of::<T>());
+    }
+}
+
+fn push_memory<T>(
+    values: &mut Vec<T>,
+    value: T,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), VerifyError> {
+    if values.len() == values.capacity() {
+        let target = values.capacity().saturating_mul(2).max(4);
+        reserve_memory(values, target.saturating_sub(values.len()), memory)?;
+    }
+    values.push(value);
+    Ok(())
+}
+
+fn intern_live_state(
+    roots: &mut crate::FunctionRoots,
+    state: &[Slot],
+    live: &[bool],
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<crate::RootState, VerifyError> {
+    let last = state
+        .iter()
+        .zip(live)
+        .rposition(|(&ty, &live)| live && ty == Slot::Ty(ValueType::String));
+    let words = last.map_or(0, |slot| slot / 64 + 1);
+    let mut ordinary = filled_memory(words, 0u64, memory)?;
+    for (slot, (&ty, &live)) in state.iter().zip(live).enumerate() {
+        if live && ty == Slot::Ty(ValueType::String) {
+            ordinary[slot / 64] |= 1 << (slot % 64);
+        }
+    }
+    let map = crate::RootMap {
+        ordinary,
+        dynamic: Vec::new(),
+        guarded: Vec::new(),
+    };
+    let id = if let Some(id) = roots.maps.iter().position(|old| *old == map) {
+        release_memory(&map.ordinary, memory);
+        id
+    } else {
+        push_memory(&mut roots.maps, map, memory)?;
+        roots.maps.len() - 1
+    };
+    Ok(crate::RootState {
+        map: crate::RootMapId(id as u32),
+        initialized: Vec::new(),
+    })
+}
+
+/// CFG liveness uses O(instructions × frame) scratch; each allocation is
+/// reserved before growth. Root output remains charged to `memory` on success.
+pub fn string_roots_budgeted(
+    function: &Function,
+    callees: &Callees<'_>,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<crate::FunctionRoots, VerifyError> {
+    let insns = structure(function, callees, memory)?;
     let n = insns.len();
     let frame = function.frame_size as usize;
-    let mut index = vec![0; function.code.len()];
+    let cells = n
+        .checked_mul(frame)
+        .ok_or_else(|| error(0, ErrorKind::OutOfMemory))?;
+    let mut index = filled_memory(function.code.len(), 0usize, memory)?;
     for (i, insn) in insns.iter().enumerate() {
         index[insn.pc as usize] = i;
     }
     let successors = |i: usize| {
         let insn = &insns[i];
-        let fall = (!insn.decoded.op.info().effects.contains(END)).then_some(i + 1);
-        [fall, branch_target(insn).map(|pc| index[pc as usize])]
+        [
+            (!insn.decoded.op.info().effects.contains(END)).then_some(i + 1),
+            branch_target(insn).map(|pc| index[pc as usize]),
+        ]
     };
-    let mut states: Vec<Option<Vec<Slot>>> = vec![None; n];
-    let mut entry = vec![Slot::Uninit; frame];
+    let mut states = filled_memory(cells, Slot::Uninit, memory)?;
+    let mut reachable = filled_memory(n, false, memory)?;
+    let mut queued = filled_memory(n, false, memory)?;
+    let mut state = filled_memory(frame, Slot::Uninit, memory)?;
+    let mut work = Vec::new();
+    reserve_memory(&mut work, n, memory)?;
     for (i, &ty) in function.signature.params.iter().enumerate() {
-        entry[function.signature.param_base() as usize + i] = Slot::Ty(ty);
+        states[function.signature.param_base() as usize + i] = Slot::Ty(ty);
     }
-    states[0] = Some(entry);
-    let mut work = vec![0];
+    reachable[0] = true;
+    queued[0] = true;
+    work.push(0usize);
     while let Some(i) = work.pop() {
-        let mut state = states[i].clone().expect("reachable");
+        queued[i] = false;
+        state.copy_from_slice(&states[i * frame..(i + 1) * frame]);
         transfer(function, callees, &insns[i], &mut state)?;
         for j in successors(i).into_iter().flatten() {
-            let changed = if let Some(old) = &mut states[j] {
-                let mut changed = false;
-                for (a, &b) in old.iter_mut().zip(&state) {
-                    let joined = a.join(b);
-                    changed |= *a != joined;
-                    *a = joined;
+            let row = &mut states[j * frame..(j + 1) * frame];
+            let mut changed = !reachable[j];
+            if reachable[j] {
+                for (old, &new) in row.iter_mut().zip(&state) {
+                    let joined = old.join(new);
+                    changed |= joined != *old;
+                    *old = joined;
                 }
-                changed
             } else {
-                states[j] = Some(state.clone());
-                true
-            };
-            if changed {
+                row.copy_from_slice(&state);
+                reachable[j] = true;
+            }
+            if changed && !queued[j] {
+                queued[j] = true;
                 work.push(j);
             }
         }
     }
-    let mut uses = vec![vec![false; frame]; n];
-    let mut defs = vec![vec![false; frame]; n];
+    let mut uses = filled_memory(cells, false, memory)?;
+    let mut defs = filled_memory(cells, false, memory)?;
     for (i, insn) in insns.iter().enumerate() {
         for (role, value) in insn
             .decoded
@@ -562,11 +687,11 @@ pub fn string_roots(
             .zip(columns(&insn.decoded))
         {
             match role {
-                Role::Src => uses[i][value as usize] = true,
-                Role::Dst => defs[i][value as usize] = true,
+                Role::Src => uses[i * frame + value as usize] = true,
+                Role::Dst => defs[i * frame + value as usize] = true,
                 Role::SrcDst => {
-                    uses[i][value as usize] = true;
-                    defs[i][value as usize] = true;
+                    uses[i * frame + value as usize] = true;
+                    defs[i * frame + value as usize] = true;
                 }
                 _ => {}
             }
@@ -575,122 +700,142 @@ pub fn string_roots(
             Sem::Call(_) => {
                 let site = function.sites[insn.decoded.operands.b as usize];
                 for slot in site.args.slots() {
-                    uses[i][slot as usize] = true;
+                    uses[i * frame + slot as usize] = true;
                 }
                 for slot in site.result.slots() {
-                    defs[i][slot as usize] = true;
+                    defs[i * frame + slot as usize] = true;
                 }
             }
-            Sem::Return => {
-                uses[i][..function.signature.results.len()].fill(true);
-            }
+            Sem::Return => uses[i * frame..i * frame + function.signature.results.len()].fill(true),
             _ => {}
         }
     }
-    let mut live_in = vec![vec![false; frame]; n];
-    let mut live_out = live_in.clone();
+    let mut live_in = filled_memory(cells, false, memory)?;
+    let mut live_out = filled_memory(cells, false, memory)?;
     loop {
         let mut changed = false;
         for i in (0..n).rev() {
-            if states[i].is_none() {
+            if !reachable[i] {
                 continue;
             }
             for slot in 0..frame {
+                let at = i * frame + slot;
                 let out = successors(i)
                     .into_iter()
                     .flatten()
-                    .any(|j| live_in[j][slot]);
-                let input = uses[i][slot] || (out && !defs[i][slot]);
-                changed |= live_out[i][slot] != out || live_in[i][slot] != input;
-                live_out[i][slot] = out;
-                live_in[i][slot] = input;
+                    .any(|j| live_in[j * frame + slot]);
+                let input = uses[at] || (out && !defs[at]);
+                changed |= live_out[at] != out || live_in[at] != input;
+                live_out[at] = out;
+                live_in[at] = input;
             }
         }
         if !changed {
             break;
         }
     }
-    let mut roots = crate::FunctionRoots::scalar(function.sites.len());
-    let mut make_state = |state: &[Slot], live: &[bool]| {
-        let mut map = crate::RootMap::default();
-        for (slot, (&ty, &live)) in state.iter().zip(live).enumerate() {
-            if live && ty == Slot::Ty(ValueType::String) {
-                map.ordinary.resize(slot / 64 + 1, 0);
-                map.ordinary[slot / 64] |= 1 << (slot % 64);
-            }
-        }
-        let id = roots
-            .maps
-            .iter()
-            .position(|old| *old == map)
-            .unwrap_or_else(|| {
-                roots.maps.push(map);
-                roots.maps.len() - 1
-            });
-        crate::RootState {
-            map: crate::RootMapId(id as u32),
-            initialized: Vec::new(),
-        }
+    let empty = crate::RootState {
+        map: crate::RootMapId(0),
+        initialized: Vec::new(),
     };
-    let entry_map = make_state(states[0].as_ref().unwrap(), &live_in[0]).map;
-    let mut points = Vec::new();
-    let mut calls = crate::FunctionRoots::scalar(function.sites.len()).calls;
+    let mut maps = Vec::new();
+    push_memory(&mut maps, crate::RootMap::default(), memory)?;
+    let mut calls = Vec::new();
+    reserve_memory(&mut calls, function.sites.len(), memory)?;
+    calls.resize(
+        function.sites.len(),
+        crate::CallRoots {
+            pre: empty.clone(),
+            suspended: empty.clone(),
+            post: empty.clone(),
+        },
+    );
+    let mut safepoints = Vec::new();
+    let count = insns
+        .iter()
+        .filter(|insn| needs_safepoint(insn.pc, &insn.decoded))
+        .count();
+    reserve_memory(&mut safepoints, count, memory)?;
+    let mut roots = crate::FunctionRoots {
+        entry: crate::RootMapId(0),
+        maps,
+        safepoints,
+        calls,
+    };
+    roots.entry = intern_live_state(&mut roots, &states[..frame], &live_in[..frame], memory)?.map;
+    let mut suspended = filled_memory(frame, false, memory)?;
+    let mut after = filled_memory(frame, Slot::Uninit, memory)?;
     for (i, insn) in insns.iter().enumerate() {
-        let Some(state) = &states[i] else { continue };
+        let row = i * frame..(i + 1) * frame;
         if needs_safepoint(insn.pc, &insn.decoded) {
-            points.push((crate::SafepointPc(insn.pc), make_state(state, &live_in[i])));
+            let point = if reachable[i] {
+                intern_live_state(
+                    &mut roots,
+                    &states[row.clone()],
+                    &live_in[row.clone()],
+                    memory,
+                )?
+            } else {
+                empty.clone()
+            };
+            roots.safepoints.push((crate::SafepointPc(insn.pc), point));
         }
-        if matches!(insn.decoded.op.info().sem, Sem::Call(_)) {
-            let mut suspended = live_out[i].clone();
+        if reachable[i] && matches!(insn.decoded.op.info().sem, Sem::Call(_)) {
             for slot in 0..frame {
-                suspended[slot] &= !defs[i][slot];
+                suspended[slot] = live_out[i * frame + slot] && !defs[i * frame + slot];
             }
-            // Host argument views can be fetched again after reentry.
             let site = function.sites[insn.decoded.operands.b as usize];
             if matches!(site.target, CallTarget::Host(_)) {
                 for slot in site.args.slots() {
                     suspended[slot as usize] = true;
                 }
             }
-            let mut after = state.clone();
+            after.copy_from_slice(&states[row.clone()]);
             transfer(function, callees, insn, &mut after)?;
-            calls[insn.decoded.operands.b as usize] = crate::CallRoots {
-                pre: make_state(state, &live_in[i]),
-                suspended: make_state(state, &suspended),
-                post: make_state(&after, &live_out[i]),
+            let pre = intern_live_state(
+                &mut roots,
+                &states[row.clone()],
+                &live_in[row.clone()],
+                memory,
+            )?;
+            let during = intern_live_state(&mut roots, &states[row.clone()], &suspended, memory)?;
+            let post = intern_live_state(&mut roots, &after, &live_out[row], memory)?;
+            roots.calls[insn.decoded.operands.b as usize] = crate::CallRoots {
+                pre,
+                suspended: during,
+                post,
             };
         }
     }
-    // Include unreachable safepoints, which still need structural metadata.
-    let mut points_iter = points.into_iter().peekable();
-    let mut all_points = Vec::new();
-    for insn in &insns {
-        if needs_safepoint(insn.pc, &insn.decoded) {
-            let state = if points_iter.peek().is_some_and(|(pc, _)| pc.0 == insn.pc) {
-                points_iter.next().unwrap().1
-            } else {
-                crate::RootState {
-                    map: crate::RootMapId(0),
-                    initialized: Vec::new(),
-                }
-            };
-            all_points.push((crate::SafepointPc(insn.pc), state));
-        }
-    }
-    roots.entry = entry_map;
-    roots.safepoints = all_points;
-    roots.calls = calls;
+    release_memory(&suspended, memory);
+    release_memory(&after, memory);
+    release_memory(&live_in, memory);
+    release_memory(&live_out, memory);
+    release_memory(&uses, memory);
+    release_memory(&defs, memory);
+    release_memory(&work, memory);
+    release_memory(&state, memory);
+    release_memory(&reachable, memory);
+    release_memory(&queued, memory);
+    release_memory(&states, memory);
+    release_memory(&index, memory);
+    release_memory(&insns, memory);
     Ok(roots)
 }
 
-fn structure(function: &Function, callees: &Callees<'_>) -> Result<Vec<Insn>, VerifyError> {
+fn structure(
+    function: &Function,
+    callees: &Callees<'_>,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<Vec<Insn>, VerifyError> {
     let code = &function.code;
     let signature = &function.signature;
     if (function.frame_size as usize) < signature.results.len() + signature.params.len() {
         return Err(error(0, ErrorKind::FrameTooSmall));
     }
     let mut insns = Vec::new();
-    let mut starts = vec![0u64; code.len().div_ceil(64)];
+    reserve_memory(&mut insns, code.len(), memory)?;
+    let mut starts = filled_memory(code.len().div_ceil(64), 0u64, memory)?;
     let mut pc = 0usize;
     while pc < code.len() {
         let at = pc as u32;
@@ -743,6 +888,7 @@ fn structure(function: &Function, callees: &Callees<'_>) -> Result<Vec<Insn>, Ve
             }
         }
     }
+    release_memory(&starts, memory);
     Ok(insns)
 }
 
@@ -791,7 +937,12 @@ fn check_site(
 /// through the block, so memory is O(blocks × frame) rather than
 /// O(instructions × frame): a function naming a high slot costs one frame
 /// per block, not one per instruction.
-fn types(function: &Function, callees: &Callees<'_>, insns: &[Insn]) -> Result<(), VerifyError> {
+fn types(
+    function: &Function,
+    callees: &Callees<'_>,
+    insns: &[Insn],
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), VerifyError> {
     let frame = function.frame_size as usize;
     let successors = |insn: &Insn| {
         let info = insn.decoded.op.info();
@@ -801,8 +952,8 @@ fn types(function: &Function, callees: &Callees<'_>, insns: &[Insn]) -> Result<(
     };
     // Blocks start at the entry, at branch targets, and after a branch or
     // an instruction that ends execution.
-    let mut leader = vec![false; insns.len()];
-    let mut index_of = vec![u32::MAX; function.code.len()];
+    let mut leader = filled_memory(insns.len(), false, memory)?;
+    let mut index_of = filled_memory(function.code.len(), u32::MAX, memory)?;
     for (i, insn) in insns.iter().enumerate() {
         index_of[insn.pc as usize] = i as u32;
     }
@@ -816,50 +967,57 @@ fn types(function: &Function, callees: &Callees<'_>, insns: &[Insn]) -> Result<(
             leader[i + 1] = true;
         }
     }
-    let mut block_of = vec![0u32; insns.len()];
+    let mut block_of = filled_memory(insns.len(), 0u32, memory)?;
     let mut starts = Vec::new();
+    reserve_memory(
+        &mut starts,
+        leader.iter().filter(|&&leader| leader).count(),
+        memory,
+    )?;
     for (i, &is_leader) in leader.iter().enumerate() {
         if is_leader {
             starts.push(i);
         }
         block_of[i] = starts.len() as u32 - 1;
     }
-    let mut entry = vec![Slot::Uninit; frame];
+    let cells = starts
+        .len()
+        .checked_mul(frame)
+        .ok_or_else(|| error(0, ErrorKind::OutOfMemory))?;
+    let mut states = filled_memory(cells, Slot::Uninit, memory)?;
+    let mut reachable = filled_memory(starts.len(), false, memory)?;
     let base = function.signature.param_base() as usize;
     for (i, &ty) in function.signature.params.iter().enumerate() {
-        entry[base + i] = Slot::Ty(ty);
+        states[base + i] = Slot::Ty(ty);
     }
-    let mut states: Vec<Option<Vec<Slot>>> = vec![None; starts.len()];
-    states[0] = Some(entry);
-    let mut work = vec![0usize];
-    let mut queued = vec![false; starts.len()];
+    reachable[0] = true;
+    let mut work = Vec::new();
+    reserve_memory(&mut work, starts.len(), memory)?;
+    work.push(0usize);
+    let mut queued = filled_memory(starts.len(), false, memory)?;
     queued[0] = true;
-    let mut state = Vec::with_capacity(frame);
+    let mut state = filled_memory(frame, Slot::Uninit, memory)?;
     while let Some(b) = work.pop() {
         queued[b] = false;
-        state.clear();
-        state.extend_from_slice(states[b].as_ref().expect("queued states exist"));
+        state.copy_from_slice(&states[b * frame..(b + 1) * frame]);
         let end = starts.get(b + 1).copied().unwrap_or(insns.len());
         for insn in &insns[starts[b]..end] {
             transfer(function, callees, insn, &mut state)?;
         }
         for next in successors(&insns[end - 1]).into_iter().flatten() {
             let j = block_of[index_of[next] as usize] as usize;
-            let changed = match &mut states[j] {
-                Some(existing) => {
-                    let mut changed = false;
-                    for (old, &new) in existing.iter_mut().zip(&state) {
-                        let joined = old.join(new);
-                        changed |= joined != *old;
-                        *old = joined;
-                    }
-                    changed
+            let row = &mut states[j * frame..(j + 1) * frame];
+            let mut changed = !reachable[j];
+            if reachable[j] {
+                for (old, &new) in row.iter_mut().zip(&state) {
+                    let joined = old.join(new);
+                    changed |= joined != *old;
+                    *old = joined;
                 }
-                empty => {
-                    *empty = Some(state.clone());
-                    true
-                }
-            };
+            } else {
+                row.copy_from_slice(&state);
+                reachable[j] = true;
+            }
             if changed && !queued[j] {
                 queued[j] = true;
                 work.push(j);
@@ -880,17 +1038,18 @@ fn types(function: &Function, callees: &Callees<'_>, insns: &[Insn]) -> Result<(
         .map_err(|kind| error(pc, kind))
     };
     scalar_root_state(
-        states[0].as_ref().expect("entry reachable"),
+        &states[..frame],
         map(roots.entry),
         &[],
         !function.strings.is_empty(),
     )
     .map_err(|kind| error(0, kind))?;
     let mut points = roots.safepoints.iter().peekable();
-    for (b, initial) in states.iter().enumerate() {
-        let Some(initial) = initial else { continue };
-        state.clear();
-        state.extend_from_slice(initial);
+    for b in 0..starts.len() {
+        if !reachable[b] {
+            continue;
+        }
+        state.copy_from_slice(&states[b * frame..(b + 1) * frame]);
         let end = starts.get(b + 1).copied().unwrap_or(insns.len());
         for insn in &insns[starts[b]..end] {
             while points.peek().is_some_and(|(pc, _)| pc.0 < insn.pc) {
@@ -915,6 +1074,15 @@ fn types(function: &Function, callees: &Callees<'_>, insns: &[Insn]) -> Result<(
             }
         }
     }
+    release_memory(&leader, memory);
+    release_memory(&index_of, memory);
+    release_memory(&block_of, memory);
+    release_memory(&starts, memory);
+    release_memory(&states, memory);
+    release_memory(&reachable, memory);
+    release_memory(&work, memory);
+    release_memory(&queued, memory);
+    release_memory(&state, memory);
     Ok(())
 }
 
@@ -958,6 +1126,11 @@ fn transfer(
         Sem::StringLen => {
             read(state, pc, b, Some(ValueType::String))?;
             write(state, a, I64);
+        }
+        Sem::StringConcat => {
+            read(state, pc, b, Some(ValueType::String))?;
+            read(state, pc, c, Some(ValueType::String))?;
+            write(state, a, ValueType::String);
         }
         Sem::Move => {
             let ty = read(state, pc, b, None)?;

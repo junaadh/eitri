@@ -101,6 +101,21 @@ impl<T> ListPool<T> {
         }
     }
 
+    /// Backing allocation in bytes, excluding allocator bookkeeping.
+    pub fn heap_bytes(&self) -> usize {
+        self.items.capacity() * size_of::<T>()
+    }
+
+    /// Reserve a total number of items using an explicit budget.
+    pub fn reserve_budgeted(
+        &mut self,
+        total: usize,
+        budget: &mut crate::MemoryBudget,
+    ) -> Result<(), crate::OutOfMemory> {
+        let additional = total.saturating_sub(self.items.len());
+        budget.reserve_vec(&mut self.items, additional)
+    }
+
     /// Total items across all lists, for memory accounting.
     pub fn item_count(&self) -> usize {
         self.items.len()

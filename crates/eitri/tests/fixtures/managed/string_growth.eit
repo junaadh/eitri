@@ -1,0 +1,6 @@
+//! host: test
+import test from "test"
+var text = "a"
+var i = 0
+while i < 4 { text = text + "x"; i = i + 1; }
+test.emit(text.len())

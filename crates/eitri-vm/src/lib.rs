@@ -32,6 +32,7 @@
 //! guarantees well-typed code; the interpreter does not re-check types.
 
 #![feature(
+    allocator_ext,
     explicit_tail_calls,
     rust_preserve_none_cc,
     core_intrinsics,
@@ -59,7 +60,7 @@ pub enum FaultKind {
     Conversion,
     Budget,
     Depth,
-    Memory,
+    OutOfMemory,
     /// Raised by a host function, with its message.
     Host(String),
 }
@@ -86,7 +87,7 @@ impl FaultKind {
             FaultKind::Conversion => "numeric conversion out of range",
             FaultKind::Budget => "execution budget exhausted",
             FaultKind::Depth => "call depth exceeded",
-            FaultKind::Memory => "managed memory limit exceeded",
+            FaultKind::OutOfMemory => "managed memory limit exceeded",
             FaultKind::Host(message) => message,
         }
     }
@@ -126,6 +127,15 @@ pub enum HostError {
     /// A fault from a nested run, propagated: the run stops with it, its
     /// trace continued through the host function.
     Fault(Fault),
+}
+
+impl From<FaultKind> for HostError {
+    fn from(kind: FaultKind) -> Self {
+        HostError::Fault(Fault {
+            kind,
+            trace: Vec::new(),
+        })
+    }
 }
 
 impl From<String> for HostError {
@@ -209,6 +219,7 @@ struct Machine<'a> {
     references: &'a mut Vec<Option<heap::HeapRef>>,
     host_roots: &'a mut Vec<heap::HeapRef>,
     host_signatures: &'a [eitri_bytecode::Signature],
+    memory: &'a mut Option<eitri_base::MemoryBudget>,
     force_gc: bool,
     memory_limit: usize,
     budget: u64,
@@ -336,53 +347,63 @@ impl<'c> Call<'c, '_> {
             collect_at(
                 m.heap,
                 m.references,
-                (m.host_roots, m.frames),
+                (m.host_roots, m.frames, m.memory),
                 m.functions,
                 self.caller.function,
                 self.caller.base,
                 self.caller.call_pc as usize,
-            );
+            )?;
         }
-        let mut result = m.heap.alloc_string(value, m.memory_limit);
+        let mut result = m.heap.alloc_string(value, m.memory_limit, m.memory);
         if result.is_err() {
             collect_at(
                 m.heap,
                 m.references,
-                (m.host_roots, m.frames),
+                (m.host_roots, m.frames, m.memory),
                 m.functions,
                 self.caller.function,
                 self.caller.base,
                 self.caller.call_pc as usize,
-            );
-            result = m.heap.alloc_string(value, m.memory_limit);
+            )?;
+            result = m.heap.alloc_string(value, m.memory_limit, m.memory);
         }
         let reference = result.map_err(|_| {
             HostError::Fault(Fault {
-                kind: FaultKind::Memory,
+                kind: FaultKind::OutOfMemory,
                 trace: Vec::new(),
             })
         })?;
-        m.host_roots.push(reference);
-        m.references
-            .resize(m.references.len().max(self.results.end() as usize), None);
+        push_vm(m.host_roots, reference, m.memory)?;
+        let length = m.references.len().max(self.results.end() as usize);
+        resize_vm(m.references, length, None, m.memory)?;
         m.references[self.results.first as usize + index] = Some(reference);
         Ok(())
     }
 
     /// Keep a string argument alive across this call and future executions.
     /// Release the returned token through this context when finished.
-    pub fn retain_string_arg(&mut self, index: usize) -> Option<RetainedString> {
+    pub fn retain_string_arg(&mut self, index: usize) -> Result<Option<RetainedString>, HostError> {
         let m = &mut *self.machine;
         if m.host_signatures
-            .get(self.host_index as usize)?
-            .params
-            .get(index)
+            .get(self.host_index as usize)
+            .and_then(|s| s.params.get(index))
             != Some(&eitri_bytecode::ValueType::String)
         {
-            return None;
+            return Ok(None);
         }
-        let reference = (*m.references.get(self.args.first as usize + index)?)?;
-        Some(m.heap.retain_string(reference))
+        let Some(reference) = m
+            .references
+            .get(self.args.first as usize + index)
+            .copied()
+            .flatten()
+        else {
+            return Ok(None);
+        };
+        let retained = m
+            .heap
+            .retain_string(reference, m.memory)
+            .map_err(|_| HostError::from(FaultKind::OutOfMemory))?;
+        Ok(Some(retained))
     }
 
     /// Return a previously retained string without copying its contents.
@@ -406,9 +427,9 @@ impl<'c> Call<'c, '_> {
             .retained_string(handle)
             .ok_or("invalid retained string")?;
         // Keep the result alive even if the host releases the token before return.
-        m.host_roots.push(reference);
-        m.references
-            .resize(m.references.len().max(self.results.end() as usize), None);
+        push_vm(m.host_roots, reference, m.memory)?;
+        let length = m.references.len().max(self.results.end() as usize);
+        resize_vm(m.references, length, None, m.memory)?;
         m.references[self.results.first as usize + index] = Some(reference);
         Ok(())
     }
@@ -436,22 +457,22 @@ impl<'c> Call<'c, '_> {
         Ok(())
     }
 
-    fn prepare_host(&mut self) {
+    fn prepare_host(&mut self) -> Result<(), HostError> {
         if self
             .machine
             .host_signatures
             .get(self.host_index as usize)
             .is_some_and(|s| s.results.contains(&eitri_bytecode::ValueType::String))
         {
-            self.machine.references.resize(
-                self.machine
-                    .references
-                    .len()
-                    .max(self.results.end() as usize),
-                None,
-            );
+            let length = self
+                .machine
+                .references
+                .len()
+                .max(self.results.end() as usize);
+            resize_vm(self.machine.references, length, None, self.machine.memory)?;
             self.machine.references[self.results.slots_usize()].fill(None);
         }
+        Ok(())
     }
 
     /// The script function named `name`, if the program has one, for this
@@ -517,11 +538,17 @@ impl<'c> Call<'c, '_> {
         let base = self.top;
         let end = base + callee.frame_size as usize;
         if m.slots.len() < end {
-            m.slots.resize(end, 0);
+            resize_vm(m.slots, end, 0, m.memory).map_err(|kind| Fault {
+                kind,
+                trace: Vec::new(),
+            })?;
         }
         let first = base + signature.param_base() as usize;
         m.slots[first..first + args.len()].copy_from_slice(args);
-        m.frames.push(self.caller);
+        push_vm(m.frames, self.caller, m.memory).map_err(|kind| Fault {
+            kind,
+            trace: Vec::new(),
+        })?;
         let floor = m.frames.len();
         m.nesting += 1;
         let outcome = if m.threaded {
@@ -583,12 +610,13 @@ impl<'c> Call<'c, '_> {
         let base = self.top;
         let end = base + callee.frame_size as usize;
         if m.slots.len() < end {
-            m.slots.resize(end, 0);
+            resize_vm(m.slots, end, 0, m.memory).map_err(fail)?;
         }
         if signature.params.contains(&ValueType::String)
             || signature.results.contains(&ValueType::String)
         {
-            m.references.resize(m.references.len().max(end), None);
+            let length = m.references.len().max(end);
+            resize_vm(m.references, length, None, m.memory).map_err(fail)?;
         }
         let first = base + signature.param_base() as usize;
         let root_floor = m.host_roots.len();
@@ -599,40 +627,42 @@ impl<'c> Call<'c, '_> {
                     ReentryArg::RetainedString(handle) => {
                         let value = m.heap.retained_string(handle).expect("validated handle");
                         m.references[first + i] = Some(value);
-                        m.host_roots.push(value);
+                        push_vm(m.host_roots, value, m.memory).map_err(fail)?;
                     }
                     ReentryArg::String(text) => {
                         if m.force_gc {
                             collect_at(
                                 m.heap,
                                 m.references,
-                                (m.host_roots, m.frames),
+                                (m.host_roots, m.frames, m.memory),
                                 m.functions,
                                 self.caller.function,
                                 self.caller.base,
                                 self.caller.call_pc as usize,
-                            );
+                            )
+                            .map_err(fail)?;
                         }
-                        let mut value = m.heap.alloc_string(text, m.memory_limit);
+                        let mut value = m.heap.alloc_string(text, m.memory_limit, m.memory);
                         if value.is_err() {
                             collect_at(
                                 m.heap,
                                 m.references,
-                                (m.host_roots, m.frames),
+                                (m.host_roots, m.frames, m.memory),
                                 m.functions,
                                 self.caller.function,
                                 self.caller.base,
                                 self.caller.call_pc as usize,
-                            );
-                            value = m.heap.alloc_string(text, m.memory_limit);
+                            )
+                            .map_err(fail)?;
+                            value = m.heap.alloc_string(text, m.memory_limit, m.memory);
                         }
-                        let value = value.map_err(|_| fail(FaultKind::Memory))?;
+                        let value = value.map_err(|_| fail(FaultKind::OutOfMemory))?;
                         m.references[first + i] = Some(value);
-                        m.host_roots.push(value);
+                        push_vm(m.host_roots, value, m.memory).map_err(fail)?;
                     }
                 }
             }
-            m.frames.push(self.caller);
+            push_vm(m.frames, self.caller, m.memory).map_err(fail)?;
             let floor = m.frames.len();
             m.nesting += 1;
             let result = if m.threaded {
@@ -647,12 +677,13 @@ impl<'c> Call<'c, '_> {
                 None => ReentryValue::Void,
                 Some(ValueType::String) => {
                     let reference = m.references[base].expect("verified string result");
-                    ReentryValue::String(
-                        m.heap
-                            .string(reference)
-                            .expect("live string result")
-                            .to_owned(),
-                    )
+                    let text = m.heap.string(reference).expect("live string result");
+                    let mut result = String::new();
+                    result
+                        .try_reserve_exact(text.len())
+                        .map_err(|_| fail(FaultKind::OutOfMemory))?;
+                    result.push_str(text);
+                    ReentryValue::String(result)
                 }
                 Some(_) => ReentryValue::Scalar(m.slots[base]),
             })
@@ -702,6 +733,7 @@ pub struct VmScratch {
     references: Vec<Option<heap::HeapRef>>,
     host_roots: Vec<heap::HeapRef>,
     host_signatures: Vec<eitri_bytecode::Signature>,
+    memory: Option<eitri_base::MemoryBudget>,
     heap: heap::Heap,
     force_gc: bool,
     memory_limit: usize,
@@ -715,6 +747,7 @@ impl Default for VmScratch {
             references: Vec::new(),
             host_roots: Vec::new(),
             host_signatures: Vec::new(),
+            memory: None,
             heap: heap::Heap::default(),
             force_gc: false,
             memory_limit: usize::MAX,
@@ -740,6 +773,12 @@ impl VmScratch {
         self.host_signatures = signatures;
     }
 
+    /// Install the operation's explicit full-runtime budget. Existing
+    /// retained VM storage and the active artifact must already be charged.
+    pub fn set_runtime_budget(&mut self, budget: Option<eitri_base::MemoryBudget>) {
+        self.memory = budget;
+    }
+
     /// Collect at each execution safepoint when managed execution is enabled.
     pub fn set_force_gc(&mut self, enabled: bool) {
         self.force_gc = enabled;
@@ -753,6 +792,14 @@ impl VmScratch {
 
     pub fn managed_heap_bytes(&self) -> usize {
         self.heap.bytes()
+    }
+
+    /// Retained VM storage with a conservative heap-index charge.
+    pub fn budget_bytes(&self) -> Result<usize, eitri_base::OutOfMemory> {
+        self.heap_bytes()
+            .checked_sub(self.heap.bytes() + self.heap.retained_metadata_bytes())
+            .and_then(|n| n.checked_add(self.heap.budget_bytes().ok()?))
+            .ok_or(eitri_base::OutOfMemory)
     }
 
     /// Heap bytes retained, for scratch high-water accounting.
@@ -775,6 +822,98 @@ impl VmScratch {
     }
 }
 
+/// Grow VM-owned vector storage fallibly, charging reallocation peak before
+/// growth when a full runtime budget is active.
+fn reserve_vm<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), FaultKind> {
+    if values
+        .len()
+        .checked_add(additional)
+        .is_none_or(|n| n > values.capacity())
+    {
+        if let Some(budget) = memory {
+            budget
+                .reserve_vec(values, additional)
+                .map_err(|_| FaultKind::OutOfMemory)?;
+        } else {
+            values
+                .try_reserve(additional)
+                .map_err(|_| FaultKind::OutOfMemory)?;
+        }
+    }
+    Ok(())
+}
+
+fn reserve_string_vm(
+    value: &mut String,
+    additional: usize,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), FaultKind> {
+    if let Some(budget) = memory {
+        budget
+            .reserve_string(value, additional)
+            .map_err(|_| FaultKind::OutOfMemory)
+    } else {
+        value
+            .try_reserve_exact(additional)
+            .map_err(|_| FaultKind::OutOfMemory)
+    }
+}
+
+fn charge_vm(bytes: usize, memory: &mut Option<eitri_base::MemoryBudget>) -> Result<(), FaultKind> {
+    if let Some(budget) = memory {
+        budget.charge(bytes).map_err(|_| FaultKind::OutOfMemory)?;
+    }
+    Ok(())
+}
+
+fn release_vm(bytes: usize, memory: &mut Option<eitri_base::MemoryBudget>) {
+    if let Some(budget) = memory {
+        budget.release(bytes);
+    }
+}
+
+fn reserve_map_vm<K: Eq + std::hash::Hash, V, S: std::hash::BuildHasher>(
+    values: &mut std::collections::HashMap<K, V, S>,
+    additional: usize,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), FaultKind> {
+    if let Some(budget) = memory {
+        budget
+            .reserve_map(values, additional)
+            .map_err(|_| FaultKind::OutOfMemory)
+    } else {
+        values
+            .try_reserve(additional)
+            .map_err(|_| FaultKind::OutOfMemory)
+    }
+}
+
+fn resize_vm<T: Clone>(
+    values: &mut Vec<T>,
+    length: usize,
+    value: T,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), FaultKind> {
+    let additional = length.saturating_sub(values.len());
+    reserve_vm(values, additional, memory)?;
+    values.resize(length, value);
+    Ok(())
+}
+
+fn push_vm<T>(
+    values: &mut Vec<T>,
+    value: T,
+    memory: &mut Option<eitri_base::MemoryBudget>,
+) -> Result<(), FaultKind> {
+    reserve_vm(values, 1, memory)?;
+    values.push(value);
+    Ok(())
+}
+
 /// Run `entry` with `args` and return its results. `functions` must be
 /// verified.
 pub fn run(
@@ -785,11 +924,21 @@ pub fn run(
     limits: Limits,
     scratch: &mut VmScratch,
 ) -> Result<Vec<u64>, Fault> {
-    let mut m = machine(functions, entry, args, limits, scratch, false);
+    let mut m = machine(functions, entry, args, limits, scratch, false)?;
     let result = execute(&mut m, host, entry, 0, 0);
-    m.heap.collect([]);
+    m.heap.collect([], m.memory);
     result?;
-    Ok(m.slots[..functions[entry].signature.results.len()].to_vec())
+    copy_result(&m.slots[..functions[entry].signature.results.len()])
+}
+
+fn copy_result(values: &[u64]) -> Result<Vec<u64>, Fault> {
+    let mut result = Vec::new();
+    result.try_reserve_exact(values.len()).map_err(|_| Fault {
+        kind: FaultKind::OutOfMemory,
+        trace: Vec::new(),
+    })?;
+    result.extend_from_slice(values);
+    Ok(result)
 }
 
 /// The shared state of a fresh run, with `entry`'s frame at slot 0.
@@ -800,16 +949,27 @@ fn machine<'a>(
     limits: Limits,
     scratch: &'a mut VmScratch,
     threaded: bool,
-) -> Machine<'a> {
+) -> Result<Machine<'a>, Fault> {
     scratch.slots.clear();
     scratch.frames.clear();
     scratch.references.clear();
     scratch.host_roots.clear();
     let function = &functions[entry];
-    scratch.slots.resize(function.frame_size as usize, 0);
+    resize_vm(
+        &mut scratch.slots,
+        function.frame_size as usize,
+        0,
+        &mut scratch.memory,
+    )
+    .map_err(|kind| Fault {
+        kind,
+        // Do not allocate a trace while reporting failure to allocate the
+        // entry frame. There is no executing instruction yet.
+        trace: Vec::new(),
+    })?;
     let first = function.signature.param_base() as usize;
     scratch.slots[first..first + args.len()].copy_from_slice(args);
-    Machine {
+    Ok(Machine {
         functions,
         slots: &mut scratch.slots,
         frames: &mut scratch.frames,
@@ -817,6 +977,7 @@ fn machine<'a>(
         references: &mut scratch.references,
         host_roots: &mut scratch.host_roots,
         host_signatures: &scratch.host_signatures,
+        memory: &mut scratch.memory,
         force_gc: scratch.force_gc,
         memory_limit: scratch.memory_limit,
         budget: limits.budget,
@@ -824,7 +985,7 @@ fn machine<'a>(
         entry,
         nesting: 0,
         threaded,
-    }
+    })
 }
 
 /// Collect from the verifier-approved maps for suspended and active frames.
@@ -832,17 +993,19 @@ fn machine<'a>(
 fn collect_at(
     heap: &mut heap::Heap,
     references: &mut Vec<Option<heap::HeapRef>>,
-    (host_roots, frames): (&[heap::HeapRef], &[Frame]),
+    (host_roots, frames, memory): (
+        &[heap::HeapRef],
+        &[Frame],
+        &mut Option<eitri_base::MemoryBudget>,
+    ),
     functions: &IndexVec<FunctionId, Function>,
     id: FunctionId,
     base: usize,
     pc: usize,
-) {
+) -> Result<(), FaultKind> {
     let function = &functions[id];
-    references.resize(
-        references.len().max(base + function.frame_size as usize),
-        None,
-    );
+    let length = references.len().max(base + function.frame_size as usize);
+    resize_vm(references, length, None, memory)?;
     fn root_map(function: &Function, pc: u32, suspended: bool) -> &eitri_bytecode::RootMap {
         let insn =
             eitri_bytecode::decode(&function.code, pc as usize).expect("verified instruction");
@@ -863,20 +1026,22 @@ fn collect_at(
         };
         &function.roots.maps[state.map.0 as usize]
     }
-    let mut roots = Vec::with_capacity(frames.len() + 1);
-    for frame in frames {
-        let f = &functions[frame.function];
-        roots.push(heap::RootFrame {
-            map: root_map(f, frame.call_pc, true),
-            slots: &references[frame.base..frame.base + f.frame_size as usize],
-        });
-    }
-    roots.push(heap::RootFrame {
-        map: root_map(function, pc as u32, false),
-        slots: &references[base..base + function.frame_size as usize],
-    });
-    heap.collect_frames(&roots, host_roots)
+    let roots = frames
+        .iter()
+        .map(|frame| {
+            let f = &functions[frame.function];
+            heap::RootFrame {
+                map: root_map(f, frame.call_pc, true),
+                slots: &references[frame.base..frame.base + f.frame_size as usize],
+            }
+        })
+        .chain(std::iter::once(heap::RootFrame {
+            map: root_map(function, pc as u32, false),
+            slots: &references[base..base + function.frame_size as usize],
+        }));
+    heap.collect_frames(roots, host_roots, memory)
         .expect("verified supported root maps");
+    Ok(())
 }
 
 /// `range`, a window of the frame at `base`, as absolute slots.
@@ -922,6 +1087,12 @@ fn raised(
     function: FunctionId,
     pc: usize,
 ) -> Fault {
+    if trace.try_reserve(frames.len().saturating_add(1)).is_err() {
+        return Fault {
+            kind: FaultKind::OutOfMemory,
+            trace: Vec::new(),
+        };
+    }
     trace.push(Location::Script {
         function,
         pc: pc as u32,
@@ -946,6 +1117,12 @@ fn host_fault(
         HostError::Message(message) => (FaultKind::Host(message), Vec::new()),
         HostError::Fault(fault) => (fault.kind, fault.trace),
     };
+    if inner.try_reserve(1).is_err() {
+        return Fault {
+            kind: FaultKind::OutOfMemory,
+            trace: Vec::new(),
+        };
+    }
     inner.push(Location::Host(index));
     raised(inner, frames, kind, function, pc)
 }
@@ -1007,12 +1184,13 @@ fn execute(
                             collect_at(
                                 m.heap,
                                 m.references,
-                                (m.host_roots, m.frames),
+                                (m.host_roots, m.frames, m.memory),
                                 functions,
                                 id,
                                 base,
                                 start,
-                            );
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
                         }
                     }
                     pc = target;
@@ -1060,10 +1238,10 @@ fn execute(
                     Op::Mov => {
                         s[a!()] = s[b!()];
                         if !m.references.is_empty() {
-                            m.references.resize(
-                                m.references.len().max(base + function.frame_size as usize),
-                                None,
-                            );
+                            let length =
+                                m.references.len().max(base + function.frame_size as usize);
+                            resize_vm(m.references, length, None, m.memory)
+                                .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
                             m.references[base + a!()] = m.references[base + b!()];
                         }
                     }
@@ -1072,33 +1250,67 @@ fn execute(
                             collect_at(
                                 m.heap,
                                 m.references,
-                                (m.host_roots, m.frames),
+                                (m.host_roots, m.frames, m.memory),
                                 functions,
                                 id,
                                 base,
                                 start,
-                            );
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
                         }
-                        m.references.resize(
-                            m.references.len().max(base + function.frame_size as usize),
-                            None,
-                        );
+                        let length = m.references.len().max(base + function.frame_size as usize);
+                        resize_vm(m.references, length, None, m.memory)
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
                         let literal = &function.strings[(word >> 16) as usize];
-                        let mut allocated = m.heap.alloc_string(literal, m.memory_limit);
+                        let mut allocated = m.heap.alloc_string(literal, m.memory_limit, m.memory);
                         if allocated.is_err() {
                             collect_at(
                                 m.heap,
                                 m.references,
-                                (m.host_roots, m.frames),
+                                (m.host_roots, m.frames, m.memory),
                                 functions,
                                 id,
                                 base,
                                 start,
-                            );
-                            allocated = m.heap.alloc_string(literal, m.memory_limit);
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                            allocated = m.heap.alloc_string(literal, m.memory_limit, m.memory);
                         }
                         m.references[base + a!()] = Some(allocated.map_err(|_| {
-                            fault(&m.frames[floor..], FaultKind::Memory, id, start)
+                            fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)
+                        })?);
+                    }
+                    Op::StrConcat => {
+                        if m.force_gc {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        }
+                        let left = m.references[base + b!()].expect("verified string operand");
+                        let right = m.references[base + c!()].expect("verified string operand");
+                        let mut value = m.heap.concat(left, right, m.memory_limit, m.memory);
+                        if value.is_err() {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                            value = m.heap.concat(left, right, m.memory_limit, m.memory);
+                        }
+                        m.references[base + a!()] = Some(value.map_err(|_| {
+                            fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)
                         })?);
                     }
                     Op::StrLen => {
@@ -1186,12 +1398,13 @@ fn execute(
                             collect_at(
                                 m.heap,
                                 m.references,
-                                (m.host_roots, m.frames),
+                                (m.host_roots, m.frames, m.memory),
                                 functions,
                                 id,
                                 base,
                                 start,
-                            );
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
                         }
                         match site.target {
                             CallTarget::Host(index) => {
@@ -1214,9 +1427,10 @@ fn execute(
                                     results: absolute(site.result, base),
                                     host_index: index,
                                 };
-                                cx.prepare_host();
-                                let outcome =
-                                    host.call(&mut cx, index).and_then(|()| cx.finish_host());
+                                let outcome = cx
+                                    .prepare_host()
+                                    .and_then(|()| host.call(&mut cx, index))
+                                    .and_then(|()| cx.finish_host());
                                 m.host_roots.truncate(roots_floor);
                                 budget = m.budget;
                                 // A nested run may have moved the slot stack.
@@ -1244,7 +1458,9 @@ fn execute(
                                 let callee_base = base + function.frame_size as usize;
                                 let end = callee_base + callee_fn.frame_size as usize;
                                 if m.slots.len() < end {
-                                    m.slots.resize(end, 0);
+                                    resize_vm(m.slots, end, 0, m.memory).map_err(|kind| {
+                                        fault(&m.frames[floor..], kind, id, start)
+                                    })?;
                                 }
                                 let params =
                                     callee_base + callee_fn.signature.param_base() as usize;
@@ -1255,17 +1471,25 @@ fn execute(
                                     .params
                                     .contains(&eitri_bytecode::ValueType::String)
                                 {
-                                    m.references.resize(m.references.len().max(end), None);
+                                    let length = m.references.len().max(end);
+                                    resize_vm(m.references, length, None, m.memory).map_err(
+                                        |kind| fault(&m.frames[floor..], kind, id, start),
+                                    )?;
                                     m.references
                                         .copy_within(from..from + site.args.count as usize, params);
                                 }
-                                m.frames.push(Frame {
-                                    function: id,
-                                    base,
-                                    call_pc: start as u32,
-                                    resume: pc,
-                                    result: site.result.first,
-                                });
+                                push_vm(
+                                    m.frames,
+                                    Frame {
+                                        function: id,
+                                        base,
+                                        call_pc: start as u32,
+                                        resume: pc,
+                                        result: site.result.first,
+                                    },
+                                    m.memory,
+                                )
+                                .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
                                 id = callee;
                                 function = callee_fn;
                                 base = callee_base;
@@ -1318,6 +1542,20 @@ fn execute(
                 }
             }};
         }
+        // A single expansion keeps unoptimized reentry frames small enough
+        // for the checked nesting limit. Release builds specialize both forms.
+        #[cfg(debug_assertions)]
+        {
+            let (instruction, high) = if word as u8 == Op::Wide as u8 {
+                let next = code[pc];
+                pc += 1;
+                (next, word)
+            } else {
+                (word, 0)
+            };
+            dispatch!(instruction, high);
+        }
+        #[cfg(not(debug_assertions))]
         if word as u8 == Op::Wide as u8 {
             let next = code[pc];
             pc += 1;

@@ -772,6 +772,11 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   interpreters. Other handle kinds and full-runtime memory accounting remain;
   T015 stays open. See the
   [T015-5 ledger](implementation/vm-research.md#t015-5-string-reentry).
+- Quota work in progress: source compilation and managed-string execution
+  have budget-aware reservation paths, and a growing string faults without
+  preventing a later run. Text assembly, optimization, diagnostics, and
+  some transient allocations still need the same enforcement. T015 stays
+  open; [measurements](implementation/vm-research.md#t015-quota-work-in-progress).
 
 ### T016 — Implement strings, bytes, and characters
 
@@ -781,6 +786,9 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: separately compiled equal strings hash equally, UTF-8 boundaries
   are respected, source lifetime is safe, and no runtime interning assumption
   replaces required content comparison.
+- Work in progress: single binary string concatenation and `string.is_empty()`
+  run on both interpreters; concatenation chains remain unsupported pending
+  the required fused allocation. The broader task remains open.
 
 ### T017 — Implement aggregates and tagged values
 

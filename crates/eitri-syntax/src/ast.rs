@@ -221,6 +221,47 @@ impl Ast {
         Self::default()
     }
 
+    /// Retained tree allocations, excluding allocator bookkeeping.
+    pub fn heap_bytes(&self) -> usize {
+        self.imports.capacity() * size_of::<Import>()
+            + self.items.capacity() * size_of::<Item>()
+            + self.fns.capacity() * size_of::<FnDecl>()
+            + self.stmts.capacity() * size_of::<Stmt>()
+            + self.exprs.capacity() * size_of::<Expr>()
+            + self.ifs.capacity() * size_of::<IfExpr>()
+            + self.expr_spans.capacity() * size_of::<Span>()
+            + self.expr_lists.heap_bytes()
+            + self.stmt_lists.heap_bytes()
+            + self.params.heap_bytes()
+    }
+
+    /// Reserve all node and list pools before a budgeted parse. The caller
+    /// supplies a conservative token-derived bound for each pool.
+    pub fn reserve_budgeted(
+        &mut self,
+        count: usize,
+        budget: &mut eitri_base::MemoryBudget,
+    ) -> Result<(), eitri_base::OutOfMemory> {
+        let imports = count.saturating_sub(self.imports.len());
+        let items = count.saturating_sub(self.items.len());
+        budget.reserve_vec(&mut self.imports, imports)?;
+        budget.reserve_vec(&mut self.items, items)?;
+        self.fns
+            .reserve_budgeted(count.saturating_sub(self.fns.len()), budget)?;
+        self.stmts
+            .reserve_budgeted(count.saturating_sub(self.stmts.len()), budget)?;
+        self.exprs
+            .reserve_budgeted(count.saturating_sub(self.exprs.len()), budget)?;
+        self.ifs
+            .reserve_budgeted(count.saturating_sub(self.ifs.len()), budget)?;
+        self.expr_spans
+            .reserve_budgeted(count.saturating_sub(self.expr_spans.len()), budget)?;
+        self.expr_lists.reserve_budgeted(count, budget)?;
+        self.stmt_lists.reserve_budgeted(count, budget)?;
+        self.params.reserve_budgeted(count, budget)?;
+        Ok(())
+    }
+
     pub fn clear(&mut self) {
         self.imports.clear();
         self.items.clear();

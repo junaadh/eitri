@@ -21,7 +21,7 @@ use eitri_bytecode::{CallTarget, Function, FunctionId, Op};
 
 use crate::{
     Call, Fault, FaultKind, Frame, Host, Limits, Location, Machine, VmScratch, absolute,
-    collect_at, host_fault, machine, raised, slot_field,
+    collect_at, copy_result, host_fault, machine, raised, reserve_vm, resize_vm, slot_field,
 };
 
 /// Everything a handler needs that is not hot enough for a register.
@@ -61,11 +61,11 @@ pub fn run_threaded(
     limits: Limits,
     scratch: &mut VmScratch,
 ) -> Result<Vec<u64>, Fault> {
-    let mut m = machine(functions, entry, args, limits, scratch, true);
+    let mut m = machine(functions, entry, args, limits, scratch, true)?;
     let result = nested(&mut m, host, entry, 0, 0);
-    m.heap.collect([]);
+    m.heap.collect([], m.memory);
     result?;
-    Ok(m.slots[..functions[entry].signature.results.len()].to_vec())
+    copy_result(&m.slots[..functions[entry].signature.results.len()])
 }
 
 /// Run `entry`, whose frame is in place at `base`, as [`crate::execute`]
@@ -91,6 +91,7 @@ pub(crate) fn nested(
             references: &mut *m.references,
             host_roots: &mut *m.host_roots,
             host_signatures: m.host_signatures,
+            memory: &mut *m.memory,
             force_gc: m.force_gc,
             memory_limit: m.memory_limit,
             budget: m.budget,
@@ -303,29 +304,29 @@ fn branch_op(op: u8, a: usize, b: usize, word: u32, s: *mut u64, len: usize) -> 
 /// Debit the budget for a branch from `start` to `target` if it goes
 /// backward. False when the budget is exhausted.
 #[inline(always)]
-fn take(st: &mut State<'_>, start: usize, target: usize) -> bool {
+fn take(st: &mut State<'_>, start: usize, target: usize) -> Result<(), FaultKind> {
     if target <= start {
         if st.m.budget == 0 {
-            return false;
+            return Err(FaultKind::Budget);
         }
         st.m.budget -= 1;
         if st.m.force_gc {
-            trace(st, start);
+            trace(st, start)?;
         }
     }
-    true
+    Ok(())
 }
 
-fn trace(st: &mut State<'_>, pc: usize) {
+fn trace(st: &mut State<'_>, pc: usize) -> Result<(), FaultKind> {
     collect_at(
         st.m.heap,
         st.m.references,
-        (st.m.host_roots, st.m.frames),
+        (st.m.host_roots, st.m.frames, st.m.memory),
         st.m.functions,
         st.id,
         st.base,
         pc,
-    );
+    )
 }
 
 fn managed_op(
@@ -333,6 +334,7 @@ fn managed_op(
     op: Op,
     a: usize,
     b: usize,
+    c: usize,
     word: u32,
     pc: usize,
 ) -> Result<Option<u64>, FaultKind> {
@@ -340,23 +342,47 @@ fn managed_op(
     match op {
         Op::Mov => {
             if !st.m.references.is_empty() {
-                st.m.references.resize(st.m.references.len().max(end), None);
+                let length = st.m.references.len().max(end);
+                resize_vm(st.m.references, length, None, st.m.memory)?;
                 st.m.references[st.base + a] = st.m.references[st.base + b];
             }
             Ok(None)
         }
         Op::StrNew => {
             if st.m.force_gc {
-                trace(st, pc);
+                trace(st, pc)?;
             }
-            st.m.references.resize(st.m.references.len().max(end), None);
+            let length = st.m.references.len().max(end);
+            resize_vm(st.m.references, length, None, st.m.memory)?;
             let literal = &st.function.strings[(word >> 16) as usize];
-            let mut result = st.m.heap.alloc_string(literal, st.m.memory_limit);
+            let mut result =
+                st.m.heap
+                    .alloc_string(literal, st.m.memory_limit, st.m.memory);
             if result.is_err() {
-                trace(st, pc);
-                result = st.m.heap.alloc_string(literal, st.m.memory_limit);
+                trace(st, pc)?;
+                result =
+                    st.m.heap
+                        .alloc_string(literal, st.m.memory_limit, st.m.memory);
             }
-            st.m.references[st.base + a] = Some(result.map_err(|_| FaultKind::Memory)?);
+            st.m.references[st.base + a] = Some(result.map_err(|_| FaultKind::OutOfMemory)?);
+            Ok(None)
+        }
+        Op::StrConcat => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let left = st.m.references[st.base + b].expect("verified string operand");
+            let right = st.m.references[st.base + c].expect("verified string operand");
+            let mut value =
+                st.m.heap
+                    .concat(left, right, st.m.memory_limit, st.m.memory);
+            if value.is_err() {
+                trace(st, pc)?;
+                value =
+                    st.m.heap
+                        .concat(left, right, st.m.memory_limit, st.m.memory);
+            }
+            st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
             Ok(None)
         }
         Op::StrLen => {
@@ -381,7 +407,7 @@ macro_rules! managed_handler {
         ) {
             let a = slot_field(word, 0, 8);
             let b = slot_field(word, 0, 16);
-            match managed_op(st, $op, a, b, word, pc) {
+            match managed_op(st, $op, a, b, slot_field(word, 0, 24), word, pc) {
                 Ok(Some(value)) => set(s, len, a, value),
                 Ok(None) if $op == Op::Mov => set(s, len, a, get(s, len, b)),
                 Ok(None) => {}
@@ -430,8 +456,8 @@ macro_rules! branch_handler {
             let mut to = pc + 1;
             if taken {
                 to = (to as isize + disp) as usize;
-                if !take(st, pc, to) {
-                    fail!(code, pc, word, s, len, st, FaultKind::Budget)
+                if let Err(kind) = take(st, pc, to) {
+                    fail!(code, pc, word, s, len, st, kind)
                 }
             }
             next!(code, to, s, len, st)
@@ -442,6 +468,7 @@ macro_rules! branch_handler {
 managed_handler!(mov, Op::Mov);
 managed_handler!(str_new, Op::StrNew);
 managed_handler!(str_len, Op::StrLen);
+managed_handler!(str_concat, Op::StrConcat);
 slot_handler!(ldi, Op::Ldi);
 slot_handler!(ldk, Op::Ldk);
 slot_handler!(add_wrap, Op::AddWrap);
@@ -500,8 +527,8 @@ extern "rust-preserve-none" fn j(
     st: &mut State<'_>,
 ) {
     let to = (pc as isize + 1 + ((word as i32) >> 8) as isize) as usize;
-    if !take(st, pc, to) {
-        fail!(code, pc, word, s, len, st, FaultKind::Budget)
+    if let Err(kind) = take(st, pc, to) {
+        fail!(code, pc, word, s, len, st, kind)
     }
     next!(code, to, s, len, st)
 }
@@ -515,8 +542,8 @@ extern "rust-preserve-none" fn j_x(
     st: &mut State<'_>,
 ) {
     let to = (pc as isize + 2 + code[pc + 1] as i32 as isize) as usize;
-    if !take(st, pc, to) {
-        fail!(code, pc, word, s, len, st, FaultKind::Budget)
+    if let Err(kind) = take(st, pc, to) {
+        fail!(code, pc, word, s, len, st, kind)
     }
     next!(code, to, s, len, st)
 }
@@ -552,15 +579,18 @@ extern "rust-preserve-none" fn wide(
         let mut to = after;
         if taken {
             to = (to as isize + disp) as usize;
-            if !take(st, pc, to) {
-                fail!(code, pc, word, s, len, st, FaultKind::Budget)
+            if let Err(kind) = take(st, pc, to) {
+                fail!(code, pc, word, s, len, st, kind)
             }
         }
         next!(code, to, s, len, st)
     }
-    if matches!(Op::from_byte(op), Some(Op::Mov | Op::StrNew | Op::StrLen)) {
+    if matches!(
+        Op::from_byte(op),
+        Some(Op::Mov | Op::StrNew | Op::StrLen | Op::StrConcat)
+    ) {
         let op = Op::from_byte(op).expect("verified opcode");
-        match managed_op(st, op, a, b, word, pc) {
+        match managed_op(st, op, a, b, c, word, pc) {
             Ok(Some(value)) => set(s, len, a, value),
             Ok(None) if op == Op::Mov => set(s, len, a, get(s, len, b)),
             Ok(None) => {}
@@ -587,8 +617,10 @@ extern "rust-preserve-none" fn call_host(
         fail!(code, pc, word, s, len, st, FaultKind::Budget)
     }
     st.m.budget -= 1;
-    if st.m.force_gc {
-        trace(st, pc);
+    if st.m.force_gc
+        && let Err(kind) = trace(st, pc)
+    {
+        fail!(code, pc, word, s, len, st, kind)
     }
     let CallTarget::Host(index) = site.target else {
         unreachable!("the verifier matches the opcode to the target");
@@ -610,8 +642,10 @@ extern "rust-preserve-none" fn call_host(
         results: absolute(site.result, st.base),
         host_index: index,
     };
-    cx.prepare_host();
-    let outcome = st.host.call(&mut cx, index).and_then(|()| cx.finish_host());
+    let outcome = cx
+        .prepare_host()
+        .and_then(|()| st.host.call(&mut cx, index))
+        .and_then(|()| cx.finish_host());
     st.m.host_roots.truncate(roots_floor);
     // SAFETY: the current frame, `base..base + len`, is still inside the
     // slot stack (nested runs only grow it); the stack may have moved.
@@ -657,8 +691,10 @@ extern "rust-preserve-none" fn call_script(
     if st.m.frames.len() as u32 >= st.m.depth {
         fail!(code, pc, word, s, len, st, FaultKind::Depth)
     }
-    if st.m.force_gc {
-        trace(st, pc);
+    if st.m.force_gc
+        && let Err(kind) = trace(st, pc)
+    {
+        fail!(code, pc, word, s, len, st, kind)
     }
     // Parameters follow the callee's results, whose count the site carries
     // (checked against the callee's signature by the verifier).
@@ -684,8 +720,10 @@ extern "rust-preserve-none" fn call_script(
         .params
         .contains(&eitri_bytecode::ValueType::String)
     {
-        st.m.references
-            .resize(st.m.references.len().max(base + size), None);
+        let length = st.m.references.len().max(base + size);
+        if let Err(kind) = resize_vm(st.m.references, length, None, st.m.memory) {
+            fail!(code, pc, word, s, len, st, kind)
+        }
         let from = st.base + args.first as usize;
         st.m.references
             .copy_within(from..from + args.count as usize, base + params);
@@ -731,10 +769,18 @@ extern "rust-preserve-none" fn grow(
     let end = st.base + len + st.m.functions[callee].frame_size as usize;
     if st.m.slots.len() < end {
         // Doubling keeps growth amortized for deep recursion.
-        st.m.slots.resize(end.max(st.m.slots.len() * 2), 0);
+        let length = end.max(st.m.slots.len().saturating_mul(2));
+        if let Err(kind) = resize_vm(st.m.slots, length, 0, st.m.memory) {
+            st.m.budget -= 1;
+            fail!(code, pc, word, s, len, st, kind)
+        }
     }
     if st.m.frames.len() == st.m.frames.capacity() {
-        st.m.frames.reserve(st.m.frames.len().max(16));
+        let additional = st.m.frames.len().max(16);
+        if let Err(kind) = reserve_vm(st.m.frames, additional, st.m.memory) {
+            st.m.budget -= 1;
+            fail!(code, pc, word, s, len, st, kind)
+        }
     }
     // The slot stack may have moved.
     // SAFETY: `base + len <= slots.len()`: the current frame is in bounds.
@@ -943,6 +989,7 @@ static TABLE: [Handler; 256] = {
     table[Op::Mov as usize] = mov;
     table[Op::StrNew as usize] = str_new;
     table[Op::StrLen as usize] = str_len;
+    table[Op::StrConcat as usize] = str_concat;
     table[Op::Ldi as usize] = ldi;
     table[Op::Ldk as usize] = ldk;
     table[Op::LdkX as usize] = ldk_x;

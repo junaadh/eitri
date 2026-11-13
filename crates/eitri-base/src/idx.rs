@@ -192,6 +192,15 @@ impl<I: Idx, T> IndexVec<I, T> {
         self.raw.reserve(additional);
     }
 
+    /// Reserve storage using an explicit context-owned memory budget.
+    pub fn reserve_budgeted(
+        &mut self,
+        additional: usize,
+        budget: &mut crate::MemoryBudget,
+    ) -> Result<(), crate::OutOfMemory> {
+        budget.reserve_vec(&mut self.raw, additional)
+    }
+
     /// Allocated slots, for retained-memory accounting.
     #[inline]
     pub fn capacity(&self) -> usize {

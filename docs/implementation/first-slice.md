@@ -48,8 +48,8 @@ borrow string arguments through `Call::string_arg` and copy UTF-8 results into
 the managed heap through `Call::set_result_string`. A borrowed argument cannot
 cross reentry; the host can fetch it again afterwards. `Call::call_values`
 supports mixed scalar and string arguments and copies string results out of
-host-initiated reentrant script calls. Comparisons, concatenation, and other
-methods remain unsupported. No host effects occur for a rejected program.
+host-initiated reentrant script calls. Single binary string concatenation is supported; concatenation chains,
+comparisons, and other methods remain unsupported. No host effects occur for a rejected program.
 Hosts may retain a string argument across calls and executions and
 return it to a script; explicit release removes its collector root.
 
@@ -287,6 +287,7 @@ memory (checked by T012).
 | `E0001` | A language feature outside this slice. The message names the feature |
 | `E0002` | An implementation limit from [Resources](#resources) |
 | `E0003` | An artifact host index has a different binding in the destination registry |
+| `E0004` | The runtime memory quota or allocator could not satisfy an allocation |
 | `E0101` | Unexpected character, malformed literal, or unterminated comment or literal |
 | `E0102` | Syntax error: expected one thing, found another |
 | `E0201` | Unknown name |
