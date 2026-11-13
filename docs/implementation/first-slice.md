@@ -37,7 +37,7 @@ preserve prior effects and source traces. Storage-only extern names remain
 unavailable as ordinary source types. The initial managed-string slice is
 listed below; the remaining M0 exclusions are still future work.
 
-## Managed strings (T015-1 through T015-4)
+## Managed strings (T015-1 through T015-5)
 
 Single-line and raw single-line UTF-8 literals can be stored in inferred
 locals and used with `.len()`, which returns their byte length as `i64`.
@@ -46,10 +46,11 @@ are rejected. String annotations, local bindings, script function parameters
 and returns work across branches, loops, and script calls. Host functions can
 borrow string arguments through `Call::string_arg` and copy UTF-8 results into
 the managed heap through `Call::set_result_string`. A borrowed argument cannot
-cross reentry; the host can fetch it again afterwards. String arguments and
-results of host-initiated reentrant script calls, comparisons, concatenation,
-and other methods remain unsupported. No host effects occur for a rejected
-program. Hosts may retain a string argument across calls and executions and
+cross reentry; the host can fetch it again afterwards. `Call::call_values`
+supports mixed scalar and string arguments and copies string results out of
+host-initiated reentrant script calls. Comparisons, concatenation, and other
+methods remain unsupported. No host effects occur for a rejected program.
+Hosts may retain a string argument across calls and executions and
 return it to a script; explicit release removes its collector root.
 
 ## Types

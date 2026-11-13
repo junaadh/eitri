@@ -53,8 +53,9 @@ returns; host string arguments remain live across reentry. Retained string
 handles are roots across runs and carry a context-specific identity plus a slot
 generation; released or foreign tokens are rejected. Retained slot scanning
 adds O(H) work for H allocated handle slots to each collection. Dynamic roots,
-aggregates, other retained handle types, and string values in host-initiated
-script calls remain later work. Forced-collection tests run both interpreters.
+aggregates and other retained handle types remain later work. Reentrant string
+arguments are rooted while the host prepares the call and throughout nested
+execution; string results are copied out before the nested frame is released. Forced-collection tests run both interpreters.
 The managed-object byte limit counts object structures and string payloads;
 allocator overhead, handle tokens and tables, collection scratch, compiler
 storage and code are not yet covered. Collection is expected O(objects + roots), with hash-collision

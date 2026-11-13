@@ -173,6 +173,25 @@ pub struct ScriptFn<'call> {
     call: PhantomData<&'call ()>,
 }
 
+/// An argument to a host-initiated script call.
+pub enum ReentryArg<'a> {
+    /// A canonical untagged scalar matching the declared parameter.
+    Scalar(u64),
+    /// A UTF-8 value copied into the managed heap for the call.
+    String(&'a str),
+    /// A context-owned retained string, passed without copying.
+    RetainedString(&'a RetainedString),
+}
+
+/// The result of a host-initiated script call. String results are copied out
+/// so they remain valid after further reentry or return from the host call.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReentryValue {
+    Void,
+    Scalar(u64),
+    String(String),
+}
+
 /// Nested runs active at once. Each costs Rust stack (a host frame and an
 /// interpreter entry), so their nesting is limited separately from script
 /// frames; exceeding it is `call depth exceeded`, like the frame limit.
@@ -515,6 +534,131 @@ impl<'c> Call<'c, '_> {
         outcome?;
         results.copy_from_slice(&m.slots[base..base + results.len()]);
         Ok(())
+    }
+    /// Call a script function with typed string and scalar arguments. String
+    /// inputs are rooted during preparation and execution; string results are
+    /// copied before the nested frame is released. Uses the active call budget.
+    pub fn call_values(
+        &mut self,
+        host: &mut dyn Host,
+        function: ScriptFn<'_>,
+        args: &[ReentryArg<'_>],
+    ) -> Result<ReentryValue, Fault> {
+        use eitri_bytecode::ValueType;
+        let m = &mut *self.machine;
+        let callee = &m.functions[function.id];
+        let signature = &callee.signature;
+        let invalid = args.len() != signature.params.len()
+            || signature.results.len() > 1
+            || args
+                .iter()
+                .zip(&signature.params)
+                .any(|(arg, ty)| match arg {
+                    ReentryArg::Scalar(word) => !ty.canonical(*word),
+                    ReentryArg::String(_) => *ty != ValueType::String,
+                    ReentryArg::RetainedString(handle) => {
+                        *ty != ValueType::String || m.heap.retained_string(handle).is_none()
+                    }
+                });
+        if invalid {
+            return Err(Fault {
+                kind: FaultKind::Host(format!(
+                    "host error: reentrant call to `{}` does not match its signature",
+                    callee.name
+                )),
+                trace: Vec::new(),
+            });
+        }
+        let fail = |kind| Fault {
+            kind,
+            trace: Vec::new(),
+        };
+        if m.budget == 0 {
+            return Err(fail(FaultKind::Budget));
+        }
+        m.budget -= 1;
+        if m.frames.len() as u32 >= m.depth || m.nesting >= MAX_NESTING {
+            return Err(fail(FaultKind::Depth));
+        }
+        let base = self.top;
+        let end = base + callee.frame_size as usize;
+        if m.slots.len() < end {
+            m.slots.resize(end, 0);
+        }
+        if signature.params.contains(&ValueType::String)
+            || signature.results.contains(&ValueType::String)
+        {
+            m.references.resize(m.references.len().max(end), None);
+        }
+        let first = base + signature.param_base() as usize;
+        let root_floor = m.host_roots.len();
+        let outcome = (|| {
+            for (i, arg) in args.iter().enumerate() {
+                match arg {
+                    ReentryArg::Scalar(word) => m.slots[first + i] = *word,
+                    ReentryArg::RetainedString(handle) => {
+                        let value = m.heap.retained_string(handle).expect("validated handle");
+                        m.references[first + i] = Some(value);
+                        m.host_roots.push(value);
+                    }
+                    ReentryArg::String(text) => {
+                        if m.force_gc {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames),
+                                m.functions,
+                                self.caller.function,
+                                self.caller.base,
+                                self.caller.call_pc as usize,
+                            );
+                        }
+                        let mut value = m.heap.alloc_string(text, m.memory_limit);
+                        if value.is_err() {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames),
+                                m.functions,
+                                self.caller.function,
+                                self.caller.base,
+                                self.caller.call_pc as usize,
+                            );
+                            value = m.heap.alloc_string(text, m.memory_limit);
+                        }
+                        let value = value.map_err(|_| fail(FaultKind::Memory))?;
+                        m.references[first + i] = Some(value);
+                        m.host_roots.push(value);
+                    }
+                }
+            }
+            m.frames.push(self.caller);
+            let floor = m.frames.len();
+            m.nesting += 1;
+            let result = if m.threaded {
+                threaded::nested(m, host, function.id, base, floor)
+            } else {
+                execute(m, host, function.id, base, floor)
+            };
+            m.nesting -= 1;
+            m.frames.truncate(floor - 1);
+            result?;
+            Ok(match signature.results.first() {
+                None => ReentryValue::Void,
+                Some(ValueType::String) => {
+                    let reference = m.references[base].expect("verified string result");
+                    ReentryValue::String(
+                        m.heap
+                            .string(reference)
+                            .expect("live string result")
+                            .to_owned(),
+                    )
+                }
+                Some(_) => ReentryValue::Scalar(m.slots[base]),
+            })
+        })();
+        m.host_roots.truncate(root_floor);
+        outcome
     }
 }
 

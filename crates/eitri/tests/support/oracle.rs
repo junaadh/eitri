@@ -57,6 +57,9 @@ pub trait Reenter {
     /// Whether the program has a script function `name`.
     fn has_function(&self, name: &str) -> bool;
 
+    /// Call the named string-to-string callback using the oracle's own values.
+    fn call_text(&mut self, host: &mut dyn Host, name: &str, arg: &str) -> Result<String, Fault>;
+
     /// Run script function `name`, which must exist. A fault stops only
     /// the nested run; its trace ends at the nested entry.
     fn call(
@@ -689,6 +692,54 @@ impl Reenter for Eval<'_> {
         self.find(name).is_some()
     }
 
+    fn call_text(&mut self, host: &mut dyn Host, name: &str, arg: &str) -> Result<String, Fault> {
+        let f = self.find(name).expect("checked with `has_function`");
+        let signature = self.checked.signatures[f];
+        if self.checked.param_types[signature.params] != [Ty::String] || signature.ret != Ty::String
+        {
+            return Err(Fault {
+                message: format!(
+                    "host error: reentrant call to `{name}` does not match its signature"
+                ),
+                trace: Vec::new(),
+            });
+        }
+        let stop = |message: &str| Fault {
+            message: message.to_owned(),
+            trace: Vec::new(),
+        };
+        if self.budget == 0 {
+            return Err(stop("execution budget exhausted"));
+        }
+        self.budget -= 1;
+        let active = self.below + self.calls.len();
+        if active as u32 >= self.depth || self.nesting >= MAX_NESTING {
+            return Err(stop("call depth exceeded"));
+        }
+        let index = self.strings.len() as u32;
+        self.strings.push(arg.to_owned());
+        let calls = std::mem::take(&mut self.calls);
+        let below = std::mem::replace(&mut self.below, active + 1);
+        let current = self.current;
+        self.nesting += 1;
+        let mut locals = vec![None; self.checked.bindings.len()];
+        locals[self.checked.params[f].iter().next().unwrap().index()] = Some(Value::String(index));
+        let saved = std::mem::replace(&mut self.locals, locals);
+        self.current = Some(f);
+        let body = self.ast.fns[f].body.expect("script functions have bodies");
+        let outcome = match self.block(host, body) {
+            Err(Unwind::Return(Value::String(index))) => Ok(self.strings[index as usize].clone()),
+            Err(Unwind::Fault(fault)) => Err(fault),
+            _ => unreachable!("checked string result"),
+        };
+        self.locals = saved;
+        self.current = current;
+        self.nesting -= 1;
+        self.below = below;
+        self.calls = calls;
+        outcome
+    }
+
     /// The chapter's reentry rules: the arguments must match the
     /// signature; the call debits one step and counts as a frame; nested
     /// runs are limited to [`MAX_NESTING`].
@@ -706,6 +757,8 @@ impl Reenter for Eval<'_> {
         let fits = |ty: Ty, word: u64| wire_type(ty).canonical(word);
         if args.len() != params.len()
             || results.len() != returns
+            || signature.ret == Ty::String
+            || params.contains(&Ty::String)
             || !params.iter().zip(args).all(|(&ty, &word)| fits(ty, word))
         {
             return Err(Fault {

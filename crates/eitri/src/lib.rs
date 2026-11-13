@@ -11,5 +11,6 @@ pub use eitri_bytecode::text::PrintOptions;
 /// separate dependency.
 pub use eitri_diag as diag;
 pub use eitri_vm::{
-    Call, Fault, FaultKind, Host, HostError, Limits, Location, RetainedString, ScriptFn,
+    Call, Fault, FaultKind, Host, HostError, Limits, Location, ReentryArg, ReentryValue,
+    RetainedString, ScriptFn,
 };

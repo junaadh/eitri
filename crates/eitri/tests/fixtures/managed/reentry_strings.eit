@@ -1,0 +1,8 @@
+//! host: test
+import test from "test"
+fn callback(value: string) -> string {
+    "temporary".len()
+    return value
+}
+let result = test.reenter_text("☃")
+test.emit(result.len())

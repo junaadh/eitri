@@ -8,3 +8,4 @@ pub fn text_len(value: string) -> i64
 pub fn retain_text(value: string) -> void
 pub fn retained_text() -> string
 pub fn release_text() -> void
+pub fn reenter_text(value: string) -> string

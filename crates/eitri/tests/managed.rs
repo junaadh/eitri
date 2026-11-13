@@ -433,3 +433,150 @@ host.emit(result.len())
         assert_eq!(context.managed_heap_bytes(), 0);
     }
 }
+
+#[test]
+fn string_reentry_fixture_survives_forced_collection() {
+    let source = include_str!("fixtures/managed/reentry_strings.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                host.effects,
+                "effect: test.reenter_text()\neffect: test.emit(3)\n"
+            );
+            assert_eq!(context.managed_heap_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+fn typed_reentry_roots_mixed_and_retained_arguments() {
+    struct Callback;
+    impl eitri::Host for Callback {
+        fn call(&mut self, cx: &mut eitri::Call<'_, '_>, _: u32) -> Result<(), eitri::HostError> {
+            let retained = cx.retain_string_arg(0).ok_or("missing argument")?;
+            let callback = cx.function("callback").ok_or("missing callback")?;
+            let result = cx.call_values(
+                self,
+                callback,
+                &[
+                    eitri::ReentryArg::String("new"),
+                    eitri::ReentryArg::RetainedString(&retained),
+                    eitri::ReentryArg::Scalar(4),
+                    eitri::ReentryArg::String("longer"),
+                ],
+            )?;
+            assert_eq!(result, eitri::ReentryValue::String("persist".to_owned()));
+            assert!(cx.release_retained_string(&retained));
+            cx.set_result(0, 1);
+            Ok(())
+        }
+    }
+    let source = r#"
+import host from "host"
+fn callback(a: string, b: string, n: i64, c: string) -> string {
+    "garbage".len()
+    if a.len() + b.len() + n + c.len() != 20 { let x = 1 / 0; }
+    return b
+}
+host.trigger("persist")
+"#;
+    for threaded in [false, true] {
+        let mut context = Context::new();
+        context.set_threaded(threaded);
+        context.set_force_gc(true);
+        context
+            .register_host_module("host", "pub fn trigger(value: string) -> i64")
+            .unwrap();
+        let compiled = context.compile(source).unwrap();
+        context.execute(&compiled, &mut Callback).unwrap();
+        assert_eq!(context.managed_heap_bytes(), 0);
+    }
+}
+
+#[test]
+fn typed_reentry_reports_signature_budget_depth_and_allocation_failures() {
+    struct Callback(eitri::FaultKind);
+    impl eitri::Host for Callback {
+        fn call(&mut self, cx: &mut eitri::Call<'_, '_>, _: u32) -> Result<(), eitri::HostError> {
+            let callback = cx.function("callback").unwrap();
+            let wrong = cx
+                .call_values(self, callback, &[eitri::ReentryArg::Scalar(1)])
+                .unwrap_err();
+            assert!(matches!(wrong.kind, eitri::FaultKind::Host(_)));
+            let fault = cx
+                .call_values(self, callback, &[eitri::ReentryArg::String("input")])
+                .unwrap_err();
+            assert_eq!(fault.kind, self.0);
+            Ok(())
+        }
+    }
+    let source =
+        "import host from \"host\"\nfn callback(s: string) -> string { return s; }\nhost.trigger()";
+    for threaded in [false, true] {
+        for expected in [
+            eitri::FaultKind::Budget,
+            eitri::FaultKind::Depth,
+            eitri::FaultKind::Memory,
+        ] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context
+                .register_host_module("host", "pub fn trigger() -> void")
+                .unwrap();
+            match expected {
+                eitri::FaultKind::Budget => context.set_budget(1),
+                eitri::FaultKind::Depth => context.set_depth(0),
+                eitri::FaultKind::Memory => context.set_heap_limit(0),
+                _ => unreachable!(),
+            }
+            let compiled = context.compile(source).unwrap();
+            context.execute(&compiled, &mut Callback(expected)).unwrap();
+            assert_eq!(context.managed_heap_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+fn typed_reentry_returns_scalar_and_void_values() {
+    struct Callback;
+    impl eitri::Host for Callback {
+        fn call(&mut self, cx: &mut eitri::Call<'_, '_>, _: u32) -> Result<(), eitri::HostError> {
+            let length = cx.function("length").unwrap();
+            assert_eq!(
+                cx.call_values(self, length, &[eitri::ReentryArg::String("☃")])?,
+                eitri::ReentryValue::Scalar(3)
+            );
+            let discard = cx.function("discard").unwrap();
+            assert_eq!(
+                cx.call_values(self, discard, &[eitri::ReentryArg::Scalar(1)])?,
+                eitri::ReentryValue::Void
+            );
+            Ok(())
+        }
+    }
+    let source = "import host from \"host\"\nfn length(s: string) -> i64 { return s.len(); }\nfn discard(n: i64) -> void { let x = n; }\nhost.trigger()";
+    for threaded in [false, true] {
+        let mut context = Context::new();
+        context.set_threaded(threaded);
+        context.set_force_gc(true);
+        context
+            .register_host_module("host", "pub fn trigger() -> void")
+            .unwrap();
+        let compiled = context.compile(source).unwrap();
+        context.execute(&compiled, &mut Callback).unwrap();
+        assert_eq!(context.managed_heap_bytes(), 0);
+    }
+}

@@ -26,6 +26,7 @@ pub struct TestHost {
     retain_text: u32,
     retained_text: u32,
     release_text: u32,
+    reenter_text: u32,
     retained: Option<eitri::RetainedString>,
     oracle_retained: Option<String>,
     pub effects: String,
@@ -58,6 +59,7 @@ impl TestHost {
             retain_text: index("retain_text"),
             retained_text: index("retained_text"),
             release_text: index("release_text"),
+            reenter_text: index("reenter_text"),
             retained: None,
             oracle_retained: None,
             effects: String::new(),
@@ -96,6 +98,20 @@ impl TestHost {
 
 impl eitri::Host for TestHost {
     fn call(&mut self, cx: &mut eitri::Call<'_, '_>, index: u32) -> Result<(), eitri::HostError> {
+        if index == self.reenter_text {
+            let arg = cx
+                .string_arg(0)
+                .ok_or("missing string argument")?
+                .to_owned();
+            self.effects += "effect: test.reenter_text()\n";
+            let callback = cx.function("callback").ok_or(NO_CALLBACK)?;
+            let result = cx.call_values(self, callback, &[eitri::ReentryArg::String(&arg)])?;
+            let eitri::ReentryValue::String(result) = result else {
+                return Err("expected string result".into());
+            };
+            cx.set_result_string(0, &result)?;
+            return Ok(());
+        }
         if index == self.retain_text {
             self.retained = Some(cx.retain_string_arg(0).ok_or("missing string argument")?);
             self.effects += "effect: test.retain_text()\n";
@@ -153,6 +169,17 @@ impl oracle::Host for TestHost {
         string_args: &[Option<String>],
         string_result: &mut Option<String>,
     ) -> Result<(), oracle::HostError> {
+        if index == self.reenter_text {
+            self.effects += "effect: test.reenter_text()\n";
+            if !cx.has_function("callback") {
+                return Err(oracle::HostError::Message(NO_CALLBACK.into()));
+            }
+            *string_result = Some(
+                cx.call_text(self, "callback", string_args[0].as_deref().unwrap())
+                    .map_err(oracle::HostError::Fault)?,
+            );
+            return Ok(());
+        }
         if index == self.retain_text {
             self.oracle_retained = string_args[0].clone();
             self.effects += "effect: test.retain_text()\n";

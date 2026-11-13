@@ -766,6 +766,12 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   reentry, release, and cross-context cases run on both interpreters. Other
   handle kinds and full-runtime accounting remain; T015 stays open. See the
   [T015-4 ledger](implementation/vm-research.md#t015-4-retained-strings).
+- T015-5: typed host-initiated script calls accept mixed scalar, UTF-8, and
+  retained string arguments and return copied strings. Forced GC, shared
+  budgets, depth, mismatch and allocation-failure cases run on both
+  interpreters. Other handle kinds and full-runtime memory accounting remain;
+  T015 stays open. See the
+  [T015-5 ledger](implementation/vm-research.md#t015-5-string-reentry).
 
 ### T016 — Implement strings, bytes, and characters
 
