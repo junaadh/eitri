@@ -697,6 +697,10 @@ pub fn string_roots_budgeted(
             }
         }
         match insn.decoded.op.info().sem {
+            Sem::StringSlice => {
+                let first = insn.decoded.operands.b as usize;
+                uses[i * frame + first..i * frame + first + 3].fill(true);
+            }
             Sem::StringJoin => {
                 let first = insn.decoded.operands.b as usize;
                 let last = insn.decoded.operands.c as usize;
@@ -867,6 +871,12 @@ fn structure(
             return Err(error(
                 at,
                 ErrorKind::InvalidScalar("invalid string join range"),
+            ));
+        }
+        if decoded.op == Op::StrSlice && decoded.operands.b as u32 + 2 >= function.frame_size {
+            return Err(error(
+                at,
+                ErrorKind::SlotOutsideFrame(decoded.operands.b as u32 + 2),
             ));
         }
         if info.format.ext_role() == Role::Const32
@@ -1153,6 +1163,22 @@ fn transfer(
                 read(state, pc, slot, Some(ValueType::String))?;
             }
             write(state, a, ValueType::String);
+        }
+        Sem::StringSlice => {
+            read(state, pc, b, Some(ValueType::String))?;
+            read(state, pc, b + 1, Some(I64))?;
+            read(state, pc, b + 2, Some(I64))?;
+            write(state, a, ValueType::String);
+        }
+        Sem::StringContains | Sem::StringStarts | Sem::StringEnds => {
+            read(state, pc, b, Some(ValueType::String))?;
+            read(state, pc, c, Some(ValueType::String))?;
+            write(state, a, Bool);
+        }
+        Sem::StringFind => {
+            read(state, pc, b, Some(ValueType::String))?;
+            read(state, pc, c, Some(ValueType::String))?;
+            write(state, a, I64);
         }
         Sem::Move => {
             let ty = read(state, pc, b, None)?;

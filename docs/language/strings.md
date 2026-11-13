@@ -4,9 +4,11 @@ The current implementation supports single-line and raw single-line
 literals, local bindings, script function parameters and returns, and `.len()`
 across control flow and calls, including host function arguments and results.
 String values also cross host-initiated reentrant calls. String `+` chains
-allocate one result, and content comparison and `.is_empty()` work on both
-interpreters. Other string operations, interpolation, and multiline literals
-remain unsupported. See the
+allocate one result, and content comparison, `.is_empty()`, byte-offset
+`.slice(start, end)`, `.contains()`, `.starts_with()`, `.ends_with()`, and
+`.find()` work on both interpreters. A `find` result can be stored and read
+with `??`; other optional syntax remains future work. Other string operations,
+interpolation, and multiline literals remain unsupported. See the
 [implemented slice](../implementation/first-slice.md#managed-strings-t015-1-through-t015-5).
 The rest of this chapter is the language contract for subsequent tasks.
 

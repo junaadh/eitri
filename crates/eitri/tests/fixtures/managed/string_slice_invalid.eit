@@ -1,0 +1,5 @@
+//! host: test
+import test from "test"
+test.emit(1)
+let value = "é".slice(1, 2)
+test.emit(value.len())

@@ -22,6 +22,7 @@ use eitri_bytecode::{CallTarget, Function, FunctionId, Op};
 use crate::{
     Call, Fault, FaultKind, Frame, Host, Limits, Location, Machine, VmScratch, absolute,
     collect_at, copy_result, host_fault, machine, raised, reserve_vm, resize_vm, slot_field,
+    string_slice_range,
 };
 
 /// Everything a handler needs that is not hot enough for a register.
@@ -405,6 +406,28 @@ fn managed_op(
             st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
             Ok(None)
         }
+        Op::StrSlice => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let reference = st.m.references[st.base + b].expect("verified string operand");
+            let (first, last) = string_slice_range(
+                st.m.heap.string(reference).expect("live string root"),
+                st.m.slots[st.base + b + 1],
+                st.m.slots[st.base + b + 2],
+            )?;
+            let mut value =
+                st.m.heap
+                    .slice(reference, first, last, st.m.memory_limit, st.m.memory);
+            if value.is_err() {
+                trace(st, pc)?;
+                value =
+                    st.m.heap
+                        .slice(reference, first, last, st.m.memory_limit, st.m.memory);
+            }
+            st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+            Ok(None)
+        }
         Op::StrLen => {
             let reference = st.m.references[st.base + b].expect("verified managed slot");
             Ok(Some(
@@ -424,6 +447,27 @@ fn managed_op(
                 std::cmp::Ordering::Equal => 0,
                 std::cmp::Ordering::Greater => 1,
             }))
+        }
+        Op::StrContains | Op::StrStarts | Op::StrEnds => {
+            let left = st.m.references[st.base + b].expect("verified string operand");
+            let right = st.m.references[st.base + c].expect("verified string operand");
+            let left = st.m.heap.string(left).expect("live string root");
+            let right = st.m.heap.string(right).expect("live string root");
+            Ok(Some(u64::from(match op {
+                Op::StrContains => left.contains(right),
+                Op::StrStarts => left.starts_with(right),
+                Op::StrEnds => left.ends_with(right),
+                _ => unreachable!(),
+            })))
+        }
+        Op::StrFind => {
+            let left = st.m.references[st.base + b].expect("verified string operand");
+            let right = st.m.references[st.base + c].expect("verified string operand");
+            let left = st.m.heap.string(left).expect("live string root");
+            let right = st.m.heap.string(right).expect("live string root");
+            Ok(Some(
+                left.find(right).map_or(-1, |index| index as i64) as u64
+            ))
         }
         _ => unreachable!(),
     }
@@ -505,6 +549,11 @@ managed_handler!(str_len, Op::StrLen);
 managed_handler!(str_concat, Op::StrConcat);
 managed_handler!(str_compare, Op::StrCompare);
 managed_handler!(str_join, Op::StrJoin);
+managed_handler!(str_slice, Op::StrSlice);
+managed_handler!(str_contains, Op::StrContains);
+managed_handler!(str_starts, Op::StrStarts);
+managed_handler!(str_ends, Op::StrEnds);
+managed_handler!(str_find, Op::StrFind);
 slot_handler!(ldi, Op::Ldi);
 slot_handler!(ldk, Op::Ldk);
 slot_handler!(add_wrap, Op::AddWrap);
@@ -623,7 +672,19 @@ extern "rust-preserve-none" fn wide(
     }
     if matches!(
         Op::from_byte(op),
-        Some(Op::Mov | Op::StrNew | Op::StrLen | Op::StrConcat | Op::StrCompare | Op::StrJoin)
+        Some(
+            Op::Mov
+                | Op::StrNew
+                | Op::StrLen
+                | Op::StrConcat
+                | Op::StrCompare
+                | Op::StrJoin
+                | Op::StrSlice
+                | Op::StrContains
+                | Op::StrStarts
+                | Op::StrEnds
+                | Op::StrFind
+        )
     ) {
         let op = Op::from_byte(op).expect("verified opcode");
         match managed_op(st, op, a, b, c, word, pc) {
@@ -1028,6 +1089,11 @@ static TABLE: [Handler; 256] = {
     table[Op::StrConcat as usize] = str_concat;
     table[Op::StrCompare as usize] = str_compare;
     table[Op::StrJoin as usize] = str_join;
+    table[Op::StrSlice as usize] = str_slice;
+    table[Op::StrContains as usize] = str_contains;
+    table[Op::StrStarts as usize] = str_starts;
+    table[Op::StrEnds as usize] = str_ends;
+    table[Op::StrFind as usize] = str_find;
     table[Op::Ldi as usize] = ldi;
     table[Op::Ldk as usize] = ldk;
     table[Op::LdkX as usize] = ldk_x;

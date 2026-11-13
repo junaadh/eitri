@@ -439,6 +439,18 @@ impl Eval<'_> {
                 }
             }
             Expr::Binary { op, lhs, rhs } => match op {
+                BinaryOp::Coalesce => {
+                    let value = self.expr(host, lhs)?;
+                    if let Value::Scalar(Ty::FindOffset, word) = value {
+                        if word as i64 == -1 {
+                            self.expr(host, rhs)
+                        } else {
+                            Ok(Value::Int(word as i64))
+                        }
+                    } else {
+                        unreachable!("checked optional find")
+                    }
+                }
                 BinaryOp::And => Ok(Value::Bool(
                     self.expr(host, lhs)?.bool() && self.expr(host, rhs)?.bool(),
                 )),
@@ -469,6 +481,60 @@ impl Eval<'_> {
                 } else {
                     Value::Int(value.len() as i64)
                 })
+            }
+            Expr::Call { callee, args }
+                if matches!(
+                    self.checked.resolutions[e],
+                    Res::StringSlice
+                        | Res::StringContains
+                        | Res::StringStarts
+                        | Res::StringEnds
+                        | Res::StringFind
+                ) =>
+            {
+                let Expr::Member { base, .. } = self.ast.exprs[callee] else {
+                    unreachable!()
+                };
+                let Value::String(index) = self.expr(host, base)? else {
+                    unreachable!()
+                };
+                let mut arguments = Vec::new();
+                for &argument in self.ast.args(args) {
+                    arguments.push(self.expr(host, argument)?);
+                }
+                if self.checked.resolutions[e] == Res::StringSlice {
+                    let first = arguments[0].integer();
+                    let last = arguments[1].integer();
+                    let slice = usize::try_from(first)
+                        .ok()
+                        .zip(usize::try_from(last).ok())
+                        .and_then(|(first, last)| self.strings[index as usize].get(first..last));
+                    let Some(slice) = slice else {
+                        return Err(self.fault("invalid string slice boundary", span));
+                    };
+                    let value = slice.to_owned();
+                    let index = self.strings.len() as u32;
+                    self.strings.push(value);
+                    Ok(Value::String(index))
+                } else {
+                    let Value::String(other) = arguments[0] else {
+                        unreachable!()
+                    };
+                    let value = &self.strings[index as usize];
+                    let other = &self.strings[other as usize];
+                    if self.checked.resolutions[e] == Res::StringFind {
+                        return Ok(Value::Scalar(
+                            Ty::FindOffset,
+                            value.find(other).map_or(-1, |n| n as i64) as u64,
+                        ));
+                    }
+                    Ok(Value::Bool(match self.checked.resolutions[e] {
+                        Res::StringContains => value.contains(other),
+                        Res::StringStarts => value.starts_with(other),
+                        Res::StringEnds => value.ends_with(other),
+                        _ => unreachable!(),
+                    }))
+                }
             }
             Expr::Call { args, .. }
                 if matches!(self.checked.resolutions[e], Res::Convert { .. }) =>

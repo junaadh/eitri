@@ -27,6 +27,7 @@ eitri_base::newtype_index! {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinaryOp {
+    Coalesce,
     Or,
     And,
     Eq,

@@ -396,7 +396,10 @@ The initial scalar slice lowered to: `MOV`, `LDI`,
 and disassembled, and the verifier rejected them before anything ran. T013
 added the scalar extensions, T015-1 adds `STR.NEW` and `STR.LEN`, and the
 T015 memory-limit work adds binary `STR.CONCAT`; T016 adds `STR.JOIN` for
-fused chains and `STR.COMPARE` for content ordering. String literals use a
+fused chains, `STR.COMPARE` for content ordering, and string slice/search
+instructions. `STR.SLICE` reads a contiguous string/start/end window, and
+`STR.FIND` uses -1 internally for a missing nonnegative byte offset. The
+verifier checks the full operand window and roots. String literals use a
 per-function UTF-8 literal pool; `.eits` represents each
 pool entry as `literal h` followed by its hexadecimal bytes. Update this
 manifest with `python3 tools/update_opcode_manifest.py`.
@@ -421,8 +424,8 @@ manifest with `python3 tools/update_opcode_manifest.py`.
 | `LDK_X`, `LDF_X`, `STF_X` | 3 | |
 | `CALL` | 3 | script, host, value |
 | `RET`, `TRAP`, `WIDE` | 3 | |
-| `STR` | 5 | managed string allocation and byte length |
-| **Total** | **170** | 86 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
+| `STR` | 10 | managed string allocation and byte length |
+| **Total** | **175** | 81 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
 
 `SHR` immediate forms need no width, because the amount is checked at
 compile time and a canonical value shifted right stays canonical. `LDF_X`

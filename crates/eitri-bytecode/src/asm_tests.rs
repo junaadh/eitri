@@ -955,3 +955,45 @@ fn string_join_verifies_every_part_and_roots_the_whole_window() {
     assert!(string_roots(&build(false, false), &callees).is_err());
     assert!(string_roots(&build(true, true), &callees).is_err());
 }
+
+#[test]
+fn string_slice_checks_its_full_operand_window() {
+    let mut asm = Assembler::new();
+    asm.emit(Op::StrNew, Operands::abc(1, 0, 0), S).unwrap();
+    asm.load(2, 0, I64, S).unwrap();
+    asm.load(3, 1, I64, S).unwrap();
+    asm.emit(Op::StrSlice, Operands::abc(4, 1, 0), S).unwrap();
+    asm.emit(Op::StrLen, Operands::abc(0, 4, 0), S).unwrap();
+    asm.ret(S).unwrap();
+    let mut f = asm.finish("slice", sig(&[], &[I64])).unwrap();
+    f.strings = vec![Box::<str>::from("x")].into_boxed_slice();
+    let signatures = IndexVec::from_raw(vec![f.signature.clone()]);
+    let callees = Callees {
+        functions: &signatures,
+        hosts: &[],
+    };
+    f.roots = string_roots(&f, &callees).unwrap();
+    verify(&f, &callees).unwrap();
+    let mut short_asm = Assembler::new();
+    short_asm
+        .emit(Op::StrNew, Operands::abc(1, 0, 0), S)
+        .unwrap();
+    short_asm
+        .emit(Op::StrSlice, Operands::abc(0, 1, 0), S)
+        .unwrap();
+    short_asm.ret(S).unwrap();
+    let mut short = short_asm
+        .finish("short", sig(&[], &[ValueType::String]))
+        .unwrap();
+    short.strings = vec![Box::<str>::from("x")].into_boxed_slice();
+    assert!(matches!(
+        string_roots(&short, &callees).unwrap_err().kind,
+        ErrorKind::SlotOutsideFrame(_)
+    ));
+    let map = f.roots.safepoints.last().unwrap().1.map.0 as usize;
+    f.roots.maps[map].ordinary.clear();
+    assert_eq!(
+        verify(&f, &callees).unwrap_err().kind,
+        ErrorKind::RootMissing(1)
+    );
+}

@@ -169,6 +169,7 @@ impl Dumper<'_> {
             Ty::F64 => "'f64'",
             Ty::Char => "'char'",
             Ty::String => "'string'",
+            Ty::FindOffset => "'?i64'",
             Ty::I64 => "'i64'",
             Ty::Bool => "'bool'",
             Ty::Void => "'void'",
@@ -186,6 +187,7 @@ impl Dumper<'_> {
             Ty::F64 => "f64",
             Ty::Char => "char",
             Ty::String => "string",
+            Ty::FindOffset => "?i64",
             Ty::I64 => "i64",
             Ty::Bool => "bool",
             Ty::Void => "void",
@@ -567,6 +569,7 @@ impl Dumper<'_> {
 
 fn binary(op: BinaryOp) -> &'static str {
     match op {
+        BinaryOp::Coalesce => "??",
         BinaryOp::Or => "||",
         BinaryOp::And => "&&",
         BinaryOp::Eq => "==",

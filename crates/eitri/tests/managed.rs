@@ -32,6 +32,55 @@ fn joined_parts_survive_collection_and_keep_source_order() {
 }
 
 #[test]
+fn slicing_checks_utf8_boundaries_and_keeps_the_host_running() {
+    let invalid = [
+        "\"é\".slice(1, 2)",
+        "\"é\".slice(0, 1)",
+        "\"é\".slice(-1, 2)",
+        "\"é\".slice(0, 3)",
+        "\"é\".slice(2, 0)",
+    ];
+    for threaded in [false, true] {
+        let mut context = Context::new();
+        context.set_threaded(threaded);
+        context.set_force_gc(true);
+        let mut host = TestHost::new(|_| None);
+        for source in invalid {
+            let artifact = context.compile(source).unwrap();
+            let error = context.execute(&artifact, &mut host).unwrap_err();
+            assert_eq!(error.kind, Some(eitri::FaultKind::InvalidStringSlice));
+        }
+        let safe = context.compile("\"é\".slice(0, 2).len()").unwrap();
+        context.execute(&safe, &mut host).unwrap();
+    }
+}
+
+#[test]
+fn slice_and_search_survive_collection_at_every_safepoint() {
+    let source = include_str!("fixtures/managed/string_slice_search.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/string_slice_search.expect")
+            );
+        }
+    }
+}
+
+#[test]
 fn strings_survive_every_safepoint_and_are_reclaimed_after_run() {
     for threaded in [false, true] {
         for simple in [false, true] {

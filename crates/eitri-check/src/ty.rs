@@ -15,6 +15,8 @@ pub enum Ty {
     F64,
     Char,
     String,
+    /// A find result: null or a nonnegative UTF-8 byte offset.
+    FindOffset,
     Bool,
     Void,
     Error,
@@ -34,6 +36,7 @@ impl Ty {
             Self::Char => S::Char,
             Self::Bool => S::Bool,
             Self::String => return Some(TypeDesc::String),
+            Self::FindOffset => return None,
             Self::Void => return Some(TypeDesc::Void),
             Self::Error => return None,
         }))
@@ -69,6 +72,7 @@ impl Ty {
             Ty::F64 => "`f64`",
             Ty::Char => "`char`",
             Ty::String => "`string`",
+            Ty::FindOffset => "`?i64`",
             Ty::Bool => "`bool`",
             Ty::Void => "`void`",
             Ty::Error => "an erroneous type",

@@ -359,6 +359,11 @@ pub enum Sem {
     StringConcat,
     StringCompare,
     StringJoin,
+    StringSlice,
+    StringContains,
+    StringStarts,
+    StringEnds,
+    StringFind,
     Int {
         op: IntOp,
         mode: Mode,
@@ -670,6 +675,11 @@ ops! {
     StrConcat = "STR.CONCAT", "STR", Abc, [Dst, Src, Src], Sem::StringConcat, FAULT, true, Managed;
     StrCompare = "STR.COMPARE", "STR", Abc, [Dst, Src, Src], Sem::StringCompare, NONE, true, None;
     StrJoin = "STR.JOIN", "STR", Abc, [Dst, Src, Src], Sem::StringJoin, FAULT, true, Managed;
+    StrSlice = "STR.SLICE", "STR", Abc, [Dst, Src, None], Sem::StringSlice, FAULT, true, Managed;
+    StrContains = "STR.CONTAINS", "STR", Abc, [Dst, Src, Src], Sem::StringContains, NONE, true, None;
+    StrStarts = "STR.STARTS", "STR", Abc, [Dst, Src, Src], Sem::StringStarts, NONE, true, None;
+    StrEnds = "STR.ENDS", "STR", Abc, [Dst, Src, Src], Sem::StringEnds, NONE, true, None;
+    StrFind = "STR.FIND", "STR", Abc, [Dst, Src, Src], Sem::StringFind, NONE, true, None;
 
 }
 

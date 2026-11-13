@@ -48,6 +48,11 @@ pub enum Res {
     Host(HostFnId),
     StringLen,
     StringIsEmpty,
+    StringSlice,
+    StringContains,
+    StringStarts,
+    StringEnds,
+    StringFind,
     StringLiteral(u32),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
@@ -874,6 +879,10 @@ impl<'i> Checker<'_, 'i> {
                     found
                 }
             }
+            Expr::Binary {
+                op: BinaryOp::Coalesce,
+                ..
+            } => self.coalesce(expr),
             Expr::Binary { .. } => self.binary_chain(expr, expected),
             Expr::Call { callee, args } => self.call(expr, callee, args),
             Expr::If(id) => self.if_expr(expr, id, expected, used),
@@ -886,6 +895,27 @@ impl<'i> Checker<'_, 'i> {
     fn literal(&mut self, expr: ExprId, word: u64) {
         self.out.resolutions[expr] = Res::Int(self.out.ints.len() as u32);
         self.out.ints.push(word as i64);
+    }
+
+    fn coalesce(&mut self, root: ExprId) -> Ty {
+        let mark = self.spine.len();
+        let mut node = root;
+        while let Expr::Binary {
+            op: BinaryOp::Coalesce,
+            lhs,
+            rhs,
+        } = self.ast().exprs[node]
+        {
+            self.spine.push(node);
+            self.value(lhs, Some(Ty::FindOffset));
+            node = rhs;
+        }
+        self.value(node, Some(Ty::I64));
+        while self.spine.len() > mark {
+            let node = self.spine.pop().expect("above mark");
+            self.out.types[node] = Ty::I64;
+        }
+        Ty::I64
     }
 
     fn int(&mut self, expr: ExprId, token: TokenId, negative: bool, expected: Option<Ty>) -> Ty {
@@ -1064,6 +1094,36 @@ impl<'i> Checker<'_, 'i> {
         let ast = self.input.ast;
         if matches!(ast.exprs[callee], Expr::Name(token) if self.symbol(token).is_type_name()) {
             return self.conversion(expr, callee, ast.args(args), true);
+        }
+        if let Expr::Member { base, name } = ast.exprs[callee]
+            && matches!(
+                self.spelling(name),
+                "slice" | "contains" | "starts_with" | "ends_with" | "find"
+            )
+            && !matches!(ast.exprs[base], Expr::Name(token) if matches!(self.heads.get(self.symbol(token).as_u32() as usize).copied().flatten(), Some(Name::Module(_))))
+        {
+            self.value(base, Some(Ty::String));
+            let method = self.spelling(name);
+            let (count, argument, resolution, result) = match method {
+                "slice" => (2, Ty::I64, Res::StringSlice, Ty::String),
+                "contains" => (1, Ty::String, Res::StringContains, Ty::Bool),
+                "starts_with" => (1, Ty::String, Res::StringStarts, Ty::Bool),
+                "ends_with" => (1, Ty::String, Res::StringEnds, Ty::Bool),
+                "find" => (1, Ty::String, Res::StringFind, Ty::FindOffset),
+                _ => unreachable!(),
+            };
+            for &arg in ast.args(args) {
+                self.value(arg, Some(argument));
+            }
+            if ast.args(args).len() != count {
+                self.report(
+                    Code::ArgumentCount,
+                    format!("`{method}` takes {count} arguments"),
+                    self.span(expr),
+                );
+            }
+            self.out.resolutions[expr] = resolution;
+            return result;
         }
         if let Expr::Member { base, name } = ast.exprs[callee]
             && matches!(self.spelling(name), "len" | "is_empty")
@@ -1294,7 +1354,9 @@ impl<'i> Checker<'_, 'i> {
         let ast = self.input.ast;
         let mark = self.spine.len();
         let mut leftmost = root;
-        while let Expr::Binary { lhs, .. } = ast.exprs[leftmost] {
+        while let Expr::Binary { op, lhs, .. } = ast.exprs[leftmost]
+            && op != BinaryOp::Coalesce
+        {
             self.spine.push(leftmost);
             leftmost = lhs;
         }
@@ -1394,6 +1456,7 @@ fn valid_operand(op: BinaryOp, ty: Ty) -> bool {
         return true;
     }
     match op {
+        Coalesce => false,
         And | Or => ty == Ty::Bool,
         Eq | NotEq => ty != Ty::Void,
         Lt | LtEq | Gt | GtEq => ty.numeric() || matches!(ty, Ty::Char | Ty::String),

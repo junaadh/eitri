@@ -50,8 +50,11 @@ cross reentry; the host can fetch it again afterwards. `Call::call_values`
 supports mixed scalar and string arguments and copies string results out of
 host-initiated reentrant script calls. String concatenation chains use one
 result allocation, and strings support content comparisons, `.len()` and
-`.is_empty()`. Other methods remain unsupported. No host effects occur for a
-rejected program.
+`.is_empty()`, `.slice(start, end)`, `.contains()`, `.starts_with()`,
+`.ends_with()` and `.find()`. Find produces a restricted optional byte offset
+that can be stored and read using lazy `??`; general optionals are still
+unsupported. Invalid slice ranges and UTF-8 boundaries fault with
+`InvalidStringSlice`. No host effects occur for a rejected program.
 Hosts may retain a string argument across calls and executions and
 return it to a script; explicit release removes its collector root.
 

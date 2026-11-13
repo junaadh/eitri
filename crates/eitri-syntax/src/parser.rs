@@ -848,7 +848,7 @@ impl Parser<'_> {
             T::Gt if self.adjacent(0) && self.nth(1) == T::Gt => (Level::Shift, Binary(B::Shr)),
             T::Gt if self.adjacent(0) && self.nth(1) == T::GtEq => return None,
             T::Gt => (Level::Compare, Binary(B::Gt)),
-            T::QuestionQuestion => (Level::Coalesce, Unsupported("`??`", 1)),
+            T::QuestionQuestion => (Level::Coalesce, Binary(B::Coalesce)),
             T::DotDot | T::DotDotEq => (Level::Range, Unsupported("ranges", 1)),
             T::Pipe => (Level::Bitwise, Binary(B::BitOr)),
             T::Caret => (Level::BitXor, Binary(B::BitXor)),
@@ -878,8 +878,7 @@ impl Parser<'_> {
     /// - Comparisons do not chain: a second one is reported once, and the
     ///   rest of the chain is consumed into an `Error`.
     /// - `..` does not chain: a second one ends the expression.
-    /// - `??` is right-associative in the grammar but outside the slice, so
-    ///   it is consumed iteratively (each one reported, in order) and a long
+    /// - `??` is right-associative and collected iteratively, so a long
     ///   chain cannot exhaust the stack.
     ///
     /// Recursion only enters the right operand at a strictly tighter level,
@@ -912,6 +911,22 @@ impl Parser<'_> {
                     }
                     _ => {}
                 }
+            }
+            if level == Level::Coalesce {
+                let mark = self.exprs.len();
+                self.exprs.push(lhs);
+                while self.at(T::QuestionQuestion) {
+                    self.bump();
+                    let part = self.binary_expr(Level::Range, ns)?;
+                    self.exprs.push(part);
+                }
+                lhs = self.exprs.pop().expect("coalesce has operands");
+                while self.exprs.len() > mark {
+                    let left = self.exprs.pop().expect("above mark");
+                    lhs = self.binary(BinaryOp::Coalesce, left, lhs);
+                }
+                last = level;
+                continue;
             }
             let rhs_min = match level {
                 Level::Compare => Level::Coalesce,

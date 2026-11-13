@@ -1,0 +1,15 @@
+//! host: test
+import test from "test"
+let value = "café ☃"
+let middle = value.slice(3, 5)
+test.check(middle == "é")
+test.check(value.contains("é "))
+test.check(value.starts_with("caf"))
+test.check(value.ends_with("☃"))
+test.check(!value.contains("no"))
+test.emit(value.slice(6, 9).len())
+let found = value.find("é")
+test.emit(found ?? test.id(99))
+test.emit(value.find("missing") ?? test.id(8))
+test.emit(value.find("") ?? 77)
+test.emit(value.find("missing") ?? value.find("caf") ?? 9)

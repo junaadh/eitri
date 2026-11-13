@@ -388,7 +388,6 @@ fn unsupported_features_are_reported_once_and_dropped() {
             "E0001 10..12 not supported yet: lambdas",
         ),
         ("let r = 0..3", "E0001 9..11 not supported yet: ranges"),
-        ("let x = a ?? 1", "E0001 10..12 not supported yet: `??`"),
         (
             "fn outer() -> void {\n    fn inner() -> void {\n    }\n}",
             "E0001 25..27 not supported yet: nested functions",
@@ -632,11 +631,13 @@ fn operator_edge_cases_match_the_reference() {
 
 #[test]
 fn long_coalesce_chains_do_not_recurse() {
-    // Each `??` is reported (it is outside the slice), iteratively.
+    // The right-associative tree is built without recursive descent.
     let text = "let x = a".to_owned() + &" ?? a".repeat(100_000);
     let errors = errors_only(&text);
-    assert_eq!(errors.len(), 100);
-    assert!(errors.iter().all(|e| e == "E0001 not supported yet: `??`"));
+    assert!(errors.is_empty(), "{errors:?}");
+    let (tree, errors) = parse_text("let x = a ?? b ?? c", ModuleKind::Script);
+    assert!(errors.is_empty());
+    assert_eq!(tree, "(let x (Coalesce a (Coalesce b c)))");
 }
 
 /// E2's frozen parser predates T013. Preserve it for the original syntax;
@@ -667,6 +668,7 @@ fn m0_reference_input(text: &str) -> bool {
                 | crate::TokenKind::PipeEq
                 | crate::TokenKind::CaretEq
                 | crate::TokenKind::ShlEq
+                | crate::TokenKind::QuestionQuestion
         )
     }) && !text.contains(">>")
         && !text.contains("truncating:")

@@ -1,0 +1,3 @@
+effect: test.emit(1)
+fault: invalid string slice boundary
+  at <module> 64..80

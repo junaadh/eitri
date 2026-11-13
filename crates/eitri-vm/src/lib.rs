@@ -58,6 +58,7 @@ pub enum FaultKind {
     DivisionByZero,
     ShiftAmount,
     Conversion,
+    InvalidStringSlice,
     Budget,
     Depth,
     OutOfMemory,
@@ -85,6 +86,7 @@ impl FaultKind {
             FaultKind::DivisionByZero => "division by zero",
             FaultKind::ShiftAmount => "invalid shift amount",
             FaultKind::Conversion => "numeric conversion out of range",
+            FaultKind::InvalidStringSlice => "invalid string slice boundary",
             FaultKind::Budget => "execution budget exhausted",
             FaultKind::Depth => "call depth exceeded",
             FaultKind::OutOfMemory => "managed memory limit exceeded",
@@ -1059,6 +1061,16 @@ fn slot_field(word: u32, hi: u32, shift: u32) -> usize {
     (((word >> shift) & 0xff) | ((hi >> shift) & 0xff) << 8) as usize
 }
 
+fn string_slice_range(text: &str, start: u64, end: u64) -> Result<(usize, usize), FaultKind> {
+    if (start as i64) < 0 || (end as i64) < 0 {
+        return Err(FaultKind::InvalidStringSlice);
+    }
+    let start = usize::try_from(start).map_err(|_| FaultKind::InvalidStringSlice)?;
+    let end = usize::try_from(end).map_err(|_| FaultKind::InvalidStringSlice)?;
+    text.get(start..end).ok_or(FaultKind::InvalidStringSlice)?;
+    Ok((start, end))
+}
+
 /// Copy `count` slots from `from` to `to`. Calls usually move one slot,
 /// which is copied inline instead of through a call to `memmove` (E4, V4).
 #[inline(always)]
@@ -1352,6 +1364,48 @@ fn execute(
                             fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)
                         })?);
                     }
+                    Op::StrSlice => {
+                        if m.force_gc {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        }
+                        let reference = m.references[base + b!()].expect("verified string operand");
+                        let (first, last) = string_slice_range(
+                            m.heap.string(reference).expect("live string root"),
+                            s[b!() + 1],
+                            s[b!() + 2],
+                        )
+                        .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        let mut value =
+                            m.heap
+                                .slice(reference, first, last, m.memory_limit, m.memory);
+                        if value.is_err() {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                            value = m
+                                .heap
+                                .slice(reference, first, last, m.memory_limit, m.memory);
+                        }
+                        m.references[base + a!()] = Some(value.map_err(|_| {
+                            fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)
+                        })?);
+                    }
                     Op::StrLen => {
                         let reference = m.references[base + b!()].expect("verified managed slot");
                         s[a!()] = m.heap.string(reference).expect("live string root").len() as u64;
@@ -1369,6 +1423,25 @@ fn execute(
                             std::cmp::Ordering::Equal => 0,
                             std::cmp::Ordering::Greater => 1,
                         };
+                    }
+                    Op::StrContains | Op::StrStarts | Op::StrEnds => {
+                        let left = m.references[base + b!()].expect("verified string operand");
+                        let right = m.references[base + c!()].expect("verified string operand");
+                        let left = m.heap.string(left).expect("live string root");
+                        let right = m.heap.string(right).expect("live string root");
+                        s[a!()] = u64::from(match op {
+                            Op::StrContains => left.contains(right),
+                            Op::StrStarts => left.starts_with(right),
+                            Op::StrEnds => left.ends_with(right),
+                            _ => unreachable!(),
+                        });
+                    }
+                    Op::StrFind => {
+                        let left = m.references[base + b!()].expect("verified string operand");
+                        let right = m.references[base + c!()].expect("verified string operand");
+                        let left = m.heap.string(left).expect("live string root");
+                        let right = m.heap.string(right).expect("live string root");
+                        s[a!()] = left.find(right).map_or(-1, |index| index as i64) as u64;
                     }
                     Op::Ldi => s[a!()] = (word >> 16) as i16 as i64 as u64,
                     Op::Ldk => s[a!()] = function.consts[(word >> 16) as usize],

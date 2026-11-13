@@ -163,6 +163,7 @@ pub fn value_type(ty: Ty) -> ValueType {
         Ty::Char => ValueType::Char,
         Ty::Bool => ValueType::Bool,
         Ty::String => ValueType::String,
+        Ty::FindOffset => ValueType::I64,
         Ty::Void | Ty::Error => unreachable!("checked code has only value types here"),
     }
 }
@@ -996,6 +997,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 )?;
                 Ok(slot)
             }
+            Expr::Binary {
+                op: BinaryOp::Coalesce,
+                ..
+            } => self.coalesce(e, dst),
             Expr::Binary { .. } => self.chain(e, dst),
             Expr::Call { args, .. } if matches!(checked.resolutions[e], Res::Convert { .. }) => {
                 self.conversion(e, ast.args(args)[0], dst)
@@ -1022,12 +1027,101 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
                 Ok(slot)
             }
+            Expr::Call { callee, args }
+                if matches!(
+                    checked.resolutions[e],
+                    Res::StringSlice
+                        | Res::StringContains
+                        | Res::StringStarts
+                        | Res::StringEnds
+                        | Res::StringFind
+                ) =>
+            {
+                let Expr::Member { base, .. } = ast.exprs[callee] else {
+                    unreachable!()
+                };
+                if checked.resolutions[e] == Res::StringSlice {
+                    let first = self.top;
+                    self.top += 3;
+                    let end = self.top;
+                    self.expr(base, Some(first))?;
+                    self.top = end;
+                    for (index, &argument) in ast.args(args).iter().enumerate() {
+                        self.expr(argument, Some(first + index as u32 + 1))?;
+                        self.top = end;
+                    }
+                    let slot = self.dst(dst);
+                    self.asm.emit(
+                        Op::StrSlice,
+                        Operands::abc(slot.into(), first.into(), 0),
+                        span,
+                    )?;
+                    Ok(slot)
+                } else {
+                    let left = self.expr(base, None)?;
+                    let right = self.expr(ast.args(args)[0], None)?;
+                    let slot = self.dst(dst);
+                    let op = match checked.resolutions[e] {
+                        Res::StringContains => Op::StrContains,
+                        Res::StringStarts => Op::StrStarts,
+                        Res::StringEnds => Op::StrEnds,
+                        Res::StringFind => Op::StrFind,
+                        _ => unreachable!(),
+                    };
+                    self.asm.emit(
+                        op,
+                        Operands::abc(slot.into(), left.into(), right.into()),
+                        span,
+                    )?;
+                    Ok(slot)
+                }
+            }
             Expr::Call { .. } => self.call(e, dst),
             Expr::If(id) => self.if_value(id, dst, span),
             Expr::Member { .. } | Expr::Error => {
                 unreachable!("checked code has no bare members or errors")
             }
         }
+    }
+
+    fn coalesce(&mut self, root: ExprId, dst: Option<u32>) -> Lowered<u32> {
+        let ast = self.input.ast;
+        let mark = self.stack.len();
+        let mut node = root;
+        while let Expr::Binary {
+            op: BinaryOp::Coalesce,
+            lhs,
+            rhs,
+        } = ast.exprs[node]
+        {
+            self.stack.push(lhs);
+            node = rhs;
+        }
+        let count = self.stack.len() - mark;
+        let slot = self.dst(dst);
+        let temporary = self.top;
+        let end = self.asm.label();
+        for index in 0..count {
+            let operand = self.stack[mark + index];
+            let found = self.expr(operand, None)?;
+            let next = self.asm.label();
+            self.asm
+                .branch_imm(Cond::Eq, found, -1, next, ast.span(operand))?;
+            if slot != found {
+                self.asm.emit(
+                    Op::Mov,
+                    Operands::abc(slot.into(), found.into(), 0),
+                    ast.span(operand),
+                )?;
+            }
+            self.asm.jump(end, ast.span(operand));
+            self.asm.bind(next)?;
+            self.top = temporary;
+        }
+        self.stack.truncate(mark);
+        self.expr(node, Some(slot))?;
+        self.asm.bind(end)?;
+        Ok(slot)
     }
 
     /// Flatten concatenation in source order and evaluate every part before
@@ -1108,7 +1202,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let mark = self.stack.len();
         let mut node = root;
         while let Expr::Binary { op, lhs, .. } = ast.exprs[node]
-            && !matches!(op, BinaryOp::And | BinaryOp::Or)
+            && !matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Coalesce)
         {
             self.stack.push(node);
             node = lhs;
@@ -1399,7 +1493,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         Op::CsetLe
                     }
                 }
-                And | Or => unreachable!(),
+                And | Or | Coalesce => unreachable!(),
             };
             let swap = matches!(op, Gt | GtEq);
             (opcode, if swap { b } else { a }, if swap { a } else { b })

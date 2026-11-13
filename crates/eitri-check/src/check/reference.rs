@@ -932,7 +932,9 @@ fn operand_type(op: BinaryOp) -> Option<Ty> {
     match op {
         Or | And => Some(Ty::Bool),
         Eq | NotEq => None,
-        BitAnd | BitOr | BitXor | Shl | Shr => unreachable!("outside frozen M0 reference"),
+        BitAnd | BitOr | BitXor | Shl | Shr | Coalesce => {
+            unreachable!("outside frozen M0 reference")
+        }
         Lt | LtEq | Gt | GtEq | Add | Sub | Mul | Div | Rem | WrapAdd | WrapSub | WrapMul => {
             Some(Ty::I64)
         }
@@ -944,7 +946,9 @@ fn result_type(op: BinaryOp) -> Ty {
     match op {
         Or | And | Eq | NotEq | Lt | LtEq | Gt | GtEq => Ty::Bool,
         Add | Sub | Mul | Div | Rem | WrapAdd | WrapSub | WrapMul => Ty::I64,
-        BitAnd | BitOr | BitXor | Shl | Shr => unreachable!("outside frozen M0 reference"),
+        BitAnd | BitOr | BitXor | Shl | Shr | Coalesce => {
+            unreachable!("outside frozen M0 reference")
+        }
     }
 }
 

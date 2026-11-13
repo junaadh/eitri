@@ -160,6 +160,22 @@ impl Heap {
         self.finish_string(text, limit, memory)
     }
 
+    pub fn slice(
+        &mut self,
+        reference: HeapRef,
+        start: usize,
+        end: usize,
+        limit: usize,
+        memory: &mut Option<eitri_base::MemoryBudget>,
+    ) -> Result<HeapRef, HeapLimit> {
+        let length = end - start;
+        self.reserve_object(length, limit, memory)?;
+        let mut text = String::new();
+        super::reserve_string_vm(&mut text, length, memory).map_err(|_| HeapLimit)?;
+        text.push_str(&self.string(reference).expect("live string root")[start..end]);
+        self.finish_string(text, limit, memory)
+    }
+
     fn reserve_object(
         &mut self,
         text_len: usize,

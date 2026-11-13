@@ -785,6 +785,9 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - T016-1: fused string concatenation, content comparisons, `.len()` and
   `.is_empty()` run on both interpreters, with forced-GC and verifier tests.
   Slicing, formatting, and the remaining string methods remain open.
+- T016-2: byte-boundary slicing, contains, starts/ends checks and `find` run
+  on both interpreters. `find` results support lazy `??`; general optional
+  syntax remains future work. Invalid UTF-8 boundaries produce a typed fault.
 
 ### T017 — Implement aggregates and tagged values
 
