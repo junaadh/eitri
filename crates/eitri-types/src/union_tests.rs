@@ -768,3 +768,134 @@ fn named_enum_layouts_trace_and_initialize_active_cases() {
         Err(DeclError::Layout(LayoutError::Unsupported))
     ));
 }
+
+/// Independent layout visitor: interprets the value's active payload shape,
+/// not its trace map. Packed coordinates come from the layout's transfer plan;
+/// inactive cases and null-filled partition capacity are never visited.
+fn active_reference_locations(store: &LayoutStore, storage: &[Cell]) -> Vec<usize> {
+    let mut stack = vec![(store.root(), Source::Native(0))];
+    let mut result = Vec::new();
+    while let Some((id, src)) = stack.pop() {
+        let layout = store.get(id).expect("reachable layout");
+        let (r, s) = match src {
+            Source::Native(base) => (base, base),
+            Source::Packed(r, s) => (r, s),
+        };
+        match &layout.copy.kind {
+            CopyKind::Scalar => {}
+            CopyKind::Reference => result.push(r),
+            CopyKind::Dynamic => match storage[s] {
+                Cell::Type(true) => result.push(s + 8),
+                Cell::Type(false) => {}
+                other => panic!("inactive or uninitialized dynamic type: {other:?}"),
+            },
+            CopyKind::Product(fields) => {
+                for f in fields {
+                    let next = match src {
+                        Source::Native(base) => Source::Native(base + f.source),
+                        Source::Packed(r, s) => Source::Packed(r + f.references, s + f.scalars),
+                    };
+                    stack.push((f.layout, next));
+                }
+            }
+            CopyKind::Repeat {
+                count,
+                source_stride,
+                reference_stride,
+                scalar_stride,
+                element,
+            } => {
+                for i in 0..*count as usize {
+                    let next = match src {
+                        Source::Native(base) => Source::Native(base + i * source_stride),
+                        Source::Packed(r, s) => {
+                            Source::Packed(r + i * reference_stride, s + i * scalar_stride)
+                        }
+                    };
+                    stack.push((*element, next));
+                }
+            }
+            CopyKind::Split {
+                reference_source,
+                tag: range,
+                scalar_source,
+                scalar_destination,
+                cases,
+            } => {
+                let (tag_at, refs, scalars) = match src {
+                    Source::Native(base) => (
+                        base + range.offset,
+                        base + reference_source,
+                        base + scalar_source,
+                    ),
+                    Source::Packed(r, s) => (s, r, s + scalar_destination),
+                };
+                if let Some(child) = cases[tag(storage, tag_at)] {
+                    stack.push((child, Source::Packed(refs, scalars)));
+                }
+            }
+        }
+    }
+    result.sort_unstable();
+    result
+}
+
+#[test]
+fn layout_visitor_follows_only_active_initialized_payloads() {
+    let nodes = [
+        Shape::Scalar(ScalarKind::I64),
+        Shape::ManagedReference(0),
+        Shape::Dynamic,
+        Shape::Product(&[1, 0, 2]),
+        Shape::Union(&[None, Some(3), Some(0)]),
+        Shape::Array(2, 4),
+        Shape::Product(&[5, 1]),
+    ];
+    for domain in [StorageDomain::Frame, StorageDomain::Heap] {
+        let store = build(&nodes, 6, domain);
+        for first in [
+            Value::Case(0, None),
+            case(
+                1,
+                Value::Product(vec![
+                    Value::Reference(11),
+                    Value::Scalar(8),
+                    Value::Dynamic(true, 12),
+                ]),
+            ),
+            case(2, Value::Scalar(19)),
+        ] {
+            for second in [
+                Value::Case(0, None),
+                case(
+                    1,
+                    Value::Product(vec![
+                        Value::Reference(21),
+                        Value::Scalar(9),
+                        Value::Dynamic(false, 22),
+                    ]),
+                ),
+            ] {
+                let value = Value::Product(vec![
+                    Value::Array(vec![first.clone(), second]),
+                    Value::Reference(31),
+                ]);
+                let storage = encode(&store, store.root(), &value);
+                let locations = active_reference_locations(&store, &storage);
+                let mut actual: Vec<_> = locations
+                    .into_iter()
+                    .filter_map(|at| match storage[at] {
+                        Cell::Reference(Some(label)) => Some(label),
+                        Cell::Reference(None) => None,
+                        other => panic!("visited non-reference {other:?}"),
+                    })
+                    .collect();
+                let mut expected = Vec::new();
+                labels(&value, &mut expected);
+                actual.sort_unstable();
+                expected.sort_unstable();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+}
