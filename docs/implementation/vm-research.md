@@ -2224,3 +2224,17 @@ p50/p99 9,584/15,100 ns, execution 250/333 ns, total 9,833/15,300 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 patterns. Samples: `/private/tmp/eitri-t017-29-samples.csv`; report:
 `/private/tmp/eitri-t017-29-bench.txt`.
+
+### T017-30 aggregate field defaults
+
+Field defaults can construct enum values and fully initialized structs. The
+iterative default-expression scan restricts nested struct literals to explicit
+initialization or an update base, avoiding recursive default expansion while
+that analysis remains open. Field lookup is bounded by 256 fields. Effects and
+managed roots are tested under forced collection on both execution paths.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,542/16,700 ns, execution 209/458 ns, total 8,791/17,000 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+aggregate defaults. Samples: `/private/tmp/eitri-t017-30-samples.csv`; report:
+`/private/tmp/eitri-t017-30-bench.txt`.

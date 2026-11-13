@@ -1,0 +1,6 @@
+effect: test.decorate([x])
+effect: test.decorate([x])
+effect: test.check(true)
+effect: test.check(true)
+effect: test.check(true)
+ok

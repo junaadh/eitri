@@ -1,0 +1,11 @@
+//! host: test
+import test from "test"
+struct Text { value: string }
+enum Choice { None, Some(item: Text) }
+struct Container { item: Choice = Choice.Some(item: Text { value: test.decorate("x") }) }
+let first = Container {}
+let second = Container { item: Choice.None }
+let third = Container {}
+test.check(match first.item { .None => false, .Some(item) => item.value == "[x]" })
+test.check(match second.item { .None => true, .Some(_) => false })
+test.check(first == third)

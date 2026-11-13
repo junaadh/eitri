@@ -868,6 +868,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   IEEE float matching and conservative exhaustiveness checks.
 - T017-29: bare nested enum cases can appear as payload patterns, with
   type checking and partial-pattern exhaustiveness handling.
+- T017-30: field defaults can construct enums and fully initialized structs,
+  preserving effects and managed roots at each construction site.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 
