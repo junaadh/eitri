@@ -765,13 +765,6 @@ impl<'i> Checker<'_, 'i> {
             }
             let mut fields = [Ty::Error; 256];
             let mut field_count = 0;
-            if ast.params(decl.fields).is_empty() {
-                self.report(
-                    Code::Unsupported,
-                    "not supported yet: empty structs",
-                    self.token_span(decl.name),
-                );
-            }
             for field in ast.params(decl.fields) {
                 let ty = self.ty(field.ty, false);
                 if ast
@@ -2085,8 +2078,10 @@ impl<'i> Checker<'_, 'i> {
                     .copied()
                     .map(|id| (id, &ast.fns[id]))
                     .find(|(id, method)| {
-                        method.receiver.is_some() && self.symbol(method.name) == self.symbol(name)
-                            && self.out.param_types[self.out.signatures[*id].params].first() == Some(&receiver)
+                        method.receiver.is_some()
+                            && self.symbol(method.name) == self.symbol(name)
+                            && self.out.param_types[self.out.signatures[*id].params].first()
+                                == Some(&receiver)
                     })
                     .map(|(id, _)| id);
                 if let Some(method) = method {

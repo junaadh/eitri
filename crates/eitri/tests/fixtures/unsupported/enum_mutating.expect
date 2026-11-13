@@ -1,0 +1,1 @@
+error[E0301] 53..59: enum methods cannot be mutating

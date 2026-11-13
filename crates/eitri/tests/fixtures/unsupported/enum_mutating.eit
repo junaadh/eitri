@@ -1,0 +1,2 @@
+enum Choice { One, Two }
+extend Choice { mutating fn change() -> void {} }

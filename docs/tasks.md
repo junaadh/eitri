@@ -824,6 +824,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   forced collection, including values passed through calls and loop branches.
 - T017-7: struct and enum equality compares nested values and string content,
   with IEEE float behavior, on both interpreters and under forced collection.
+- T017-8: enum methods use `extend` and explicit `self`; mutating enum
+  methods are rejected. Managed payloads survive method calls and collection.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

@@ -708,12 +708,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         pending.push((ty, nullable));
         while let Some((next, nullable)) = pending.pop() {
             match next {
-                Ty::Struct(id) => pending.extend(
-                    self.checked.param_types[self.checked.struct_fields[id]]
-                        .iter()
-                        .rev()
-                        .map(|&ty| (ty, nullable)),
-                ),
+                Ty::Struct(id) => {
+                    let fields = &self.checked.param_types[self.checked.struct_fields[id]];
+                    if fields.is_empty() {
+                        output.push(ValueType::I64);
+                    } else {
+                        pending.extend(fields.iter().rev().map(|&ty| (ty, nullable)));
+                    }
+                }
                 Ty::Enum(id) => {
                     output.push(ValueType::I64);
                     let start = self.checked.enum_starts[id] as usize;
@@ -1412,6 +1414,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 };
                 let end = self.top;
                 let declared = ast.params(ast.structs[id].fields);
+                if declared.is_empty() {
+                    self.asm.load(slot, 0, ValueType::I64, span)?;
+                }
                 for field in &ast.field_inits[fields] {
                     let symbol = self.input.tokens.symbol(field.name);
                     let index = declared

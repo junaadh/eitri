@@ -31,7 +31,7 @@ fn every_supported_code_has_a_structured_and_terminal_snapshot() {
     let mut failures = String::new();
     for &code in Code::ALL {
         let fixture = match code {
-            Code::Unsupported => Some("unsupported/struct.eit"),
+            Code::Unsupported => Some("unsupported/attribute.eit"),
             Code::Lexical => Some("reject/malformed_literal.eit"),
             Code::Syntax => Some("reject/chained_comparison.eit"),
             Code::UnknownName => Some("reject/unknown_name.eit"),

@@ -1,0 +1,12 @@
+//! host: test
+import test from "test"
+struct Empty {}
+struct Box { empty: Empty, text: string }
+enum Choice { EmptyCase(item: Empty), BoxCase(item: Box) }
+fn identity(value: Empty) -> Empty { return value }
+let first = Empty {}
+let second = identity(first)
+test.check(first == second)
+let box = Box { empty: second, text: "alive" }
+let value = Choice.BoxCase(item: box)
+test.check(match value { .EmptyCase(item) => false, .BoxCase(item) => item.empty == first && item.text == "alive" })

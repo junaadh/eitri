@@ -1947,3 +1947,15 @@ p50/p99 8,375/10,400 ns, first execution 250/292 ns, total 8,584/10,700 ns,
 48 allocations (4,762 B) and 30,275 retained bytes. This scalar workload does
 not exercise aggregate equality. Samples: `/private/tmp/eitri-t017-7-samples.csv`;
 report: `/private/tmp/eitri-t017-7-bench.txt`.
+
+### T017-8 enum methods
+
+Enum extension methods accept explicit `self` and share the aggregate call
+path; mutating enum methods are rejected. The nested payload fixture runs the
+method under forced collection in both execution and lowering modes.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,208/10,400 ns, first execution 208/292 ns, total 8,417/10,700 ns.
+This scalar workload does not exercise enum methods. Samples:
+`/private/tmp/eitri-t017-8-samples.csv`; report:
+`/private/tmp/eitri-t017-8-bench.txt`.

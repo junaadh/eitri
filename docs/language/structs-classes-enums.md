@@ -6,8 +6,8 @@ every field, field reads and writes through `var`, and copies in local bindings
 and control flow. Fields occupy frame slots, so strings remain collector roots.
 Recursive inline layouts are rejected. Structs can pass and return through
 script calls; host-initiated calls reject aggregate signatures for now. Methods
-using `extend`, explicit `self`, and `mutating` methods on mutable receivers
-also work, with up to 256 methods per module. Bare field names inside methods,
+using `extend` and explicit `self` work for structs and enums; `mutating`
+struct methods require mutable receivers. Up to 256 methods per module are supported. Bare field names inside methods,
 static methods and defaults remain future work. Enums with scalar and string
 payloads, construction, and exhaustive case matching with positional bindings
 execute on both interpreters. Structs and enums can contain each other, with
