@@ -1,0 +1,12 @@
+//! host: test
+import test from "test"
+let inner = 99
+struct Inner { value: i64 }
+struct Item { count: i64, text: string, inner: Inner }
+extend Item {
+    fn total() -> i64 { return count + inner.value }
+    fn name() -> string { return text }
+    fn shadow(count: i64) -> i64 { return count + self.count }
+}
+let item = Item { count: 3, text: "ok", inner: Inner { value: 4 } }
+test.check(item.total() == 7 && item.shadow(10) == 13 && item.name() == "ok")

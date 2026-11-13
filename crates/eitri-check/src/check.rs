@@ -2123,9 +2123,10 @@ impl<'i> Checker<'_, 'i> {
     fn member_value(&mut self, expr: ExprId, base: ExprId, name: TokenId) -> Ty {
         let may_be_struct = match self.input.ast.exprs[base] {
             Expr::Name(token) => match self.lookup(self.symbol(token)) {
-                Some(Name::Binding(binding)) => {
-                    matches!(self.out.bindings[binding].ty, Ty::Struct(_))
-                }
+                Some(Name::Binding(binding)) => self.receiver_field(token).map_or(
+                    matches!(self.out.bindings[binding].ty, Ty::Struct(_)),
+                    |(_, _, ty)| matches!(ty, Ty::Struct(_)),
+                ),
                 _ => self
                     .receiver_field(token)
                     .is_some_and(|(_, _, ty)| matches!(ty, Ty::Struct(_))),
@@ -2346,6 +2347,15 @@ impl<'i> Checker<'_, 'i> {
         }
         let call_span = self.span(expr);
         let target = match ast.exprs[callee] {
+            Expr::Name(token) if self.receiver_field(token).is_some() => {
+                let spelling = self.spelling(token);
+                self.report(
+                    Code::ArgumentCount,
+                    format!("`{spelling}` is not a function"),
+                    call_span,
+                );
+                None
+            }
             Expr::Name(token)
                 if self
                     .current

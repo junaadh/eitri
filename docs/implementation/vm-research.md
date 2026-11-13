@@ -2056,3 +2056,16 @@ p50/p99 9,958/11,800 ns, execution 250/334 ns, total 10,200/12,000 ns.
 This scalar workload does not exercise static functions. Samples:
 `/private/tmp/eitri-t017-16-samples.csv`; report:
 `/private/tmp/eitri-t017-16-bench.txt`.
+
+### T017-17 bare receiver field reads
+
+Methods resolve bare field reads to their explicit receiver slots. Local and
+parameter bindings shadow fields; fields shadow module bindings. Lookup is
+bounded by the 256-field declaration limit. Both interpreters and lowerers
+exercise nested fields and strings under forced collection.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,209/12,700 ns, execution 250/292 ns, total 9,458/13,000 ns.
+This scalar workload does not exercise aggregate methods. Samples:
+`/private/tmp/eitri-t017-17-samples.csv`; report:
+`/private/tmp/eitri-t017-17-bench.txt`.

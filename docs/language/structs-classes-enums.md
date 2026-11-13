@@ -10,8 +10,8 @@ host-initiated calls reject aggregate signatures for now.
 Methods using `extend` and explicit `self` work for structs and enums;
 `mutating` struct methods require mutable receivers. Static extension functions
 can be called through the type name or by bare name inside another method of the
-type. Up to 256 methods per module are supported. Bare receiver field and method
-names remain future work. Literal, arithmetic and call defaults are supported;
+type. Up to 256 methods per module are supported. Bare receiver field reads work with local shadowing; bare field writes and
+method calls remain future work. Literal, arithmetic and call defaults are supported;
 defaults that capture names or construct aggregates are still unsupported.
 Enums with payloads, construction and exhaustive case matching with positional
 bindings execute on both interpreters. Structs and enums can contain each other,
