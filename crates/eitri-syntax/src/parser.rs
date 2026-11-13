@@ -590,7 +590,14 @@ impl Parser<'_> {
                         } else {
                             None
                         };
-                        let name = if let Some((name, _)) = literal {
+                        let nested_case = if self.eat(T::Dot).is_some() {
+                            Some(self.expect(T::Ident, "a case name")?)
+                        } else {
+                            None
+                        };
+                        let name = if let Some(name) = nested_case {
+                            name
+                        } else if let Some((name, _)) = literal {
                             name
                         } else if self.at(T::Wildcard) {
                             self.bump()
@@ -601,6 +608,7 @@ impl Parser<'_> {
                             label,
                             name,
                             literal: literal.map(|(_, expr)| expr),
+                            nested_case,
                         });
                         if self.eat(T::Comma).is_none() {
                             break;

@@ -1,0 +1,2 @@
+enum Outer { Wrap(value: i64) }
+let n = match Outer.Wrap(value: 1) { .Wrap(.Empty) => 1, .Wrap(_) => 0 }

@@ -412,7 +412,6 @@ fn differential_against_the_reference_checker() {
         ("emit", &["check", "missing"]),
     ];
     let corpus = checker_corpus();
-    let mut programs = corpus.clone();
     let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
     let mut next = || {
         seed ^= seed >> 12;
@@ -420,7 +419,28 @@ fn differential_against_the_reference_checker() {
         seed ^= seed >> 27;
         seed.wrapping_mul(0x2545_f491_4f6c_dd1d)
     };
-    for _ in 0..8000 {
+    let compare = |i: usize, text: &str| {
+        let expected = observe(text, true);
+        let actual = observe(text, false);
+        assert!(
+            expected == actual,
+            "program {i}: optimized checker differs from the reference on {text:?}\n\
+             --- reference\n{expected:?}\n--- optimized\n{actual:?}"
+        );
+        usize::from(expected.is_some())
+    };
+    let mut compared = corpus
+        .iter()
+        .enumerate()
+        .map(|(i, text)| compare(i, text))
+        .sum::<usize>();
+    // As the fixture corpus grows to include features the reference checker
+    // intentionally excludes, retain at least 3,001 actual comparisons rather
+    // than relying on a fixed percentage of parseable random mutations.
+    for i in 0..30_000 {
+        if i >= 8_000 && compared > 3_000 {
+            break;
+        }
         let mut text = corpus[(next() % corpus.len() as u64) as usize].clone();
         for _ in 0..1 + next() % 3 {
             let (from, tos) = SWAPS[(next() % SWAPS.len() as u64) as usize];
@@ -430,18 +450,7 @@ fn differential_against_the_reference_checker() {
                 text.replace_range(at..at + from.len(), to);
             }
         }
-        programs.push(text);
-    }
-    let mut compared = 0;
-    for (i, text) in programs.iter().enumerate() {
-        let expected = observe(text, true);
-        let actual = observe(text, false);
-        assert!(
-            expected == actual,
-            "program {i}: optimized checker differs from the reference on {text:?}\n\
-             --- reference\n{expected:?}\n--- optimized\n{actual:?}"
-        );
-        compared += usize::from(expected.is_some());
+        compared += compare(corpus.len() + i, &text);
     }
     assert!(
         compared > 3000,

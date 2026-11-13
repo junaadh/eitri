@@ -1,0 +1,1 @@
+error[E0301] 76..81: nested case pattern requires an enum payload

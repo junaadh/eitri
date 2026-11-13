@@ -956,8 +956,10 @@ impl<'i> Checker<'_, 'i> {
     }
 
     /// Visit each default-expression node once using reusable compiler scratch.
-    /// Struct literals and names are excluded until default cycles and lexical
-    /// captures are implemented; calls resolve only through module names.
+    /// Struct literals must initialize every field or provide a base, so no
+    /// omitted default can recursively expand at compile time. Field lookups
+    /// scan at most 256 declarations per initializer. Names remain excluded
+    /// until lexical captures are implemented.
     fn default_expression_supported(&mut self, root: ExprId) -> bool {
         let ast = self.input.ast;
         self.spine.clear();
@@ -980,6 +982,48 @@ impl<'i> Checker<'_, 'i> {
                     self.spine.extend_from_slice(ast.args(args))
                 }
                 Expr::Convert { value, .. } => self.spine.push(value),
+                Expr::EnumShorthand(_) => {}
+                Expr::Member { base, .. } if matches!(ast.exprs[base], Expr::Name(token) if self.enum_names.get(self.symbol(token).index()).copied().flatten().is_some()) =>
+                    {}
+                Expr::NamedCall { callee, args }
+                    if matches!(
+                        ast.exprs[callee],
+                        Expr::EnumShorthand(_) | Expr::Member { .. }
+                    ) =>
+                {
+                    self.spine
+                        .extend(ast.field_inits[args].iter().map(|field| field.value));
+                }
+                Expr::StructLiteral { name, fields } => {
+                    let Some(id) = self
+                        .struct_names
+                        .get(self.symbol(name).index())
+                        .copied()
+                        .flatten()
+                    else {
+                        self.spine.clear();
+                        return false;
+                    };
+                    let declared = ast.params(ast.structs[id].fields);
+                    let entries = &ast.field_inits[fields];
+                    let has_base = entries.last().is_some_and(|field| {
+                        self.input.tokens.kind(field.name) == eitri_syntax::TokenKind::DotDot
+                    });
+                    if declared.len() > 256
+                        || (!has_base
+                            && declared.iter().any(|field| {
+                                !entries.iter().any(|init| {
+                                    self.input.tokens.kind(init.name)
+                                        != eitri_syntax::TokenKind::DotDot
+                                        && self.symbol(init.name) == self.symbol(field.name)
+                                })
+                            }))
+                    {
+                        self.spine.clear();
+                        return false;
+                    }
+                    self.spine.extend(entries.iter().map(|field| field.value));
+                }
                 _ => {
                     self.spine.clear();
                     return false;
@@ -1915,7 +1959,9 @@ impl<'i> Checker<'_, 'i> {
                     if arm.guard.is_none()
                         && self.ast().match_bindings[arm.bindings]
                             .iter()
-                            .all(|pattern| pattern.literal.is_none())
+                            .all(|pattern| {
+                                pattern.literal.is_none() && pattern.nested_case.is_none()
+                            })
                     {
                         covered[index] = true;
                     }
@@ -1974,6 +2020,27 @@ impl<'i> Checker<'_, 'i> {
                             .get(index)
                             .copied()
                             .unwrap_or(Ty::Error);
+                        if let Some(case) = pattern.nested_case {
+                            if let Ty::Enum(nested) = ty {
+                                let cases = &self.ast().enum_cases[self.ast().enums[nested].cases];
+                                if !cases.iter().any(|candidate| {
+                                    self.symbol(candidate.name) == self.symbol(case)
+                                }) {
+                                    self.report(
+                                        Code::UnknownName,
+                                        "unknown nested enum case",
+                                        self.token_span(case),
+                                    );
+                                }
+                            } else if ty != Ty::Error {
+                                self.report(
+                                    Code::TypeMismatch,
+                                    "nested case pattern requires an enum payload",
+                                    self.token_span(case),
+                                );
+                            }
+                            continue;
+                        }
                         if let Some(literal) = pattern.literal {
                             if !matches!(
                                 self.ast().exprs[literal],

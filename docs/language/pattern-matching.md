@@ -1,7 +1,8 @@
 # Pattern matching
 
 The current implementation supports exhaustive matches on enums using `.Case` or `Type.Case`,
-positional or labeled payload bindings, literals or `_`, and catch-all `_` or binding arms. Parenthesized
+positional or labeled payload bindings, literals, bare nested cases or `_`,
+and catch-all `_` or binding arms. Parenthesized
 case patterns must supply exactly one pattern per payload field. Guards are
 supported; guards and literal payload patterns do not contribute to case coverage. The remaining patterns
 below are the language contract for later work.

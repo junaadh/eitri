@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+enum Inner { Empty, Full(text: string) }
+enum Outer { None, Wrap(inner: Inner, number: i64) }
+fn value(x: Outer) -> i64 {
+    return match x {
+        .None => 0,
+        .Wrap(.Empty, _) => 1,
+        .Wrap(inner: .Full, number: n) => n,
+        .Wrap(_, _) => 9,
+    }
+}
+test.emit(value(Outer.Wrap(inner: Inner.Empty, number: 2)))
+test.emit(value(Outer.Wrap(inner: Inner.Full(text: "kept"), number: 3)))

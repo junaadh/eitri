@@ -1,0 +1,3 @@
+enum Inner { Empty }
+enum Outer { Wrap(inner: Inner) }
+let n = match Outer.Wrap(inner: Inner.Empty) { .Wrap(.Missing) => 1, .Wrap(_) => 0 }

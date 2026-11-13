@@ -233,6 +233,7 @@ pub struct MatchBinding {
     pub label: Option<TokenId>,
     pub name: TokenId,
     pub literal: Option<ExprId>,
+    pub nested_case: Option<TokenId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

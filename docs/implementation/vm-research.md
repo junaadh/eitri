@@ -2211,3 +2211,16 @@ p50/p99 10,100/11,700 ns, execution 250/333 ns, total 10,400/11,900 ns;
 retained context memory was 30,683 B, unchanged for this non-matching scalar
 workload. Samples: `/private/tmp/eitri-t017-28-samples.csv`; report:
 `/private/tmp/eitri-t017-28-bench.txt`.
+
+### T017-29 nested enum case patterns
+
+A payload pattern can test a bare nested enum case, including labeled fields.
+Such a test is partial for outer-case exhaustiveness; wrong payload types and
+unknown nested cases are rejected. Forced collection covers nested strings on
+both interpreters and lowerers.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,584/15,100 ns, execution 250/333 ns, total 9,833/15,300 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+patterns. Samples: `/private/tmp/eitri-t017-29-samples.csv`; report:
+`/private/tmp/eitri-t017-29-bench.txt`.

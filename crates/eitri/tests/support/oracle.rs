@@ -1093,7 +1093,19 @@ impl Eval<'_> {
                                 })
                                 .expect("checked field label")
                         });
-                        if let Some(literal) = pattern.literal {
+                        if let Some(expected) = pattern.nested_case {
+                            let Value::Enum(nested, tag, _) = self.structs[payload as usize][index]
+                            else {
+                                unreachable!()
+                            };
+                            let cases = &ast.enum_cases[ast.enums[nested].cases];
+                            if self.tokens.symbol(cases[tag as usize].name)
+                                != self.tokens.symbol(expected)
+                            {
+                                matched = false;
+                                break;
+                            }
+                        } else if let Some(literal) = pattern.literal {
                             let expected = self.expr(host, literal)?;
                             let actual = self.structs[payload as usize][index];
                             if !self

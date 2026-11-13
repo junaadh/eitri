@@ -2601,7 +2601,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             arm.guard.is_some()
                 || ast.match_bindings[arm.bindings]
                     .iter()
-                    .any(|pattern| pattern.literal.is_some())
+                    .any(|pattern| pattern.literal.is_some() || pattern.nested_case.is_some())
         }) {
             &all_arms[..all_arms.len() - 1]
         } else {
@@ -2635,7 +2635,23 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             })
                             .expect("checked field label")
                     });
-                    if let Some(literal) = pattern.literal {
+                    if let Some(case) = pattern.nested_case {
+                        let Ty::Enum(nested) = self.checked.param_types[types][offset] else {
+                            unreachable!()
+                        };
+                        let nested_cases = &ast.enum_cases[ast.enums[nested].cases];
+                        let tag = nested_cases
+                            .iter()
+                            .position(|candidate| {
+                                self.input.tokens.symbol(candidate.name)
+                                    == self.input.tokens.symbol(case)
+                            })
+                            .expect("checked nested case");
+                        let constant = self.temp();
+                        self.asm.load(constant, tag as u64, ValueType::I64, span)?;
+                        let source = subject + self.enum_field_offset(enum_id, index, offset);
+                        self.asm.branch_if(Cond::Ne, source, constant, next, span)?;
+                    } else if let Some(literal) = pattern.literal {
                         let ty = self.checked.param_types[types][offset];
                         let source = subject + self.enum_field_offset(enum_id, index, offset);
                         let source = if ty == Ty::String {
