@@ -213,6 +213,7 @@ pub struct Param {
     pub name: TokenId,
     pub ty: TypeExpr,
     pub readonly: bool,
+    pub default: Option<ExprId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

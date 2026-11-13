@@ -1,0 +1,4 @@
+enum Choice { One, Two }
+fn value(c: Choice) -> i64 {
+    match c { .One => { return 1 }, .Two => {} }
+}

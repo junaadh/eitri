@@ -502,11 +502,8 @@ impl Parser<'_> {
             let field = self.expect(T::Ident, "a field name")?;
             self.expect(T::Colon, "`:`")?;
             let ty = self.type_expr()?;
-            fields.push(Param {
-                name: field,
-                ty,
-                readonly,
-            });
+            let default = if self.eat(T::Eq).is_some() { Some(self.expr(false)?) } else { None };
+            fields.push(Param { name: field, ty, readonly, default });
             if self.eat(T::Comma).is_none() && !self.at_statement_end() {
                 return Err(self.expected("a line break or `,`"));
             }
@@ -619,6 +616,7 @@ impl Parser<'_> {
                 name,
                 ty,
                 readonly: false,
+                default: None,
             });
             if self.eat(T::Comma).is_none() {
                 break;

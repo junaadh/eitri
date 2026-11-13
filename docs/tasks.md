@@ -830,6 +830,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   script calls, including inside enum payloads.
 - T017-10: `let` fields are initialized at construction and reject later
   writes, including nested writes and mutating method receivers.
+- T017-11: exhaustive matches whose arms return satisfy function return
+  analysis; missing return paths remain rejected.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

@@ -1100,10 +1100,11 @@ impl<'i> Checker<'_, 'i> {
             Stmt::Expr(expr) => match ast.exprs[expr] {
                 Expr::Match(id) => {
                     let arms = &ast.match_arms[ast.matches[id].arms];
-                    !arms.is_empty() && arms.iter().all(|arm| match arm.body {
-                        eitri_syntax::ast::MatchBody::Block(block) => self.returns(block),
-                        eitri_syntax::ast::MatchBody::Expr(_) => false,
-                    })
+                    !arms.is_empty()
+                        && arms.iter().all(|arm| match arm.body {
+                            eitri_syntax::ast::MatchBody::Block(block) => self.returns(block),
+                            eitri_syntax::ast::MatchBody::Expr(_) => false,
+                        })
                 }
                 _ => self.if_returns(expr),
             },

@@ -1983,3 +1983,15 @@ p50/p99 8,625/9,084 ns, execution 209/291 ns, total 8,875/9,334 ns.
 This scalar workload does not exercise read-only fields. Samples:
 `/private/tmp/eitri-t017-10-samples.csv`; report:
 `/private/tmp/eitri-t017-10-bench.txt`.
+
+### T017-11 returning match arms
+
+Exhaustive matches with returning block arms satisfy return analysis. Lowering
+omits unreachable jumps after terminal arms, and a missing return path remains
+an error. A managed-payload fixture runs under forced collection in both modes.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,584/54,200 ns, execution 209/1,542 ns, total 8,792/54,900 ns.
+This scalar workload does not exercise matches; the large p99 reflects noise
+in this run. Samples: `/private/tmp/eitri-t017-11-samples.csv`; report:
+`/private/tmp/eitri-t017-11-bench.txt`.
