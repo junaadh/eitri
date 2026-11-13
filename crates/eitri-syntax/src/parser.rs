@@ -1139,7 +1139,10 @@ impl Parser<'_> {
                     span,
                 )
             }
-            T::Str => self.unsupported_primary("string literals"),
+            T::Str => {
+                self.bump();
+                self.ast.expr(Expr::String(token), span)
+            }
             T::Char => {
                 self.bump();
                 self.ast.expr(Expr::Char(token), span)

@@ -44,6 +44,7 @@ use std::marker::PhantomData;
 use eitri_base::IndexVec;
 use eitri_bytecode::{CallTarget, Function, FunctionId, Op, SlotRange};
 
+mod heap;
 mod threaded;
 
 pub use threaded::run_threaded;
@@ -57,6 +58,7 @@ pub enum FaultKind {
     Conversion,
     Budget,
     Depth,
+    Memory,
     /// Raised by a host function, with its message.
     Host(String),
 }
@@ -83,6 +85,7 @@ impl FaultKind {
             FaultKind::Conversion => "numeric conversion out of range",
             FaultKind::Budget => "execution budget exhausted",
             FaultKind::Depth => "call depth exceeded",
+            FaultKind::Memory => "managed memory limit exceeded",
             FaultKind::Host(message) => message,
         }
     }
@@ -182,6 +185,10 @@ struct Machine<'a> {
     functions: &'a IndexVec<FunctionId, Function>,
     slots: &'a mut Vec<u64>,
     frames: &'a mut Vec<Frame>,
+    heap: &'a mut heap::Heap,
+    references: &'a mut Vec<Option<heap::HeapRef>>,
+    force_gc: bool,
+    memory_limit: usize,
     budget: u64,
     depth: u32,
     /// The run's entry function, which a host may not reenter.
@@ -373,10 +380,28 @@ struct Frame {
 }
 
 /// The interpreter's reusable working memory (D44).
-#[derive(Default)]
 pub struct VmScratch {
     slots: Vec<u64>,
     frames: Vec<Frame>,
+    // References are carried separately from scalar words so their pointer
+    // provenance is preserved even on machines where pointers are not u64s.
+    references: Vec<Option<heap::HeapRef>>,
+    heap: heap::Heap,
+    force_gc: bool,
+    memory_limit: usize,
+}
+
+impl Default for VmScratch {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            frames: Vec::new(),
+            references: Vec::new(),
+            heap: heap::Heap::default(),
+            force_gc: false,
+            memory_limit: usize::MAX,
+        }
+    }
 }
 
 impl VmScratch {
@@ -384,9 +409,27 @@ impl VmScratch {
         Self::default()
     }
 
+    /// Collect at each execution safepoint when managed execution is enabled.
+    pub fn set_force_gc(&mut self, enabled: bool) {
+        self.force_gc = enabled;
+    }
+
+    /// Limit accounted managed object bytes. Other runtime allocations are not
+    /// yet covered by this limit.
+    pub fn set_heap_limit(&mut self, bytes: usize) {
+        self.memory_limit = bytes;
+    }
+
+    pub fn managed_heap_bytes(&self) -> usize {
+        self.heap.bytes()
+    }
+
     /// Heap bytes retained, for scratch high-water accounting.
     pub fn heap_bytes(&self) -> usize {
-        self.slots.capacity() * 8 + self.frames.capacity() * size_of::<Frame>()
+        self.slots.capacity() * 8
+            + self.frames.capacity() * size_of::<Frame>()
+            + self.references.capacity() * size_of::<Option<heap::HeapRef>>()
+            + self.heap.bytes()
     }
 }
 
@@ -401,7 +444,9 @@ pub fn run(
     scratch: &mut VmScratch,
 ) -> Result<Vec<u64>, Fault> {
     let mut m = machine(functions, entry, args, limits, scratch, false);
-    execute(&mut m, host, entry, 0, 0)?;
+    let result = execute(&mut m, host, entry, 0, 0);
+    m.heap.collect([]);
+    result?;
     Ok(m.slots[..functions[entry].signature.results.len()].to_vec())
 }
 
@@ -416,6 +461,7 @@ fn machine<'a>(
 ) -> Machine<'a> {
     scratch.slots.clear();
     scratch.frames.clear();
+    scratch.references.clear();
     let function = &functions[entry];
     scratch.slots.resize(function.frame_size as usize, 0);
     let first = function.signature.param_base() as usize;
@@ -424,12 +470,68 @@ fn machine<'a>(
         functions,
         slots: &mut scratch.slots,
         frames: &mut scratch.frames,
+        heap: &mut scratch.heap,
+        references: &mut scratch.references,
+        force_gc: scratch.force_gc,
+        memory_limit: scratch.memory_limit,
         budget: limits.budget,
         depth: limits.depth,
         entry,
         nesting: 0,
         threaded,
     }
+}
+
+/// Collect from the verifier-approved maps for suspended and active frames.
+/// Reference slots are kept apart from scalar words to preserve provenance.
+fn collect_at(
+    heap: &mut heap::Heap,
+    references: &mut Vec<Option<heap::HeapRef>>,
+    frames: &[Frame],
+    functions: &IndexVec<FunctionId, Function>,
+    id: FunctionId,
+    base: usize,
+    pc: usize,
+) {
+    let function = &functions[id];
+    references.resize(
+        references.len().max(base + function.frame_size as usize),
+        None,
+    );
+    fn root_map(function: &Function, pc: u32, suspended: bool) -> &eitri_bytecode::RootMap {
+        let insn =
+            eitri_bytecode::decode(&function.code, pc as usize).expect("verified instruction");
+        let state = if matches!(insn.op, Op::CallScript | Op::CallHost) {
+            let roots = &function.roots.calls[insn.operands.b as usize];
+            if suspended {
+                &roots.suspended
+            } else {
+                &roots.pre
+            }
+        } else {
+            let index = function
+                .roots
+                .safepoints
+                .binary_search_by_key(&eitri_bytecode::SafepointPc(pc), |(pc, _)| *pc)
+                .expect("verified safepoint");
+            &function.roots.safepoints[index].1
+        };
+        &function.roots.maps[state.map.0 as usize]
+    }
+    let mut roots = Vec::with_capacity(frames.len() + 1);
+    for frame in frames {
+        let f = &functions[frame.function];
+        roots.push(heap::RootFrame {
+            map: root_map(f, frame.call_pc, true),
+            slots: &references[frame.base..frame.base + f.frame_size as usize],
+        });
+    }
+    roots.push(heap::RootFrame {
+        map: root_map(function, pc as u32, false),
+        slots: &references[base..base + function.frame_size as usize],
+    });
+    heap.collect_frames(&roots)
+        .expect("verified supported root maps");
 }
 
 /// `range`, a window of the frame at `base`, as absolute slots.
@@ -556,6 +658,9 @@ fn execute(
                     // A taken backward branch polls the budget.
                     if target <= start {
                         poll!();
+                        if m.force_gc {
+                            collect_at(m.heap, m.references, m.frames, functions, id, base, start);
+                        }
                     }
                     pc = target;
                 }
@@ -599,7 +704,38 @@ fn execute(
                     };
                 }
                 match op {
-                    Op::Mov => s[a!()] = s[b!()],
+                    Op::Mov => {
+                        s[a!()] = s[b!()];
+                        if !m.references.is_empty() {
+                            m.references.resize(
+                                m.references.len().max(base + function.frame_size as usize),
+                                None,
+                            );
+                            m.references[base + a!()] = m.references[base + b!()];
+                        }
+                    }
+                    Op::StrNew => {
+                        if m.force_gc {
+                            collect_at(m.heap, m.references, m.frames, functions, id, base, start);
+                        }
+                        m.references.resize(
+                            m.references.len().max(base + function.frame_size as usize),
+                            None,
+                        );
+                        let literal = &function.strings[(word >> 16) as usize];
+                        let mut allocated = m.heap.alloc_string(literal, m.memory_limit);
+                        if allocated.is_err() {
+                            collect_at(m.heap, m.references, m.frames, functions, id, base, start);
+                            allocated = m.heap.alloc_string(literal, m.memory_limit);
+                        }
+                        m.references[base + a!()] = Some(allocated.map_err(|_| {
+                            fault(&m.frames[floor..], FaultKind::Memory, id, start)
+                        })?);
+                    }
+                    Op::StrLen => {
+                        let reference = m.references[base + b!()].expect("verified managed slot");
+                        s[a!()] = m.heap.string(reference).expect("live string root").len() as u64;
+                    }
                     Op::Ldi => s[a!()] = (word >> 16) as i16 as i64 as u64,
                     Op::Ldk => s[a!()] = function.consts[(word >> 16) as usize],
                     Op::LdkX => {
@@ -677,6 +813,9 @@ fn execute(
                     Op::CallScript | Op::CallHost => {
                         let site = function.sites[(word >> 16) as usize];
                         poll!();
+                        if m.force_gc {
+                            collect_at(m.heap, m.references, m.frames, functions, id, base, start);
+                        }
                         match site.target {
                             CallTarget::Host(index) => {
                                 // Publish the budget: the host may reenter

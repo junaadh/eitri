@@ -168,6 +168,7 @@ impl Dumper<'_> {
             Ty::F32 => "'f32'",
             Ty::F64 => "'f64'",
             Ty::Char => "'char'",
+            Ty::String => "'string'",
             Ty::I64 => "'i64'",
             Ty::Bool => "'bool'",
             Ty::Void => "'void'",
@@ -184,6 +185,7 @@ impl Dumper<'_> {
             Ty::F32 => "f32",
             Ty::F64 => "f64",
             Ty::Char => "char",
+            Ty::String => "string",
             Ty::I64 => "i64",
             Ty::Bool => "bool",
             Ty::Void => "void",
@@ -458,6 +460,14 @@ impl Dumper<'_> {
                 );
                 (line, Vec::new())
             }
+            Expr::String(_) => (
+                format!(
+                    "{} {range} {ty} {}",
+                    self.paint(STMT, "StringLiteral"),
+                    self.paint(VALUE, self.text(span))
+                ),
+                Vec::new(),
+            ),
             Expr::Bool(value) => {
                 let line = format!(
                     "{} {range} {ty} {}",

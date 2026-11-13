@@ -450,7 +450,7 @@ Each stage is a plain function that borrows reusable scratch memory from the
 | [`eitri-diag`](crates/eitri-diag) | Diagnostics for every layer: codes, labelled spans, and a renderer in the codespan-reporting style |
 | [`eitri-syntax`](crates/eitri-syntax) | The lexer and parser, producing a compact indexed syntax tree; the token dump |
 | [`eitri-check`](crates/eitri-check) | Name resolution, type checking, host module declarations, and the clang-style tree dump |
-| [`eitri-bytecode`](crates/eitri-bytecode) | The typed bytecode: a machine-readable spec of 163 opcodes, encoder, assembler, verifier, the `.eits` text form and its in-memory IR, the hot-tier optimizer, and a semantic oracle |
+| [`eitri-bytecode`](crates/eitri-bytecode) | The typed bytecode: a machine-readable spec of 167 opcodes, encoder, assembler, verifier, the `.eits` text form and its in-memory IR, the hot-tier optimizer, and a semantic oracle |
 | [`eitri-lower`](crates/eitri-lower) | Lowering of checked code to bytecode: slot allocation, direct compare-and-branch, immediate operands; records the IR only when asked |
 | [`eitri-vm`](crates/eitri-vm) | The threaded interpreter, the portable `match`-loop reference, budgets, call depth, host reentry, and faults with traces |
 | [`eitri`](crates/eitri) | The `Context` (compile, assemble, execute, optimize), the CLI, fixture tests, and benchmarks |

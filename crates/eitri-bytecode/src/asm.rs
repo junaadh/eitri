@@ -508,6 +508,7 @@ impl<const RECORD: bool> Assembler<RECORD> {
             // Copied at their exact size, so the assembler keeps its
             // capacity for the next function.
             consts: self.consts.as_slice().into(),
+            strings: Box::default(),
             sites: self.sites.as_slice().into(),
             roots,
             literal_types,

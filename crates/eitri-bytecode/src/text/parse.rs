@@ -500,6 +500,27 @@ impl<'a> Body<'_, '_, 'a> {
                 ));
             }
         }
+        let mut strings = Vec::<Box<str>>::new();
+        while self.parser.peek().tok == Tok::Word("literal") {
+            self.parser.next();
+            let (word, span) = self.parser.word("a hex string literal")?;
+            let hex = word
+                .strip_prefix('h')
+                .ok_or_else(|| syntax(span, "expected an h-prefixed hex literal"))?;
+            if hex.len() % 2 != 0 || !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return Err(syntax(span, "malformed hex string literal"));
+            }
+            let bytes = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("checked hex"))
+                .collect::<Vec<_>>();
+            let value = String::from_utf8(bytes)
+                .map_err(|_| syntax(span, "string literal is not UTF-8"))?;
+            strings.push(value.into_boxed_str());
+            if strings.len() > u16::MAX as usize + 1 {
+                return Err(syntax(span, "too many string literals"));
+            }
+        }
         while !self.parser.eat_punct(b'}') {
             self.item()?;
         }
@@ -514,8 +535,10 @@ impl<'a> Body<'_, '_, 'a> {
         };
         // Each instruction was checked as it was parsed; what remains are
         // whole-function limits (code size, constants, call sites).
-        let (function, assembled) = ir::assemble(&body, define.name, define.signature.clone(), asm)
-            .map_err(|error| mismatch(define.frame.1, format!("cannot assemble: {error:?}")))?;
+        let (mut function, assembled) =
+            ir::assemble(&body, define.name, define.signature.clone(), asm)
+                .map_err(|error| mismatch(define.frame.1, format!("cannot assemble: {error:?}")))?;
+        function.strings = strings.into_boxed_slice();
         if function.frame_size != define.frame.0 {
             return Err(mismatch(
                 define.frame.1,

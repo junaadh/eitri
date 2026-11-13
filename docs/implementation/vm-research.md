@@ -1650,3 +1650,26 @@ retains 25,249 bytes of context scratch, and emits 344 code bytes plus
 This is a completion baseline, not a before/after optimization comparison;
 Lua was not rerun. Full report and raw individual samples are retained locally
 at `target/bench-results/t013-2026-11-12/{report.txt,source_to_result.csv}`.
+
+
+### T015-1 managed string slice
+
+On 2026-11-13, `cargo bench --locked -p eitri --bench source_to_result --
+20001` measured 20,001 individually timed samples per cell, release profile,
+default threaded interpreter, macOS 27.0.1 AArch64, nightly Rust 1.101.0
+(2d20b42b8) and LLVM 23.1.5. The sandbox did not expose the CPU model.
+The reused 1,236-byte module measured compile p50/p99 6.625/11.5 µs,
+execute 0.167/0.291 µs, and total 6.833/11.8 µs; it allocated 48 times /
+4,668 bytes, with 344 code bytes and 2,978 metadata bytes. Runtime creation,
+file I/O and host work are excluded from the reused-context operation. The
+few-microsecond source-to-result goal remains missed.
+
+An earlier run of the same command on this stage, before bypassing managed
+metadata setup for scalar-only code, measured total p50/p99 7.417/9.333 µs
+and 61 allocations / 5,021 bytes. The runs were not interleaved, so their
+latency difference is not a controlled performance claim. Both raw sample
+sets and complete reports are retained in `/tmp/orchestra/eitri-t015-1-{before,after}-samples.csv`
+and `/tmp/orchestra/eitri-t015-1-bench{,-after}.txt`. Forced-GC behavior is
+covered by correctness tests, not timed here; no Lua or managed-workload
+comparison is claimed. Hash-based string lookup and marking have expected
+linear collection work but quadratic collision worst cases.

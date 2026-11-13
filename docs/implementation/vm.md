@@ -43,6 +43,17 @@ slot, dispatch, and tiering choices remain experiments until implemented.
 
 ## Garbage collection
 
+T015-1 adds non-moving string objects with headers and mark-sweep collection.
+Pointer-preserving references occupy a sidecar to the scalar `u64` stack;
+verified ordinary root maps select references at allocations, calls, and taken
+backward branches. Root construction for managed functions currently supports
+only straight-line code; dynamic roots, aggregates, handles, and managed
+signatures remain later work. Forced-collection tests run both interpreters.
+The managed-object byte limit counts object structures and string payloads;
+allocator overhead, collection scratch, compiler storage and code are not yet
+covered. Collection is expected O(objects + roots), with hash-collision
+worst cases quadratic; reference lookup is expected O(1).
+
 Classes, growable arrays, maps, and strings may be heap allocated and
 garbage collected.
 

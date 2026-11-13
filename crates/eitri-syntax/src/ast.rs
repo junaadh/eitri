@@ -78,6 +78,7 @@ pub enum Expr {
         negative: bool,
     },
     Char(TokenId),
+    String(TokenId),
     Bool(bool),
     /// A name, resolved by the checker.
     Name(TokenId),

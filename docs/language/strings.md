@@ -1,5 +1,12 @@
 # Strings and formatting
 
+The current T015-1 implementation supports inferred local single-line and raw
+single-line literals and `.len()` in straight-line functions. Other string
+operations, interpolation, multiline literals, string signatures, and string
+values in functions with branches or calls remain unsupported. See the
+[implemented slice](../implementation/first-slice.md#managed-strings-t015-1).
+The rest of this chapter is the language contract for subsequent tasks.
+
 ## Interpolation
 
 ```eit

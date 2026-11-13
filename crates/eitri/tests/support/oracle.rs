@@ -195,6 +195,7 @@ enum Value {
     Int(i64),
     Scalar(Ty, u64),
     Bool(bool),
+    String(u32),
     Void,
 }
 
@@ -211,6 +212,7 @@ impl Value {
         match self {
             Self::Int(_) => Ty::I64,
             Self::Bool(_) => Ty::Bool,
+            Self::String(_) => Ty::String,
             Self::Scalar(ty, _) => ty,
             Self::Void => Ty::Void,
         }
@@ -257,7 +259,9 @@ impl Value {
             Value::Int(value) => value as u64,
             Value::Scalar(_, word) => word,
             Value::Bool(value) => u64::from(value),
-            Value::Void => unreachable!("the checker rejects `void` arguments"),
+            Value::String(_) | Value::Void => {
+                unreachable!("the checker rejects managed or void host arguments")
+            }
         }
     }
 }
@@ -389,6 +393,12 @@ impl Eval<'_> {
                 self.checked.types[e],
                 self.checked.int_value(e).expect("checked literal fits") as u64,
             )),
+            Expr::String(_) => {
+                let Res::StringLiteral(index) = self.checked.resolutions[e] else {
+                    unreachable!()
+                };
+                Ok(Value::String(index))
+            }
             Expr::Convert { value, .. } => {
                 let value = self.expr(host, value)?;
                 self.convert(e, value)
@@ -434,6 +444,15 @@ impl Eval<'_> {
                     self.binary_values(op, a, b, span)
                 }
             },
+            Expr::Call { callee, .. } if self.checked.resolutions[e] == Res::StringLen => {
+                let Expr::Member { base, .. } = self.ast.exprs[callee] else {
+                    unreachable!()
+                };
+                let Value::String(index) = self.expr(host, base)? else {
+                    unreachable!()
+                };
+                Ok(Value::Int(self.checked.strings[index as usize].len() as i64))
+            }
             Expr::Call { args, .. }
                 if matches!(self.checked.resolutions[e], Res::Convert { .. }) =>
             {

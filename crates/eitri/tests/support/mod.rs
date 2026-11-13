@@ -165,10 +165,10 @@ pub fn outcome(source: &str, setup: &Setup) -> Result<String, String> {
             ));
         }
     }
-    // The oracle models the language, not implementation limits (`E0002`),
-    // which lowering reports after the checker accepts.
-    let limited = outcome.starts_with("error[E0002]");
-    if !limited
+    // The oracle models executable language behavior. Compilation can also
+    // reject a checked program at a later implementation boundary.
+    let rejected = outcome.starts_with("error[");
+    if !rejected
         && let Some(expected) = run_oracle(source, setup)
         && expected != outcome
     {

@@ -14,6 +14,7 @@ pub enum Ty {
     F32,
     F64,
     Char,
+    String,
     Bool,
     Void,
     Error,
@@ -32,6 +33,7 @@ impl Ty {
             Self::F64 => S::F64,
             Self::Char => S::Char,
             Self::Bool => S::Bool,
+            Self::String => return None,
             Self::Void => return Some(TypeDesc::Void),
             Self::Error => return None,
         }))
@@ -66,6 +68,7 @@ impl Ty {
             Ty::F32 => "`f32`",
             Ty::F64 => "`f64`",
             Ty::Char => "`char`",
+            Ty::String => "`string`",
             Ty::Bool => "`bool`",
             Ty::Void => "`void`",
             Ty::Error => "an erroneous type",

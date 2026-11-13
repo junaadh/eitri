@@ -354,6 +354,8 @@ pub enum Sem {
     MovePair,
     LoadImm,
     LoadConst,
+    StringAlloc,
+    StringLen,
     Int {
         op: IntOp,
         mode: Mode,
@@ -660,6 +662,8 @@ ops! {
     Wide = "WIDE", "WIDE", Wide, [None, None, None], Sem::Wide, NONE, true, None;
     FremF32 = "FREM.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Rem, precision: Precision::F32 }, NONE, true, None;
     FremF64 = "FREM.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Rem, precision: Precision::F64 }, NONE, true, None;
+    StrNew = "STR.NEW", "STR", ABx, [Dst, Index16, None], Sem::StringAlloc, FAULT, true, Managed;
+    StrLen = "STR.LEN", "STR", Abc, [Dst, Src, None], Sem::StringLen, NONE, true, None;
 
 }
 

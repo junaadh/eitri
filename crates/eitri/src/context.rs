@@ -175,6 +175,21 @@ impl Context {
         self.limits.depth = frames;
     }
 
+    /// Force collection at every legal safepoint in managed programs.
+    pub fn set_force_gc(&mut self, enabled: bool) {
+        self.scratch.vm.set_force_gc(enabled);
+    }
+
+    /// Limit accounted managed-object bytes.
+    pub fn set_heap_limit(&mut self, bytes: usize) {
+        self.scratch.vm.set_heap_limit(bytes);
+    }
+
+    /// Current managed-object bytes.
+    pub fn managed_heap_bytes(&self) -> usize {
+        self.scratch.vm.managed_heap_bytes()
+    }
+
     /// Choose the interpreter: the tail-call threaded one (the default) or,
     /// with `false`, the portable `match` loop. Both produce identical
     /// outcomes; the choice exists to compare them (research ledger, E5).
@@ -256,7 +271,7 @@ impl Context {
         let bodies = compiled.program.bodies.take().expect("checked above");
         let mut kept = IndexVec::with_capacity(bodies.len());
         for (function, body) in functions.as_mut_slice().iter_mut().zip(bodies.iter()) {
-            if !function.roots.can_regenerate_scalar() {
+            if !function.strings.is_empty() || !function.roots.can_regenerate_scalar() {
                 report.skipped += 1;
                 kept.push(body.clone());
                 continue;
@@ -543,6 +558,22 @@ impl Context {
                 ),
             ));
         }
+        let signatures = Program::signatures_of(&functions);
+        let callees = Callees {
+            functions: &signatures,
+            hosts: &registered,
+        };
+        for (index, function) in functions.as_mut_slice().iter_mut().enumerate() {
+            if !function.strings.is_empty() {
+                function.roots =
+                    eitri_bytecode::string_roots(function, &callees).map_err(|error| {
+                        mismatch(
+                            parsed.function_spans[index],
+                            format!("managed code is rejected: {error}"),
+                        )
+                    })?;
+            }
+        }
         let program = Program {
             functions,
             entry,
@@ -773,6 +804,8 @@ impl Compiled {
                 .iter()
                 .map(|f| {
                     size_of_val(&*f.consts)
+                        + size_of_val(&*f.strings)
+                        + f.strings.iter().map(|s| s.len()).sum::<usize>()
                         + size_of_val(&*f.sites)
                         + f.roots.heap_bytes()
                         + size_of_val(&*f.literal_types)

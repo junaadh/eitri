@@ -1,1 +1,1 @@
-error[E0001] 47..51: not supported yet: string literals
+error[E0301] 62..63: type mismatch: expected `i64`, found `string`

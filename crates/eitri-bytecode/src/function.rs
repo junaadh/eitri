@@ -18,6 +18,7 @@ pub enum ValueType {
     F32,
     F64,
     Char,
+    String,
     Bool,
 }
 
@@ -37,6 +38,7 @@ impl ValueType {
     }
     pub fn canonical(self, word: u64) -> bool {
         match self {
+            Self::String => false,
             Self::Bool => word <= 1,
             Self::I8 => word == (word as i8 as i64 as u64),
             Self::U8 => word <= 255,
@@ -116,6 +118,8 @@ pub struct Function {
     pub code: Box<[u32]>,
     /// One-slot constants, by `LDK`/`LDK_X` index.
     pub consts: Box<[u64]>,
+    /// UTF-8 literal bytes owned by this function's compiled artifact.
+    pub strings: Box<[Box<str>]>,
     pub sites: Box<[CallSite]>,
     /// Cold root publication metadata, indexed independently of call sites.
     pub roots: crate::FunctionRoots,
@@ -137,6 +141,7 @@ impl Function {
             && self.frame_size == other.frame_size
             && self.code == other.code
             && self.consts == other.consts
+            && self.strings == other.strings
             && self.sites == other.sites
             && self.literal_types == other.literal_types
             && self.starts == other.starts

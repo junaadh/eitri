@@ -1,0 +1,2 @@
+effect: test.emit(10)
+ok

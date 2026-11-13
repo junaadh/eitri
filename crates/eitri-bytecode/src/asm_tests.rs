@@ -886,3 +886,34 @@ fn guarded_roots_are_bounded_and_not_accepted_as_unconditional_pairs() {
     f.roots.maps[0].guarded[0].guards.clear();
     assert_eq!(kind(&f), ErrorKind::InvalidRootGuard);
 }
+
+#[test]
+fn managed_string_roots_are_verified_against_slot_types() {
+    let mut asm = Assembler::new();
+    asm.emit(Op::StrNew, Operands::abc(1, 0, 0), S).unwrap();
+    asm.emit(Op::StrNew, Operands::abc(2, 1, 0), S).unwrap();
+    asm.emit(Op::StrLen, Operands::abc(0, 1, 0), S).unwrap();
+    asm.ret(S).unwrap();
+    let mut f = asm.finish("strings", sig(&[], &[I64])).unwrap();
+    f.strings = vec![Box::<str>::from("hello"), Box::<str>::from("world")].into_boxed_slice();
+    let signatures = IndexVec::from_raw(vec![f.signature.clone()]);
+    let callees = Callees {
+        functions: &signatures,
+        hosts: &[],
+    };
+    f.roots = string_roots(&f, &callees).unwrap();
+    verify(&f, &callees).unwrap();
+    let mut missing = f.clone();
+    let map = missing.roots.safepoints[1].1.map.0 as usize;
+    missing.roots.maps[map].ordinary.clear();
+    assert_eq!(
+        verify(&missing, &callees).unwrap_err().kind,
+        ErrorKind::RootMissing(1)
+    );
+    let mut bad_pool = f.clone();
+    bad_pool.strings = Box::default();
+    assert!(matches!(
+        verify(&bad_pool, &callees).unwrap_err().kind,
+        ErrorKind::NoConstant(_)
+    ));
+}

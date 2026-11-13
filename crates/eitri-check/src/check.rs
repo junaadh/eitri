@@ -48,6 +48,8 @@ pub enum Res {
     Binding(BindingId),
     Function(FnId),
     Host(HostFnId),
+    StringLen,
+    StringLiteral(u32),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
     Convert {
@@ -81,6 +83,7 @@ pub struct Checked {
     /// Integer literal values (sign folded in), referenced by `Res::Int`:
     /// a plain vector, so recording one is a push, not a hash insert.
     pub ints: Vec<i64>,
+    pub strings: Vec<String>,
     /// The host module of each import, in `Ast::imports` order.
     pub imports: Vec<Option<HostModuleId>>,
 }
@@ -103,6 +106,7 @@ impl Checked {
         self.param_types.clear();
         self.params.clear();
         self.ints.clear();
+        self.strings.clear();
         self.imports.clear();
     }
 }
@@ -706,6 +710,21 @@ impl<'i> Checker<'_, 'i> {
                 }
                 Ty::Char
             }
+            Expr::String(token) => {
+                let spelling = &self.input.text[self.token_span(token).range()];
+                if let Some(value) = string_value(spelling) {
+                    self.out.resolutions[expr] = Res::StringLiteral(self.out.strings.len() as u32);
+                    self.out.strings.push(value);
+                    Ty::String
+                } else {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: interpolated or multiline string literals",
+                        self.token_span(token),
+                    );
+                    Ty::Error
+                }
+            }
             Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
             Expr::Bool(_) => Ty::Bool,
             Expr::Name(token) => self.name(expr, token),
@@ -927,6 +946,24 @@ impl<'i> Checker<'_, 'i> {
         let ast = self.input.ast;
         if matches!(ast.exprs[callee], Expr::Name(token) if self.symbol(token).is_type_name()) {
             return self.conversion(expr, callee, ast.args(args), true);
+        }
+        if let Expr::Member { base, name } = ast.exprs[callee]
+            && self.spelling(name) == "len"
+            && !matches!(ast.exprs[base], Expr::Name(token) if matches!(self.heads.get(self.symbol(token).as_u32() as usize).copied().flatten(), Some(Name::Module(_))))
+        {
+            self.value(base, Some(Ty::String));
+            for &arg in ast.args(args) {
+                self.value(arg, None);
+            }
+            if !ast.args(args).is_empty() {
+                self.report(
+                    Code::ArgumentCount,
+                    "`len` takes 0 arguments",
+                    self.span(expr),
+                );
+            }
+            self.out.resolutions[expr] = Res::StringLen;
+            return Ty::I64;
         }
         let call_span = self.span(expr);
         let target = match ast.exprs[callee] {
@@ -1235,7 +1272,7 @@ fn valid_operand(op: BinaryOp, ty: Ty) -> bool {
     }
     match op {
         And | Or => ty == Ty::Bool,
-        Eq | NotEq => ty != Ty::Void,
+        Eq | NotEq => !matches!(ty, Ty::Void | Ty::String),
         Lt | LtEq | Gt | GtEq => ty.numeric() || ty == Ty::Char,
         Add | Sub | Mul | Div | Rem => ty.numeric(),
         WrapAdd | WrapSub | WrapMul | BitAnd | BitOr | BitXor | Shl | Shr => ty.integer(),
@@ -1317,6 +1354,53 @@ fn exact_integer_float(digits: &str, radix: u32, negative: bool, ty: Ty) -> Opti
     Some(sign | (((bits - 1 + bias) as u64) << fraction_bits) | fraction)
 }
 
+fn string_value(text: &str) -> Option<String> {
+    let (raw, text) = text.strip_prefix('r').map_or((false, text), |s| (true, s));
+    if text.starts_with("\"\"\"") {
+        return None;
+    }
+    let inner = text.strip_prefix('"')?.strip_suffix('"')?;
+    if raw {
+        return Some(inner.to_owned());
+    }
+    let mut chars = inner.chars().peekable();
+    let mut out = String::with_capacity(inner.len());
+    while let Some(c) = chars.next() {
+        if c == '$' && chars.peek() == Some(&'{') {
+            return None;
+        }
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        out.push(match chars.next()? {
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            '0' => '\0',
+            '\\' => '\\',
+            '"' => '"',
+            '$' => '$',
+            'u' => {
+                if chars.next()? != '{' {
+                    return None;
+                }
+                let mut digits = String::new();
+                loop {
+                    let c = chars.next()?;
+                    if c == '}' {
+                        break;
+                    }
+                    digits.push(c);
+                }
+                char::from_u32(u32::from_str_radix(&digits, 16).ok()?)?
+            }
+            _ => return None,
+        });
+    }
+    Some(out)
+}
+
 fn char_value(text: &str) -> Option<char> {
     let inner = text.strip_prefix('\'')?.strip_suffix('\'')?;
     if !inner.starts_with('\\') {
@@ -1375,3 +1459,19 @@ pub fn int_value(spelling: &str, negative: bool) -> Option<i64> {
 
 #[cfg(test)]
 pub(crate) mod reference;
+
+#[cfg(test)]
+mod string_literal_tests {
+    use super::string_value;
+
+    #[test]
+    fn decodes_single_line_strings_and_rejects_interpolation() {
+        assert_eq!(
+            string_value(r#""hello\n\u{2603}""#).as_deref(),
+            Some("hello\n☃")
+        );
+        assert_eq!(string_value(r#"r"\n${raw}""#).as_deref(), Some(r"\n${raw}"));
+        assert_eq!(string_value(r#""${value}""#), None);
+        assert_eq!(string_value(r#""\${value}""#).as_deref(), Some("${value}"));
+    }
+}

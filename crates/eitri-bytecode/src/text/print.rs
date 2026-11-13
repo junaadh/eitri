@@ -115,6 +115,15 @@ impl Printer<'_> {
             f.frame_size
         )
         .unwrap();
+        // Hex keeps literal bytes unambiguous without introducing a second
+        // escaping language into the assembly format.
+        for literal in f.strings.iter() {
+            self.out.push_str("    literal h");
+            for byte in literal.as_bytes() {
+                write!(self.out, "{byte:02x}").unwrap();
+            }
+            self.out.push('\n');
+        }
         // Blocks start at the entry, at labels, and after branches and
         // returns; they are numbered in order. Labels at one point share
         // their block's name.

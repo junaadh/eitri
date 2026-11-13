@@ -656,7 +656,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 
 ### T014 — Define layouts and root descriptors
 
-- [ ] Depends on: T013.
+- [x] Depends on: T013.
+- remaining root-map obligations are completed and tested against the real collector in T015.
 - Implement canonical types, aggregate layouts, ordinary reference maps,
   dynamic-root recipe support, helper roots, and pre-call/suspended/post-call
   root states. Distinguish tracing safepoint PCs from precise fault PCs.
@@ -741,6 +742,13 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: forced collection at every legal safepoint preserves all live
   data and reclaims unreachable graphs; handle release and allocation failure
   are tested; memory limits include retained compiler/code metadata.
+
+- T015-1: single-line managed string literals and `.len()` run on both
+  interpreters, including forced collection and reclamation tests. Root maps
+  are built for straight-line managed code; managed control flow, signatures,
+  host roots, retained handles, and full-runtime memory accounting remain.
+  The task stays open. Measurements are in the
+  [T015-1 ledger](implementation/vm-research.md#t015-1-managed-string-slice).
 
 ### T016 — Implement strings, bytes, and characters
 
@@ -1397,5 +1405,5 @@ a debugger with breakpoints (T055); a mandatory native tier (T043).
 
 ## Immediate next task
 
-**T014 — define layouts and root descriptors**. T013 scalar representations
-and conversions are complete. T014 has not started.
+**T015 — complete allocation and non-moving collection**. T015-1 establishes
+managed strings; complete the remaining root, handle, and accounting work.

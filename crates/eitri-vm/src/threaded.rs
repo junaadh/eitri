@@ -21,7 +21,7 @@ use eitri_bytecode::{CallTarget, Function, FunctionId, Op};
 
 use crate::{
     Call, Fault, FaultKind, Frame, Host, Limits, Location, Machine, VmScratch, absolute,
-    host_fault, machine, raised, slot_field,
+    collect_at, host_fault, machine, raised, slot_field,
 };
 
 /// Everything a handler needs that is not hot enough for a register.
@@ -62,7 +62,9 @@ pub fn run_threaded(
     scratch: &mut VmScratch,
 ) -> Result<Vec<u64>, Fault> {
     let mut m = machine(functions, entry, args, limits, scratch, true);
-    nested(&mut m, host, entry, 0, 0)?;
+    let result = nested(&mut m, host, entry, 0, 0);
+    m.heap.collect([]);
+    result?;
     Ok(m.slots[..functions[entry].signature.results.len()].to_vec())
 }
 
@@ -85,6 +87,10 @@ pub(crate) fn nested(
             functions: m.functions,
             slots: &mut *m.slots,
             frames: &mut *m.frames,
+            heap: &mut *m.heap,
+            references: &mut *m.references,
+            force_gc: m.force_gc,
+            memory_limit: m.memory_limit,
             budget: m.budget,
             depth: m.depth,
             entry: m.entry,
@@ -301,8 +307,87 @@ fn take(st: &mut State<'_>, start: usize, target: usize) -> bool {
             return false;
         }
         st.m.budget -= 1;
+        if st.m.force_gc {
+            trace(st, start);
+        }
     }
     true
+}
+
+fn trace(st: &mut State<'_>, pc: usize) {
+    collect_at(
+        st.m.heap,
+        st.m.references,
+        st.m.frames,
+        st.m.functions,
+        st.id,
+        st.base,
+        pc,
+    );
+}
+
+fn managed_op(
+    st: &mut State<'_>,
+    op: Op,
+    a: usize,
+    b: usize,
+    word: u32,
+    pc: usize,
+) -> Result<Option<u64>, FaultKind> {
+    let end = st.base + st.function.frame_size as usize;
+    match op {
+        Op::Mov => {
+            if !st.m.references.is_empty() {
+                st.m.references.resize(st.m.references.len().max(end), None);
+                st.m.references[st.base + a] = st.m.references[st.base + b];
+            }
+            Ok(None)
+        }
+        Op::StrNew => {
+            if st.m.force_gc {
+                trace(st, pc);
+            }
+            st.m.references.resize(st.m.references.len().max(end), None);
+            let literal = &st.function.strings[(word >> 16) as usize];
+            let mut result = st.m.heap.alloc_string(literal, st.m.memory_limit);
+            if result.is_err() {
+                trace(st, pc);
+                result = st.m.heap.alloc_string(literal, st.m.memory_limit);
+            }
+            st.m.references[st.base + a] = Some(result.map_err(|_| FaultKind::Memory)?);
+            Ok(None)
+        }
+        Op::StrLen => {
+            let reference = st.m.references[st.base + b].expect("verified managed slot");
+            Ok(Some(
+                st.m.heap.string(reference).expect("live string root").len() as u64,
+            ))
+        }
+        _ => unreachable!(),
+    }
+}
+
+macro_rules! managed_handler {
+    ($name:ident, $op:expr) => {
+        extern "rust-preserve-none" fn $name(
+            code: &[u32],
+            pc: usize,
+            word: u32,
+            s: *mut u64,
+            len: usize,
+            st: &mut State<'_>,
+        ) {
+            let a = slot_field(word, 0, 8);
+            let b = slot_field(word, 0, 16);
+            match managed_op(st, $op, a, b, word, pc) {
+                Ok(Some(value)) => set(s, len, a, value),
+                Ok(None) if $op == Op::Mov => set(s, len, a, get(s, len, b)),
+                Ok(None) => {}
+                Err(kind) => fail!(code, pc, word, s, len, st, kind),
+            }
+            next!(code, pc + 1, s, len, st)
+        }
+    };
 }
 
 macro_rules! slot_handler {
@@ -352,7 +437,9 @@ macro_rules! branch_handler {
     };
 }
 
-slot_handler!(mov, Op::Mov);
+managed_handler!(mov, Op::Mov);
+managed_handler!(str_new, Op::StrNew);
+managed_handler!(str_len, Op::StrLen);
 slot_handler!(ldi, Op::Ldi);
 slot_handler!(ldk, Op::Ldk);
 slot_handler!(add_wrap, Op::AddWrap);
@@ -469,6 +556,16 @@ extern "rust-preserve-none" fn wide(
         }
         next!(code, to, s, len, st)
     }
+    if matches!(Op::from_byte(op), Some(Op::Mov | Op::StrNew | Op::StrLen)) {
+        let op = Op::from_byte(op).expect("verified opcode");
+        match managed_op(st, op, a, b, word, pc) {
+            Ok(Some(value)) => set(s, len, a, value),
+            Ok(None) if op == Op::Mov => set(s, len, a, get(s, len, b)),
+            Ok(None) => {}
+            Err(kind) => fail!(code, pc, word, s, len, st, kind),
+        }
+        next!(code, after, s, len, st)
+    }
     if let Err(kind) = slot_op(op, (a, b, c), word, s, len, &st.function.consts) {
         fail!(code, pc, word, s, len, st, kind)
     }
@@ -488,6 +585,9 @@ extern "rust-preserve-none" fn call_host(
         fail!(code, pc, word, s, len, st, FaultKind::Budget)
     }
     st.m.budget -= 1;
+    if st.m.force_gc {
+        trace(st, pc);
+    }
     let CallTarget::Host(index) = site.target else {
         unreachable!("the verifier matches the opcode to the target");
     };
@@ -550,6 +650,9 @@ extern "rust-preserve-none" fn call_script(
     st.m.budget -= 1;
     if st.m.frames.len() as u32 >= st.m.depth {
         fail!(code, pc, word, s, len, st, FaultKind::Depth)
+    }
+    if st.m.force_gc {
+        trace(st, pc);
     }
     // Parameters follow the callee's results, whose count the site carries
     // (checked against the callee's signature by the verifier).
@@ -810,6 +913,8 @@ static TABLE: [Handler; 256] = {
     table[Op::FremF32 as usize] = t013_frem_f32;
     table[Op::FremF64 as usize] = t013_frem_f64;
     table[Op::Mov as usize] = mov;
+    table[Op::StrNew as usize] = str_new;
+    table[Op::StrLen as usize] = str_len;
     table[Op::Ldi as usize] = ldi;
     table[Op::Ldk as usize] = ldk;
     table[Op::LdkX as usize] = ldk_x;

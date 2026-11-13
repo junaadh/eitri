@@ -97,7 +97,7 @@ pub fn value_type(ty: Ty) -> ValueType {
         Ty::F64 => ValueType::F64,
         Ty::Char => ValueType::Char,
         Ty::Bool => ValueType::Bool,
-        Ty::Void | Ty::Error => unreachable!("checked code has only value types here"),
+        Ty::String | Ty::Void | Ty::Error => unreachable!("checked code has only value types here"),
     }
 }
 
@@ -212,6 +212,43 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
                     .take_recorded()
                     .expect("recorded while lowering"),
             );
+        }
+    }
+    if !lowerer.checked.strings.is_empty() {
+        let signatures = Program::signatures_of(&functions);
+        let hosts = host_signatures(input.hosts);
+        let callees = eitri_bytecode::Callees {
+            functions: &signatures,
+            hosts: &hosts,
+        };
+        for function in functions.as_mut_slice() {
+            let mut pc = 0;
+            let mut has_strings = false;
+            while pc < function.code.len() {
+                let decoded =
+                    eitri_bytecode::decode(&function.code, pc).expect("assembled instruction");
+                has_strings |= decoded.op == Op::StrNew;
+                pc += decoded.words as usize;
+            }
+            if has_strings {
+                function.strings = lowerer
+                    .checked
+                    .strings
+                    .iter()
+                    .map(|s| s.as_str().into())
+                    .collect();
+                function.roots =
+                    eitri_bytecode::string_roots(function, &callees).map_err(|_| {
+                        Diagnostic::error(
+                            Code::Unsupported,
+                            "not supported yet: string values across control flow or calls",
+                        )
+                        .with_label(DiagLabel::primary(
+                            input.source,
+                            function.span_at(0).unwrap_or_default(),
+                        ))
+                    })?;
+            }
         }
     }
     Ok(Program {
@@ -649,6 +686,18 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     .load(slot, value as u64, value_type(checked.types[e]), span)?;
                 Ok(slot)
             }
+            Expr::String(_) => {
+                let Res::StringLiteral(index) = checked.resolutions[e] else {
+                    unreachable!("checked string literal")
+                };
+                let slot = self.dst(dst);
+                self.asm.emit(
+                    Op::StrNew,
+                    Operands::abc(slot.into(), index.into(), 0),
+                    span,
+                )?;
+                Ok(slot)
+            }
             Expr::Bool(value) => {
                 let slot = self.dst(dst);
                 self.asm
@@ -731,6 +780,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 self.conversion(e, ast.args(args)[0], dst)
             }
             Expr::Convert { value, .. } => self.conversion(e, value, dst),
+            Expr::Call { callee, .. } if checked.resolutions[e] == Res::StringLen => {
+                let Expr::Member { base, .. } = ast.exprs[callee] else {
+                    unreachable!()
+                };
+                let src = self.expr(base, None)?;
+                let slot = self.dst(dst);
+                self.asm
+                    .emit(Op::StrLen, Operands::abc(slot.into(), src.into(), 0), span)?;
+                Ok(slot)
+            }
             Expr::Call { .. } => self.call(e, dst),
             Expr::If(id) => self.if_value(id, dst, span),
             Expr::Member { .. } | Expr::Error => {

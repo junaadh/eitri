@@ -358,6 +358,7 @@ fn scalar_root_state(
     slots: &[Slot],
     map: &crate::RootMap,
     spans: &[crate::SlotRange],
+    managed: bool,
 ) -> Result<(), ErrorKind> {
     if !map.guarded.is_empty() {
         return Err(ErrorKind::UnsupportedGuardedRoots);
@@ -370,12 +371,29 @@ fn scalar_root_state(
         }
     }
     for (word_index, &word) in map.ordinary.iter().enumerate() {
-        if word != 0 {
-            let slot = (word_index * 64 + word.trailing_zeros() as usize) as u32;
-            return Err(match slots[slot as usize] {
-                Slot::Ty(_) => ErrorKind::RootWrongShape(slot),
-                _ => ErrorKind::RootNotInitialized(slot),
-            });
+        let mut bits = word;
+        while bits != 0 {
+            let slot = (word_index * 64 + bits.trailing_zeros() as usize) as u32;
+            match slots[slot as usize] {
+                Slot::Ty(ValueType::String) => {}
+                Slot::Ty(_) => return Err(ErrorKind::RootWrongShape(slot)),
+                _ => return Err(ErrorKind::RootNotInitialized(slot)),
+            }
+            bits &= bits - 1;
+        }
+    }
+    // Scalar-only functions retain the sparse path. Managed functions have
+    // their initialized reference slots covered even when conservatively live.
+    if managed {
+        for (slot, fact) in slots.iter().enumerate() {
+            if *fact == Slot::Ty(ValueType::String)
+                && map
+                    .ordinary
+                    .get(slot / 64)
+                    .is_none_or(|word| word & (1 << (slot % 64)) == 0)
+            {
+                return Err(ErrorKind::RootMissing(slot as u32));
+            }
         }
     }
     if let Some(&(ty, payload)) = map.dynamic.first() {
@@ -450,9 +468,83 @@ fn branch_target(insn: &Insn) -> Option<i64> {
     Some(end + disp)
 }
 
+/// Build conservative roots for the current straight-line string slice.
+/// Code containing control-flow or calls is deliberately rejected until the
+/// full managed CFG liveness pass is connected. Work is O(I * F) and root
+/// snapshots are bounded by RootBuilder's metadata budget.
+pub fn string_roots(
+    function: &Function,
+    callees: &Callees<'_>,
+) -> Result<crate::FunctionRoots, VerifyError> {
+    let insns = structure(function, callees)?;
+    if insns.iter().any(|i| {
+        i.decoded.op.info().effects.contains(BRANCH)
+            || matches!(i.decoded.op.info().sem, Sem::Call(_))
+    }) {
+        return Err(error(
+            0,
+            ErrorKind::InvalidScalar("managed control flow is not supported yet"),
+        ));
+    }
+    let fail = |_| error(0, ErrorKind::InvalidScalar("managed root metadata limit"));
+    let mut builder = crate::RootBuilder::new(function.frame_size).map_err(fail)?;
+    let mut slots = vec![Slot::Uninit; function.frame_size as usize];
+    for (i, &ty) in function.signature.params.iter().enumerate() {
+        slots[function.signature.param_base() as usize + i] = Slot::Ty(ty);
+    }
+    let mut pc_map = Vec::new();
+    builder.at_entry().map_err(fail)?;
+    for insn in &insns {
+        if needs_safepoint(insn.pc, &insn.decoded) {
+            builder
+                .end_lifetime(crate::SlotRange {
+                    first: 0,
+                    count: function.frame_size,
+                })
+                .map_err(fail)?;
+            for (i, slot) in slots.iter().enumerate() {
+                if let Slot::Ty(ty) = slot {
+                    let layout = crate::RootLayout {
+                        ordinary: if *ty == ValueType::String {
+                            vec![0]
+                        } else {
+                            Vec::new()
+                        },
+                        dynamic: Vec::new(),
+                    };
+                    builder
+                        .note_definition(
+                            crate::SlotRange {
+                                first: i as u32,
+                                count: 1,
+                            },
+                            &layout,
+                        )
+                        .map_err(fail)?;
+                }
+            }
+            builder.at_poll(insn.pc).map_err(fail)?;
+            pc_map.push((insn.pc, vec![crate::SafepointPc(insn.pc)]));
+        }
+        transfer(function, callees, insn, &mut slots)?;
+    }
+    builder.finish(&pc_map).map_err(fail)
+}
+
 fn structure(function: &Function, callees: &Callees<'_>) -> Result<Vec<Insn>, VerifyError> {
     let code = &function.code;
     let signature = &function.signature;
+    if signature
+        .params
+        .iter()
+        .chain(&signature.results)
+        .any(|ty| *ty == ValueType::String)
+    {
+        return Err(error(
+            0,
+            ErrorKind::InvalidScalar("managed function signatures are not supported yet"),
+        ));
+    }
     if (function.frame_size as usize) < signature.results.len() + signature.params.len() {
         return Err(error(0, ErrorKind::FrameTooSmall));
     }
@@ -463,6 +555,9 @@ fn structure(function: &Function, callees: &Callees<'_>) -> Result<Vec<Insn>, Ve
         let at = pc as u32;
         let decoded = decode(code, pc).map_err(|e| error(at, ErrorKind::Decode(e)))?;
         let info = decoded.op.info();
+        if decoded.op == Op::StrNew && decoded.operands.b as usize >= function.strings.len() {
+            return Err(error(at, ErrorKind::NoConstant(decoded.operands.b as u32)));
+        }
         if !info.implemented {
             return Err(error(at, ErrorKind::Unimplemented(decoded.op)));
         }
@@ -635,12 +730,19 @@ fn types(function: &Function, callees: &Callees<'_>, insns: &[Insn]) -> Result<(
     let roots = &function.roots;
     let map = |id: crate::RootMapId| &roots.maps[id.0 as usize];
     let check = |slots: &[Slot], root: &crate::RootState, pc| {
-        scalar_root_state(slots, map(root.map), &root.initialized).map_err(|kind| error(pc, kind))
+        scalar_root_state(
+            slots,
+            map(root.map),
+            &root.initialized,
+            !function.strings.is_empty(),
+        )
+        .map_err(|kind| error(pc, kind))
     };
     scalar_root_state(
         states[0].as_ref().expect("entry reachable"),
         map(roots.entry),
         &[],
+        !function.strings.is_empty(),
     )
     .map_err(|kind| error(0, kind))?;
     let mut points = roots.safepoints.iter().peekable();
@@ -711,6 +813,11 @@ fn transfer(
     let [a, b, c] = columns(d);
     let write = |state: &mut [Slot], slot: i64, ty| state[slot as usize] = Slot::Ty(ty);
     match d.op.info().sem {
+        Sem::StringAlloc => write(state, a, ValueType::String),
+        Sem::StringLen => {
+            read(state, pc, b, Some(ValueType::String))?;
+            write(state, a, I64);
+        }
         Sem::Move => {
             let ty = read(state, pc, b, None)?;
             write(state, a, ty);
@@ -898,6 +1005,12 @@ fn transfer(
 /// ordering takes integers.
 fn compare(state: &[Slot], pc: u32, cond: Cond, a: i64, b: i64) -> Result<(), VerifyError> {
     let ty = read(state, pc, a, None)?;
+    if ty == ValueType::String {
+        return Err(error(
+            pc,
+            ErrorKind::InvalidScalar("string comparisons are not supported yet"),
+        ));
+    }
     read(state, pc, b, Some(ty))?;
     let equal = matches!(cond, Cond::Eq | Cond::Ne);
     if !(ty.integer() || ty == ValueType::Char || (equal && ty == ValueType::Bool)) {

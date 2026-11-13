@@ -34,8 +34,18 @@ Out-of-range checked integer operations/conversions fault with `integer
 overflow`; invalid float-to-integer conversions fault with `numeric conversion
 out of range`; bad shift counts fault with `invalid shift amount`. Faults
 preserve prior effects and source traces. Storage-only extern names remain
-unavailable as ordinary source types. Strings, managed values, and the other
-M0 exclusions remain future work.
+unavailable as ordinary source types. The initial managed-string slice is
+listed below; the remaining M0 exclusions are still future work.
+
+## Managed strings (T015-1)
+
+Single-line and raw single-line UTF-8 literals can be stored in inferred
+locals and used with `.len()`, which returns their byte length as `i64`.
+The parser accepts the documented escapes; interpolation and multiline literals
+are rejected. Until managed control-flow analysis lands, a function using a
+string literal must have straight-line bytecode with no script or host calls.
+String annotations, arguments, results, comparisons, concatenation, and other
+methods remain unsupported. No host effects occur for a rejected program.
 
 ## Types
 

@@ -266,6 +266,7 @@ fn observe(text: &str, reference: bool) -> Option<String> {
             e,
             eitri_syntax::ast::Expr::Float { .. }
                 | eitri_syntax::ast::Expr::Char(_)
+                | eitri_syntax::ast::Expr::String(_)
                 | eitri_syntax::ast::Expr::Convert { .. }
                 | eitri_syntax::ast::Expr::Binary {
                     op: eitri_syntax::ast::BinaryOp::BitAnd

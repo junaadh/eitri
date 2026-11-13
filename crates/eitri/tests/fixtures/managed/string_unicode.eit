@@ -1,0 +1,4 @@
+//! host: test
+import test from "test"
+fn main() -> i64 { let s = "☃"; let t = s; return t.len(); }
+test.emit(main())

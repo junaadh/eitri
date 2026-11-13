@@ -187,7 +187,7 @@ impl Printer<'_> {
             Expr::Int { token, negative } | Expr::Float { token, negative } => {
                 format!("{}{}", if negative { "-" } else { "" }, self.token(token))
             }
-            Expr::Char(token) => self.token(token).to_owned(),
+            Expr::Char(token) | Expr::String(token) => self.token(token).to_owned(),
             Expr::Convert { callee, value } => {
                 format!("(truncating {} {})", self.expr(callee), self.expr(value))
             }
@@ -326,7 +326,6 @@ fn syntax_errors_resynchronize() {
 #[test]
 fn unsupported_features_are_reported_once_and_dropped() {
     let cases: &[(&str, &str)] = &[
-        ("\"ދިވެހި\"", "E0001 0..14 not supported yet: string literals"),
         ("let x = null", "E0001 8..12 not supported yet: `null`"),
         (
             "fn f(x: ?i64) -> void {\n}",
@@ -657,6 +656,7 @@ fn m0_reference_input(text: &str) -> bool {
         matches!(
             kind,
             crate::TokenKind::Float
+                | crate::TokenKind::Str
                 | crate::TokenKind::Char
                 | crate::TokenKind::Tilde
                 | crate::TokenKind::Amp

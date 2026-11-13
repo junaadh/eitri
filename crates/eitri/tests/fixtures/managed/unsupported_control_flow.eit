@@ -1,0 +1,1 @@
+fn main(v: bool) -> i64 { let s = "x"; if v { return s.len(); } else { return 0; } }

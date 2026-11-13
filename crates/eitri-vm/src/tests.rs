@@ -713,6 +713,7 @@ fn refused_script_calls_do_not_grow_storage() {
                 let mut scratch = VmScratch {
                     slots: Vec::with_capacity(slots),
                     frames: Vec::with_capacity(frames),
+                    ..VmScratch::default()
                 };
                 let before = storage_capacities(&scratch);
                 let fault = run(
