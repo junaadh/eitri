@@ -27,6 +27,7 @@ pub enum DeclError {
     InlineCycle { keys: Vec<DeclKey> },
     Layout(crate::LayoutError),
     TooMany,
+    TooLarge,
 }
 struct Declaration {
     key: DeclKey,
@@ -150,6 +151,135 @@ impl Declarations {
         }
         crate::layout::named_layout(types, self, root, domain).map_err(DeclError::Layout)
     }
+    /// Snapshot a signature with named products using the same anonymous type
+    /// bytes as `TypeStore::signature`. Named and reference tags precede either
+    /// a key and ordered shape or a back-reference distance to an active path
+    /// entry. Unique declaration keys make these path encodings canonical under
+    /// `same_type`'s coinductive equality, independent of local IDs and sharing.
+    ///
+    /// Every declaration is expanded at most once per path. With N declarations
+    /// and F maximum fields, unfolding can take O((F+1)^N) nodes before the cap;
+    /// a wide graph can also exceed it directly. Output is capped at 1 MiB and
+    /// returns `TooLarge` before appending beyond it. Time and temporary space
+    /// are O(B + N), where B is emitted bytes (up to the cap), with expected
+    /// constant-time path lookup; hash collisions can increase lookup time.
+    /// Traversal uses an explicit stack, including for deep graphs.
+    pub fn signature(
+        &self,
+        types: &TypeStore,
+        params: &[FieldType],
+        result: FieldType,
+    ) -> Result<crate::PortableSignature, DeclError> {
+        self.signature_with_limit(types, params, result, 1_048_576)
+    }
+
+    fn signature_with_limit(
+        &self,
+        types: &TypeStore,
+        params: &[FieldType],
+        result: FieldType,
+        limit: usize,
+    ) -> Result<crate::PortableSignature, DeclError> {
+        fn append(out: &mut Vec<u8>, bytes: &[u8], limit: usize) -> Result<(), DeclError> {
+            if out
+                .len()
+                .checked_add(bytes.len())
+                .filter(|&n| n <= limit)
+                .is_none()
+            {
+                return Err(DeclError::TooLarge);
+            }
+            out.extend_from_slice(bytes);
+            Ok(())
+        }
+        fn number(out: &mut Vec<u8>, n: usize, limit: usize) -> Result<(), DeclError> {
+            append(
+                out,
+                &u32::try_from(n)
+                    .map_err(|_| DeclError::TooLarge)?
+                    .to_le_bytes(),
+                limit,
+            )
+        }
+        fn string(out: &mut Vec<u8>, s: &str, limit: usize) -> Result<(), DeclError> {
+            number(out, s.len(), limit)?;
+            append(out, s.as_bytes(), limit)
+        }
+        // Anonymous tags occupy 0..=11; these tags extend the same prefix grammar.
+        const NAMED: u8 = 12;
+        const REFERENCE: u8 = 13;
+        const BACKREF: u8 = 14;
+        const DEFINITION: u8 = 15;
+        enum Work {
+            Type(FieldType),
+            Fields(DeclId, usize),
+            Exit(DeclId),
+        }
+        let mut out = Vec::new();
+        number(&mut out, params.len(), limit)?;
+        let mut active = FxHashMap::<DeclId, usize>::default();
+        let mut depth = 0usize;
+        let mut stack = Vec::new();
+        for root in params.iter().copied().chain(std::iter::once(result)) {
+            stack.push(Work::Type(root));
+            while let Some(work) = stack.pop() {
+                match work {
+                    Work::Type(FieldType::Type(id)) => {
+                        let node = types
+                            .nodes
+                            .get(id.0 as usize)
+                            .ok_or(DeclError::UnknownType(id))?;
+                        append(&mut out, &node.1, limit)?;
+                    }
+                    Work::Type(ty @ (FieldType::Named(_) | FieldType::Reference(_))) => {
+                        let (id, tag) = match ty {
+                            FieldType::Named(id) => (id, NAMED),
+                            FieldType::Reference(id) => (id, REFERENCE),
+                            FieldType::Type(_) => unreachable!(),
+                        };
+                        let decl = self
+                            .declarations
+                            .get(id.0 as usize)
+                            .ok_or(DeclError::UnknownDecl(id))?;
+                        append(&mut out, &[tag], limit)?;
+                        if let Some(&index) = active.get(&id) {
+                            append(&mut out, &[BACKREF], limit)?;
+                            number(&mut out, depth - 1 - index, limit)?;
+                            continue;
+                        }
+                        let fields = decl.fields.as_ref().ok_or(DeclError::Undefined(id))?;
+                        append(&mut out, &[DEFINITION], limit)?;
+                        string(&mut out, &decl.key.module, limit)?;
+                        string(&mut out, &decl.key.name, limit)?;
+                        number(&mut out, fields.len(), limit)?;
+                        active.insert(id, depth);
+                        depth += 1;
+                        stack.push(Work::Exit(id));
+                        stack.push(Work::Fields(id, 0));
+                    }
+                    Work::Fields(id, index) => {
+                        let fields = self.declarations[id.0 as usize]
+                            .fields
+                            .as_ref()
+                            .expect("defined above");
+                        if let Some((name, ty)) = fields.get(index) {
+                            string(&mut out, name, limit)?;
+                            stack.push(Work::Fields(id, index + 1));
+                            stack.push(Work::Type(*ty));
+                        }
+                    }
+                    Work::Exit(id) => {
+                        active.remove(&id);
+                        depth -= 1;
+                    }
+                }
+            }
+        }
+        Ok(crate::PortableSignature {
+            encoding: out.into_boxed_slice(),
+        })
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.declarations.len()
     }
@@ -368,6 +498,175 @@ mod tests {
         assert_eq!(
             same_type((&a, &types, left[0]), (&b, &types, right[0])),
             Ok(true)
+        );
+    }
+    #[test]
+    fn portable_signatures_match_identity() {
+        let mut ta = TypeStore::default();
+        let ai = ta.intern(TypeDesc::Scalar(ScalarKind::I64)).unwrap();
+        let ao = ta.intern(TypeDesc::Optional(ai)).unwrap();
+        let mut tb = TypeStore::default();
+        tb.intern(TypeDesc::Void).unwrap();
+        let bi = tb.intern(TypeDesc::Scalar(ScalarKind::I64)).unwrap();
+        let bo = tb.intern(TypeDesc::Optional(bi)).unwrap();
+        let mut a = Declarations::default();
+        let aa = a.declare(key("A")).unwrap();
+        let ab = a.declare(key("B")).unwrap();
+        a.define(
+            aa,
+            vec![
+                field("self", FieldType::Reference(aa)),
+                field("b", FieldType::Named(ab)),
+                field("value", FieldType::Type(ao)),
+            ],
+        )
+        .unwrap();
+        a.define(ab, vec![field("a", FieldType::Reference(aa))])
+            .unwrap();
+        let mut b = Declarations::default();
+        let bb = b.declare(key("B")).unwrap();
+        let ba = b.declare(key("A")).unwrap();
+        b.define(
+            ba,
+            vec![
+                field("self", FieldType::Reference(ba)),
+                field("b", FieldType::Named(bb)),
+                field("value", FieldType::Type(bo)),
+            ],
+        )
+        .unwrap();
+        b.define(bb, vec![field("a", FieldType::Reference(ba))])
+            .unwrap();
+        let sig = |d: &Declarations, t: &TypeStore, id| {
+            d.signature(
+                t,
+                &[FieldType::Named(id), FieldType::Reference(id)],
+                FieldType::Named(id),
+            )
+            .unwrap()
+        };
+        assert_eq!(same_type((&a, &ta, aa), (&b, &tb, ba)), Ok(true));
+        assert_eq!(sig(&a, &ta, aa), sig(&b, &tb, ba));
+        assert_eq!(
+            a.signature(&ta, &[FieldType::Type(ao)], FieldType::Type(ai))
+                .unwrap(),
+            ta.signature(&[ao], ai).unwrap()
+        );
+        assert_ne!(
+            a.signature(&ta, &[], FieldType::Named(aa)).unwrap(),
+            a.signature(&ta, &[], FieldType::Reference(aa)).unwrap()
+        );
+        let mut c = Declarations::default();
+        let ca = c.declare(key("A")).unwrap();
+        let cb = c.declare(key("B")).unwrap();
+        c.define(
+            ca,
+            vec![
+                field("self", FieldType::Reference(ca)),
+                field("b", FieldType::Named(cb)),
+                field("value", FieldType::Type(bo)),
+            ],
+        )
+        .unwrap();
+        c.define(cb, vec![field("different", FieldType::Reference(ca))])
+            .unwrap();
+        assert!(matches!(
+            same_type((&a, &ta, aa), (&c, &tb, ca)),
+            Err(DeclError::SameKeyDifferentShape { .. })
+        ));
+        assert_ne!(sig(&a, &ta, aa), sig(&c, &tb, ca));
+        assert_eq!(same_type((&a, &ta, aa), (&b, &tb, bb)), Ok(false));
+        assert_ne!(sig(&a, &ta, aa), sig(&b, &tb, bb));
+    }
+
+    #[test]
+    fn portable_signature_size_limits_wide_and_deep_graphs() {
+        let mut types = TypeStore::default();
+        let value = types.intern(TypeDesc::Void).unwrap();
+        let mut wide = Declarations::default();
+        let root = wide.declare(key("wide")).unwrap();
+        let fields = (0..2000)
+            .map(|n| field(&format!("field{n}"), FieldType::Type(value)))
+            .collect();
+        wide.define(root, fields).unwrap();
+        let wide_sig = wide.signature(&types, &[], FieldType::Named(root)).unwrap();
+        let size = wide_sig.heap_bytes();
+        assert_eq!(
+            wide.signature_with_limit(&types, &[], FieldType::Named(root), size)
+                .unwrap(),
+            wide_sig
+        );
+        assert_eq!(
+            wide.signature_with_limit(&types, &[], FieldType::Named(root), size - 1),
+            Err(DeclError::TooLarge)
+        );
+        let mut deep = Declarations::default();
+        let ids: Vec<_> = (0..1000)
+            .map(|n| deep.declare(key(&format!("{n}"))).unwrap())
+            .collect();
+        for pair in ids.windows(2) {
+            deep.define(pair[0], vec![field("next", FieldType::Reference(pair[1]))])
+                .unwrap();
+        }
+        deep.define(ids[999], vec![field("cycle", FieldType::Reference(ids[0]))])
+            .unwrap();
+        let deep_sig = deep
+            .signature(&types, &[], FieldType::Named(ids[0]))
+            .unwrap();
+        let size = deep_sig.heap_bytes();
+        assert_eq!(
+            deep.signature_with_limit(&types, &[], FieldType::Named(ids[0]), size)
+                .unwrap(),
+            deep_sig
+        );
+        assert_eq!(
+            deep.signature_with_limit(&types, &[], FieldType::Named(ids[0]), size - 1),
+            Err(DeclError::TooLarge)
+        );
+        let mut huge = Declarations::default();
+        let id = huge.declare(key("huge")).unwrap();
+        let fields = (0..1000)
+            .map(|n| (format!("{n}{}", "x".repeat(1100)), FieldType::Type(value)))
+            .collect();
+        huge.define(id, fields).unwrap();
+        assert_eq!(
+            huge.signature(&types, &[], FieldType::Named(id)),
+            Err(DeclError::TooLarge)
+        );
+        let mut long = Declarations::default();
+        let ids: Vec<_> = (0..1000)
+            .map(|n| {
+                long.declare(key(&format!("{n}{}", "x".repeat(1100))))
+                    .unwrap()
+            })
+            .collect();
+        for pair in ids.windows(2) {
+            long.define(pair[0], vec![field("next", FieldType::Reference(pair[1]))])
+                .unwrap();
+        }
+        long.define(ids[999], vec![]).unwrap();
+        assert_eq!(
+            long.signature(&types, &[], FieldType::Named(ids[0])),
+            Err(DeclError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn portable_signature_rejects_invalid_inputs() {
+        let types = TypeStore::default();
+        let mut decls = Declarations::default();
+        let id = decls.declare(key("undefined")).unwrap();
+        assert_eq!(
+            decls.signature(&types, &[], FieldType::Named(id)),
+            Err(DeclError::Undefined(id))
+        );
+        assert_eq!(
+            decls.signature(&types, &[], FieldType::Reference(DeclId(999))),
+            Err(DeclError::UnknownDecl(DeclId(999)))
+        );
+        assert_eq!(
+            decls.signature(&types, &[], FieldType::Type(TypeId(999))),
+            Err(DeclError::UnknownType(TypeId(999)))
         );
     }
     #[test]

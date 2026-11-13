@@ -710,7 +710,7 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Named-product declaration graph step 9b1: two-phase declarations and iterative
   inline-cycle validation, plus synthetic named-product layout, are implemented.
   Cross-store shape equality uses iterative coinductive pair comparison (9b2);
-  portable recursive encoding remains for 9b3;
+  portable recursive signatures use bounded, iterative path back-references (9b3);
   named enums, language and registration support remain later work.
 
 ### T015 — Implement allocation and non-moving collection
