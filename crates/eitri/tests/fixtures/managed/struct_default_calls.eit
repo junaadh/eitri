@@ -1,0 +1,8 @@
+//! host: test
+import test from "test"
+fn make() -> string { test.emit(7); return "value" }
+struct Item { text: string = make() }
+let a = Item {}
+let b = Item { text: "override" }
+let c = Item {}
+test.check(a.text == "value" && b.text == "override" && c.text == "value")

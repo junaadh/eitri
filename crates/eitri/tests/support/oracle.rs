@@ -644,6 +644,13 @@ impl Eval<'_> {
                         .unwrap();
                     result[index] = self.expr(host, field.value)?;
                 }
+                for (index, field) in declared.iter().enumerate() {
+                    if let Some(default) = field.default
+                        && matches!(result[index], Value::Void)
+                    {
+                        result[index] = self.expr(host, default)?;
+                    }
+                }
                 let index = self.structs.len() as u32;
                 self.structs.push(result);
                 Ok(Value::Struct(id, index))

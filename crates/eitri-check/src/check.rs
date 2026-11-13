@@ -915,6 +915,34 @@ impl<'i> Checker<'_, 'i> {
             }
         }
 
+        for (id, decl) in ast.structs.iter_enumerated() {
+            for (index, field) in ast.params(decl.fields).iter().enumerate() {
+                if let Some(default) = field.default {
+                    if matches!(
+                        ast.exprs[default],
+                        Expr::Int { .. }
+                            | Expr::Float { .. }
+                            | Expr::Char(_)
+                            | Expr::String(_)
+                            | Expr::Bool(_)
+                    ) || matches!(ast.exprs[default], Expr::Call { callee, args } if ast.args(args).is_empty() && matches!(ast.exprs[callee], Expr::Name(_) | Expr::Member { .. }))
+                    {
+                        if let Some(&ty) =
+                            self.out.param_types[self.out.struct_fields[id]].get(index)
+                        {
+                            self.value(default, Some(ty));
+                        }
+                    } else {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: this field default expression",
+                            self.span(default),
+                        );
+                    }
+                }
+            }
+        }
+
         for item in &ast.items {
             match *item {
                 Item::Fn(id) => self.function(id),
@@ -2014,7 +2042,11 @@ impl<'i> Checker<'_, 'i> {
                 self.value(field.value, None);
             }
         }
-        if seen[..declared.len()].iter().any(|&field| !field) {
+        if declared
+            .iter()
+            .enumerate()
+            .any(|(index, field)| !seen[index] && field.default.is_none())
+        {
             self.report(Code::TypeMismatch, "missing struct field", self.span(expr));
         }
         self.out.resolutions[expr] = Res::Struct(id);

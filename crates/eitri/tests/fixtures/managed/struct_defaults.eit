@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+struct Window { title: string = "untitled", width: i64 = 800, let ready: bool = true }
+let first = Window {}
+let second = Window { title: "custom", width: 4 }
+test.check(first.title == "untitled" && first.width == 800 && first.ready)
+test.check(second.title == "custom" && second.width == 4 && second.ready)

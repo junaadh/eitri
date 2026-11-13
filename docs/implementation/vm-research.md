@@ -1995,3 +1995,27 @@ p50/p99 8,584/54,200 ns, execution 209/1,542 ns, total 8,792/54,900 ns.
 This scalar workload does not exercise matches; the large p99 reflects noise
 in this run. Samples: `/private/tmp/eitri-t017-11-samples.csv`; report:
 `/private/tmp/eitri-t017-11-bench.txt`.
+
+### T017-12 literal field defaults
+
+Scalar and string literal field defaults are type checked even if never used,
+and initialized at each construction that omits them. Other default expressions
+are rejected. The managed fixture covers overrides and forced collection.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,375/10,800 ns, execution 209/333 ns, total 8,583/11,200 ns.
+This scalar workload does not exercise field defaults. Samples:
+`/private/tmp/eitri-t017-12-samples.csv`; report:
+`/private/tmp/eitri-t017-12-bench.txt`.
+
+### T017-13 function-call field defaults
+
+No-argument function-call defaults are resolved once and executed at each
+construction that omits the field. Ordered effects and string roots are tested
+under forced GC. Other nonliteral defaults remain unsupported.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,250/10,200 ns, execution 208/292 ns, total 8,458/10,500 ns.
+This scalar workload does not exercise field defaults. Samples:
+`/private/tmp/eitri-t017-13-samples.csv`; report:
+`/private/tmp/eitri-t017-13-bench.txt`.

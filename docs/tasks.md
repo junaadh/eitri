@@ -832,6 +832,10 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   writes, including nested writes and mutating method receivers.
 - T017-11: exhaustive matches whose arms return satisfy function return
   analysis; missing return paths remain rejected.
+- T017-12: scalar and string literal field defaults are checked and evaluated
+  at construction; nonliteral defaults remain unsupported.
+- T017-13: field defaults can call a function without arguments, evaluated
+  separately at each construction that omits the field.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

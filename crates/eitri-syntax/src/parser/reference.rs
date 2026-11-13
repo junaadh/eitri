@@ -502,8 +502,17 @@ impl Parser<'_> {
             let field = self.expect(T::Ident, "a field name")?;
             self.expect(T::Colon, "`:`")?;
             let ty = self.type_expr()?;
-            let default = if self.eat(T::Eq).is_some() { Some(self.expr(false)?) } else { None };
-            fields.push(Param { name: field, ty, readonly, default });
+            let default = if self.eat(T::Eq).is_some() {
+                Some(self.expr(false)?)
+            } else {
+                None
+            };
+            fields.push(Param {
+                name: field,
+                ty,
+                readonly,
+                default,
+            });
             if self.eat(T::Comma).is_none() && !self.at_statement_end() {
                 return Err(self.expected("a line break or `,`"));
             }
@@ -1178,11 +1187,26 @@ impl Parser<'_> {
     }
 
     fn call(&mut self, callee: ExprId) -> Parsed<ExprId> {
-        if self.nth(1) == T::Ident && self.nth(2) == T::Colon {
+        if self.nth(1) == T::Ident
+            && self.nth(2) == T::Colon
+            && !matches!(self.ast.exprs[callee], Expr::Name(token) if self.tokens.symbol(token).is_type_name())
+        {
             return self.named_call(callee);
         }
         let open = self.bump();
         let mark = self.exprs.len();
+        if self.at(T::Ident)
+            && self.nth(1) == T::Colon
+            && &self.text[self.current_span().range()] == "truncating"
+            && matches!(self.ast.exprs[callee], Expr::Name(token) if self.tokens.symbol(token).is_type_name())
+        {
+            self.bump();
+            self.bump();
+            let value = self.expr(false)?;
+            let close = self.expect(T::RParen, "`)`")?;
+            let span = self.ast.span(callee).to(self.span_of(close));
+            return Ok(self.ast.expr(Expr::Convert { callee, value }, span));
+        }
         let mut labeled = false;
         while !self.at(T::RParen) {
             if self.at(T::Ident) && self.nth(1) == T::Colon {

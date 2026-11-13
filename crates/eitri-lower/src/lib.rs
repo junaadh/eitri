@@ -1437,6 +1437,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     )?;
                     self.top = end;
                 }
+                for (index, field) in declared.iter().enumerate() {
+                    if let Some(default) = field.default
+                        && !ast.field_inits[fields].iter().any(|init| {
+                            self.input.tokens.symbol(init.name)
+                                == self.input.tokens.symbol(field.name)
+                        })
+                    {
+                        self.expr(default, Some(slot + self.field_offset(id, index as u32)))?;
+                        self.top = end;
+                    }
+                }
                 Ok(slot)
             }
             Expr::Member { base, .. } if matches!(checked.resolutions[e], Res::Field(_)) => {
