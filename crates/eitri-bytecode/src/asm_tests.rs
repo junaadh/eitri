@@ -152,6 +152,26 @@ fn wide_slots_and_extended_followers() {
     );
     assert!(listing.contains("WIDE CB.EQ   r300, r400"));
     check(&f).unwrap();
+    let mut pc = 0;
+    loop {
+        let insn = decode(&f.code, pc).unwrap();
+        if insn.op == Op::LdkX && insn.words == 3 {
+            break;
+        }
+        pc += insn.words as usize;
+    }
+    let mut changed = f.clone();
+    changed.roots.safepoints.push((
+        SafepointPc((pc + 2) as u32),
+        RootState {
+            map: RootMapId(0),
+            initialized: vec![],
+        },
+    ));
+    assert_eq!(
+        kind(&changed),
+        ErrorKind::SafepointNotInstructionStart((pc + 2) as u32)
+    );
 }
 
 #[test]
@@ -480,4 +500,86 @@ fn call_kinds_and_frame_sizes_are_checked() {
     check(&small).unwrap();
     small.frame_size = 1;
     assert_eq!(kind(&small), ErrorKind::FrameTooSmall);
+}
+
+#[test]
+fn root_metadata_structural_mutations_are_rejected() {
+    let mut asm = Assembler::new();
+    asm.load(300, 7, I64, S).unwrap();
+    asm.ret(S).unwrap();
+    let f = asm.finish("roots", sig(&[], &[])).unwrap();
+    assert_eq!(f.roots.maps.len(), 1);
+    assert!(f.code.len() >= 3);
+    check(&f).unwrap();
+    let state = RootState {
+        map: RootMapId(0),
+        initialized: vec![],
+    };
+    let mut changed = f.clone();
+    changed.roots.entry = RootMapId(99);
+    assert_eq!(kind(&changed), ErrorKind::RootMapMissing(RootMapId(99)));
+    changed = f.clone();
+    changed
+        .roots
+        .safepoints
+        .push((SafepointPc(0), state.clone()));
+    check(&changed).unwrap(); // WIDE prefix is an instruction start.
+    changed.roots.safepoints[0].0 = SafepointPc(1);
+    assert_eq!(kind(&changed), ErrorKind::SafepointNotInstructionStart(1));
+    changed.roots.safepoints = vec![
+        (SafepointPc(2), state.clone()),
+        (SafepointPc(0), state.clone()),
+    ];
+    assert_eq!(kind(&changed), ErrorKind::SafepointsNotSorted);
+    changed.roots.safepoints = vec![
+        (SafepointPc(0), state.clone()),
+        (SafepointPc(0), state.clone()),
+    ];
+    assert_eq!(kind(&changed), ErrorKind::SafepointsNotSorted);
+    changed = f.clone();
+    changed.roots.maps[0].ordinary = vec![0; 5];
+    changed.roots.maps[0].ordinary[4] = 1 << (301 - 256);
+    assert_eq!(kind(&changed), ErrorKind::RootOutsideFrame(301));
+    changed = f.clone();
+    changed.roots.maps[0].ordinary = vec![1];
+    changed.roots.maps[0].dynamic = vec![(0, 1)];
+    assert_eq!(kind(&changed), ErrorKind::DynamicRootsOverlap(0));
+    changed.roots.maps[0].ordinary.clear();
+    changed.roots.maps[0].dynamic = vec![(0, 1), (2, 1)];
+    assert_eq!(kind(&changed), ErrorKind::DynamicRootsOverlap(1));
+    changed.roots.maps[0].dynamic = vec![(0, 301)];
+    assert_eq!(kind(&changed), ErrorKind::RootOutsideFrame(301));
+    changed = f.clone();
+    changed.roots.calls.push(CallRoots {
+        pre: state.clone(),
+        suspended: state.clone(),
+        post: state.clone(),
+    });
+    assert_eq!(kind(&changed), ErrorKind::RootCallCountMismatch);
+    changed = f.clone();
+    changed.roots.safepoints.push((
+        SafepointPc(0),
+        RootState {
+            map: RootMapId(99),
+            initialized: vec![],
+        },
+    ));
+    assert_eq!(kind(&changed), ErrorKind::RootMapMissing(RootMapId(99)));
+    changed.roots.safepoints[0].1 = RootState {
+        map: RootMapId(0),
+        initialized: vec![SlotRange {
+            first: u32::MAX,
+            count: 2,
+        }],
+    };
+    assert_eq!(kind(&changed), ErrorKind::InitializedSpanOutsideFrame);
+}
+
+#[test]
+fn allocation_classes_cover_call_boundaries() {
+    use AllocationClass::*;
+    assert_eq!(Op::CallScript.allocation_class(), MayGrowVm);
+    assert_eq!(Op::CallHost.allocation_class(), HostBoundary);
+    assert_eq!(Op::Mov.allocation_class(), None);
+    assert_eq!(crate::spec::ALLOCATION_CLASSES.len(), Op::ALL.len());
 }

@@ -747,6 +747,7 @@ impl Compiled {
                 .map(|f| {
                     size_of_val(&*f.consts)
                         + size_of_val(&*f.sites)
+                        + f.roots.heap_bytes()
                         + size_of_val(&*f.literal_types)
                         + size_of_val(&*f.starts)
                         + size_of_val(&*f.spans)

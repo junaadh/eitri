@@ -432,6 +432,16 @@ pub const READ: Effects = Effects(1 << 6);
 /// Writes memory outside the frame.
 pub const WRITE: Effects = Effects(1 << 7);
 
+/// Allocation or host boundary relevant to root publication. This describes
+/// opcode intent; helper-level allocation and GC polls need a separate audit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AllocationClass {
+    None,
+    MayGrowVm,
+    HostBoundary,
+    Managed,
+}
+
 /// One row of the specification.
 #[derive(Clone, Copy, Debug)]
 pub struct OpInfo {
@@ -450,7 +460,7 @@ pub struct OpInfo {
 macro_rules! ops {
     ($(
         $variant:ident = $name:literal, $family:literal, $format:ident,
-        [$a:ident, $b:ident, $c:ident], $sem:expr, $($effect:ident)|+, $implemented:literal;
+        [$a:ident, $b:ident, $c:ident], $sem:expr, $($effect:ident)|+, $implemented:literal, $allocation:ident;
     )*) => {
         /// An opcode: the family plus its dispatch fields. Its value is its
         /// position in the specification table.
@@ -471,7 +481,13 @@ macro_rules! ops {
             implemented: $implemented,
         },)*];
 
+        /// Allocation classes are kept separate from the packed Effects bits.
+        pub static ALLOCATION_CLASSES: &[AllocationClass] = &[$(AllocationClass::$allocation,)*];
+
         impl Op {
+            pub fn allocation_class(self) -> AllocationClass {
+                ALLOCATION_CLASSES[self as usize]
+            }
             /// Every opcode, in numbering order.
             pub const ALL: &[Op] = &[$(Op::$variant,)*];
         }
@@ -479,171 +495,171 @@ macro_rules! ops {
 }
 
 ops! {
-    Mov = "MOV", "MOV", Abc, [Dst, Src, None], Sem::Move, NONE, true;
-    Mov2 = "MOV2", "MOV2", Abc, [Dst, Src, Src], Sem::MovePair, NONE, false;
-    Ldi = "LDI", "LDI", AsBx, [Dst, Imm16, None], Sem::LoadImm, NONE, true;
-    Ldk = "LDK", "LDK", ABx, [Dst, Const16, None], Sem::LoadConst, CONST, true;
-    AddWrap = "ADD.WRAP", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Add, mode: Mode::Wrap, imm: false }, NONE, true;
-    AddChkS = "ADD.CHK.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Add, mode: Mode::CheckedSigned, imm: false }, FAULT, true;
-    AddChkU = "ADD.CHK.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Add, mode: Mode::CheckedUnsigned, imm: false }, FAULT, true;
-    SubWrap = "SUB.WRAP", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Sub, mode: Mode::Wrap, imm: false }, NONE, true;
-    SubChkS = "SUB.CHK.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Sub, mode: Mode::CheckedSigned, imm: false }, FAULT, true;
-    SubChkU = "SUB.CHK.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Sub, mode: Mode::CheckedUnsigned, imm: false }, FAULT, true;
-    MulWrap = "MUL.WRAP", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Mul, mode: Mode::Wrap, imm: false }, NONE, true;
-    MulChkS = "MUL.CHK.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Mul, mode: Mode::CheckedSigned, imm: false }, FAULT, true;
-    MulChkU = "MUL.CHK.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Mul, mode: Mode::CheckedUnsigned, imm: false }, FAULT, true;
-    DivS = "DIV.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Div, mode: Mode::Signed, imm: false }, FAULT, true;
-    DivU = "DIV.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Div, mode: Mode::Unsigned, imm: false }, FAULT, true;
-    RemS = "REM.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Rem, mode: Mode::Signed, imm: false }, FAULT, true;
-    RemU = "REM.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Rem, mode: Mode::Unsigned, imm: false }, FAULT, true;
-    And = "AND", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::And, mode: Mode::Bits, imm: false }, NONE, true;
-    Or = "OR", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Or, mode: Mode::Bits, imm: false }, NONE, true;
-    Xor = "XOR", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Xor, mode: Mode::Bits, imm: false }, NONE, true;
-    ShlS8 = "SHL.S8", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W8), mode: Mode::Signed, imm: false }, FAULT, true;
-    ShlS16 = "SHL.S16", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W16), mode: Mode::Signed, imm: false }, FAULT, false;
-    ShlS32 = "SHL.S32", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W32), mode: Mode::Signed, imm: false }, FAULT, false;
-    ShlU8 = "SHL.U8", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W8), mode: Mode::Unsigned, imm: false }, FAULT, true;
-    ShlU16 = "SHL.U16", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W16), mode: Mode::Unsigned, imm: false }, FAULT, false;
-    ShlU32 = "SHL.U32", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W32), mode: Mode::Unsigned, imm: false }, FAULT, false;
-    Shl64 = "SHL.64", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W64), mode: Mode::Bits, imm: false }, FAULT, true;
-    ShrS8 = "SHR.S8", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W8), mode: Mode::Signed, imm: false }, FAULT, true;
-    ShrS16 = "SHR.S16", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W16), mode: Mode::Signed, imm: false }, FAULT, false;
-    ShrS32 = "SHR.S32", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W32), mode: Mode::Signed, imm: false }, FAULT, false;
-    ShrS64 = "SHR.S64", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W64), mode: Mode::Signed, imm: false }, FAULT, true;
-    ShrU8 = "SHR.U8", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W8), mode: Mode::Unsigned, imm: false }, FAULT, true;
-    ShrU16 = "SHR.U16", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W16), mode: Mode::Unsigned, imm: false }, FAULT, false;
-    ShrU32 = "SHR.U32", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W32), mode: Mode::Unsigned, imm: false }, FAULT, false;
-    ShrU64 = "SHR.U64", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W64), mode: Mode::Unsigned, imm: false }, FAULT, true;
-    AddiWrap = "ADDI.WRAP", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Add, mode: Mode::Wrap, imm: true }, NONE, true;
-    AddiChkS = "ADDI.CHK.S", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Add, mode: Mode::CheckedSigned, imm: true }, FAULT, true;
-    SubiWrap = "SUBI.WRAP", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Sub, mode: Mode::Wrap, imm: true }, NONE, true;
-    SubiChkS = "SUBI.CHK.S", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Sub, mode: Mode::CheckedSigned, imm: true }, FAULT, true;
-    AddiChkU = "ADDI.CHK.U", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Add, mode: Mode::CheckedUnsigned, imm: true }, FAULT, true;
-    MuliChkS = "MULI.CHK.S", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Mul, mode: Mode::CheckedSigned, imm: true }, FAULT, true;
-    Andi = "ANDI", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::And, mode: Mode::Bits, imm: true }, NONE, true;
-    ShliS8 = "SHLI.S8", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W8), mode: Mode::Signed, imm: true }, NONE, true;
-    ShliS16 = "SHLI.S16", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W16), mode: Mode::Signed, imm: true }, NONE, false;
-    ShliS32 = "SHLI.S32", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W32), mode: Mode::Signed, imm: true }, NONE, false;
-    ShliU8 = "SHLI.U8", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W8), mode: Mode::Unsigned, imm: true }, NONE, true;
-    ShliU16 = "SHLI.U16", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W16), mode: Mode::Unsigned, imm: true }, NONE, false;
-    ShliU32 = "SHLI.U32", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W32), mode: Mode::Unsigned, imm: true }, NONE, false;
-    Shli64 = "SHLI.64", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W64), mode: Mode::Bits, imm: true }, NONE, true;
-    ShriS = "SHRI.S", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shr(Width::W64), mode: Mode::Signed, imm: true }, NONE, true;
-    ShriU = "SHRI.U", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shr(Width::W64), mode: Mode::Unsigned, imm: true }, NONE, true;
-    NegWrap = "NEG.WRAP", "UN", Abc, [Dst, Src, None], Sem::Int { op: IntOp::Neg, mode: Mode::Wrap, imm: false }, NONE, true;
-    NegChkS = "NEG.CHK.S", "UN", Abc, [Dst, Src, None], Sem::Int { op: IntOp::Neg, mode: Mode::CheckedSigned, imm: false }, FAULT, true;
-    NegChkU = "NEG.CHK.U", "UN", Abc, [Dst, Src, None], Sem::Int { op: IntOp::Neg, mode: Mode::CheckedUnsigned, imm: false }, FAULT, true;
-    Not = "NOT", "UN", Abc, [Dst, Src, None], Sem::Int { op: IntOp::Not, mode: Mode::Bits, imm: false }, NONE, true;
-    CvtWrap = "CVT.WRAP", "CVT", Abc, [Dst, Src, Width8], Sem::Convert { checked: false }, NONE, true;
-    CvtChk = "CVT.CHK", "CVT", Abc, [Dst, Src, Width8], Sem::Convert { checked: true }, FAULT, true;
-    FaddF32 = "FADD.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Add, precision: Precision::F32 }, NONE, true;
-    FaddF64 = "FADD.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Add, precision: Precision::F64 }, NONE, true;
-    FsubF32 = "FSUB.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Sub, precision: Precision::F32 }, NONE, true;
-    FsubF64 = "FSUB.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Sub, precision: Precision::F64 }, NONE, true;
-    FmulF32 = "FMUL.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Mul, precision: Precision::F32 }, NONE, true;
-    FmulF64 = "FMUL.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Mul, precision: Precision::F64 }, NONE, true;
-    FdivF32 = "FDIV.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Div, precision: Precision::F32 }, NONE, true;
-    FdivF64 = "FDIV.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Div, precision: Precision::F64 }, NONE, true;
-    FnegF32 = "FNEG.F32", "FALU", Abc, [Dst, Src, None], Sem::Float { op: FloatOp::Neg, precision: Precision::F32 }, NONE, true;
-    FnegF64 = "FNEG.F64", "FALU", Abc, [Dst, Src, None], Sem::Float { op: FloatOp::Neg, precision: Precision::F64 }, NONE, true;
-    FcvtI2f32 = "FCVT.I2F32", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::IntToF32), NONE, true;
-    FcvtI2f64 = "FCVT.I2F64", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::IntToF64), NONE, true;
-    FcvtF32i = "FCVT.F32I", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::F32ToInt), FAULT, true;
-    FcvtF64i = "FCVT.F64I", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::F64ToInt), FAULT, true;
-    FcvtF32f64 = "FCVT.F32F64", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::F32ToF64), NONE, true;
-    FcvtF64f32 = "FCVT.F64F32", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::F64ToF32), NONE, true;
-    CbEq = "CB.EQ", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Eq, imm: false }, BRANCH | POLL, true;
-    CbNe = "CB.NE", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Ne, imm: false }, BRANCH | POLL, true;
-    CbLt = "CB.LT", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Lt, imm: false }, BRANCH | POLL, true;
-    CbLe = "CB.LE", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Le, imm: false }, BRANCH | POLL, true;
-    CbLo = "CB.LO", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Lo, imm: false }, BRANCH | POLL, true;
-    CbLs = "CB.LS", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Ls, imm: false }, BRANCH | POLL, true;
-    CbiEq = "CBI.EQ", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Eq, imm: true }, BRANCH | POLL, true;
-    CbiNe = "CBI.NE", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Ne, imm: true }, BRANCH | POLL, true;
-    CbiLt = "CBI.LT", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Lt, imm: true }, BRANCH | POLL, true;
-    CbiGt = "CBI.GT", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Gt, imm: true }, BRANCH | POLL, true;
-    CbiLo = "CBI.LO", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Lo, imm: true }, BRANCH | POLL, true;
-    CbiHi = "CBI.HI", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Hi, imm: true }, BRANCH | POLL, true;
-    FcbFeqF32 = "FCB.FEQ.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Eq, precision: Precision::F32 }, BRANCH | POLL, false;
-    FcbFneF32 = "FCB.FNE.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ne, precision: Precision::F32 }, BRANCH | POLL, false;
-    FcbFltF32 = "FCB.FLT.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Lt, precision: Precision::F32 }, BRANCH | POLL, false;
-    FcbFleF32 = "FCB.FLE.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Le, precision: Precision::F32 }, BRANCH | POLL, false;
-    FcbFultF32 = "FCB.FULT.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ult, precision: Precision::F32 }, BRANCH | POLL, false;
-    FcbFuleF32 = "FCB.FULE.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ule, precision: Precision::F32 }, BRANCH | POLL, false;
-    FcbFeqF64 = "FCB.FEQ.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Eq, precision: Precision::F64 }, BRANCH | POLL, false;
-    FcbFneF64 = "FCB.FNE.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ne, precision: Precision::F64 }, BRANCH | POLL, false;
-    FcbFltF64 = "FCB.FLT.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Lt, precision: Precision::F64 }, BRANCH | POLL, false;
-    FcbFleF64 = "FCB.FLE.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Le, precision: Precision::F64 }, BRANCH | POLL, false;
-    FcbFultF64 = "FCB.FULT.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ult, precision: Precision::F64 }, BRANCH | POLL, false;
-    FcbFuleF64 = "FCB.FULE.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ule, precision: Precision::F64 }, BRANCH | POLL, false;
-    TbTrue = "TB.TRUE", "TB", AsBx, [Src, Disp16, None], Sem::TestBranch(Test::True), BRANCH | POLL, true;
-    TbFalse = "TB.FALSE", "TB", AsBx, [Src, Disp16, None], Sem::TestBranch(Test::False), BRANCH | POLL, true;
-    TbNone = "TB.NONE", "TB", AsBx, [Src, Disp16, None], Sem::TestBranch(Test::None), BRANCH | POLL, false;
-    TbSome = "TB.SOME", "TB", AsBx, [Src, Disp16, None], Sem::TestBranch(Test::Some), BRANCH | POLL, false;
-    CsetEq = "CSET.EQ", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Eq), NONE, true;
-    CsetNe = "CSET.NE", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Ne), NONE, true;
-    CsetLt = "CSET.LT", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Lt), NONE, true;
-    CsetLe = "CSET.LE", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Le), NONE, true;
-    CsetLo = "CSET.LO", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Lo), NONE, true;
-    CsetLs = "CSET.LS", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Ls), NONE, true;
-    FcsetFeqF32 = "FCSET.FEQ.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Eq, precision: Precision::F32 }, NONE, true;
-    FcsetFneF32 = "FCSET.FNE.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ne, precision: Precision::F32 }, NONE, true;
-    FcsetFltF32 = "FCSET.FLT.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Lt, precision: Precision::F32 }, NONE, true;
-    FcsetFleF32 = "FCSET.FLE.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Le, precision: Precision::F32 }, NONE, true;
-    FcsetFultF32 = "FCSET.FULT.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ult, precision: Precision::F32 }, NONE, true;
-    FcsetFuleF32 = "FCSET.FULE.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ule, precision: Precision::F32 }, NONE, true;
-    FcsetFeqF64 = "FCSET.FEQ.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Eq, precision: Precision::F64 }, NONE, true;
-    FcsetFneF64 = "FCSET.FNE.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ne, precision: Precision::F64 }, NONE, true;
-    FcsetFltF64 = "FCSET.FLT.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Lt, precision: Precision::F64 }, NONE, true;
-    FcsetFleF64 = "FCSET.FLE.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Le, precision: Precision::F64 }, NONE, true;
-    FcsetFultF64 = "FCSET.FULT.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ult, precision: Precision::F64 }, NONE, true;
-    FcsetFuleF64 = "FCSET.FULE.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ule, precision: Precision::F64 }, NONE, true;
-    Sel = "SEL", "SEL", Abc, [SrcDst, Src, Src], Sem::Select, NONE, false;
-    J = "J", "J", SAx, [Disp24, None, None], Sem::Jump, BRANCH | POLL | END, true;
-    JX = "J_X", "J_X", JX, [None, None, None], Sem::Jump, BRANCH | POLL | END, true;
-    LoopSEx = "LOOP.S.EX", "LOOP", AsBx, [SrcDst, Disp16, None], Sem::Loop { signed: true, inclusive: false }, BRANCH | POLL, false;
-    LoopSIn = "LOOP.S.IN", "LOOP", AsBx, [SrcDst, Disp16, None], Sem::Loop { signed: true, inclusive: true }, BRANCH | POLL, false;
-    LoopUEx = "LOOP.U.EX", "LOOP", AsBx, [SrcDst, Disp16, None], Sem::Loop { signed: false, inclusive: false }, BRANCH | POLL, false;
-    LoopUIn = "LOOP.U.IN", "LOOP", AsBx, [SrcDst, Disp16, None], Sem::Loop { signed: false, inclusive: true }, BRANCH | POLL, false;
-    Ldf8 = "LDF.8", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B8, extend: Extend::None }, READ | FAULT, false;
-    LdfS4 = "LDF.S4", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B4, extend: Extend::Sign }, READ | FAULT, false;
-    LdfS2 = "LDF.S2", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B2, extend: Extend::Sign }, READ | FAULT, false;
-    LdfS1 = "LDF.S1", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B1, extend: Extend::Sign }, READ | FAULT, false;
-    LdfU4 = "LDF.U4", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B4, extend: Extend::Zero }, READ | FAULT, false;
-    LdfU2 = "LDF.U2", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B2, extend: Extend::Zero }, READ | FAULT, false;
-    LdfU1 = "LDF.U1", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B1, extend: Extend::Zero }, READ | FAULT, false;
-    Ldx8 = "LDX.8", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B8, extend: Extend::None }, READ | FAULT, false;
-    LdxS4 = "LDX.S4", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B4, extend: Extend::Sign }, READ | FAULT, false;
-    LdxS2 = "LDX.S2", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B2, extend: Extend::Sign }, READ | FAULT, false;
-    LdxS1 = "LDX.S1", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B1, extend: Extend::Sign }, READ | FAULT, false;
-    LdxU4 = "LDX.U4", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B4, extend: Extend::Zero }, READ | FAULT, false;
-    LdxU2 = "LDX.U2", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B2, extend: Extend::Zero }, READ | FAULT, false;
-    LdxU1 = "LDX.U1", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B1, extend: Extend::Zero }, READ | FAULT, false;
-    Ldm = "LDM", "LD", ABx, [Dst, Index16, None], Sem::Load { mode: Addr::Module, access: Access::B8, extend: Extend::None }, READ, false;
-    Ldc = "LDC", "LD", ABx, [Dst, Index16, None], Sem::Load { mode: Addr::Captured, access: Access::B8, extend: Extend::None }, READ, false;
-    Lda = "LDA", "LD", Abc, [Dst, Src, Index8], Sem::Load { mode: Addr::Aggregate, access: Access::B8, extend: Extend::None }, READ | FAULT, false;
-    Stf8 = "STF.8", "ST", Abc, [Src, Src, Offset8], Sem::Store { mode: Addr::Field, access: Access::B8 }, WRITE | FAULT, false;
-    Stf4 = "STF.4", "ST", Abc, [Src, Src, Offset8], Sem::Store { mode: Addr::Field, access: Access::B4 }, WRITE | FAULT, false;
-    Stf2 = "STF.2", "ST", Abc, [Src, Src, Offset8], Sem::Store { mode: Addr::Field, access: Access::B2 }, WRITE | FAULT, false;
-    Stf1 = "STF.1", "ST", Abc, [Src, Src, Offset8], Sem::Store { mode: Addr::Field, access: Access::B1 }, WRITE | FAULT, false;
-    Stx8 = "STX.8", "ST", Abc, [Src, Src, Src], Sem::Store { mode: Addr::Index, access: Access::B8 }, WRITE | FAULT, false;
-    Stx4 = "STX.4", "ST", Abc, [Src, Src, Src], Sem::Store { mode: Addr::Index, access: Access::B4 }, WRITE | FAULT, false;
-    Stx2 = "STX.2", "ST", Abc, [Src, Src, Src], Sem::Store { mode: Addr::Index, access: Access::B2 }, WRITE | FAULT, false;
-    Stx1 = "STX.1", "ST", Abc, [Src, Src, Src], Sem::Store { mode: Addr::Index, access: Access::B1 }, WRITE | FAULT, false;
-    Stm = "STM", "ST", ABx, [Src, Index16, None], Sem::Store { mode: Addr::Module, access: Access::B8 }, WRITE, false;
-    Stc = "STC", "ST", ABx, [Src, Index16, None], Sem::Store { mode: Addr::Captured, access: Access::B8 }, WRITE, false;
-    Sta = "STA", "ST", Abc, [Src, Src, Index8], Sem::Store { mode: Addr::Aggregate, access: Access::B8 }, WRITE | FAULT, false;
-    LdkX = "LDK_X", "LDK_X", LdkX, [Dst, None, None], Sem::LoadConst, CONST, true;
-    LdfX = "LDF_X", "LDF_X", FieldX, [Dst, Src, Width8], Sem::LoadFieldFar, READ | FAULT, false;
-    StfX = "STF_X", "STF_X", FieldX, [Src, Src, Width8], Sem::StoreFieldFar, WRITE | FAULT, false;
-    CallScript = "CALL.SCRIPT", "CALL", ABx, [None, Site16, None], Sem::Call(CallKind::Script), CALL | FAULT | POLL, true;
-    CallHost = "CALL.HOST", "CALL", ABx, [None, Site16, None], Sem::Call(CallKind::Host), CALL | FAULT | POLL, true;
-    CallValue = "CALL.VALUE", "CALL", ABx, [None, Site16, None], Sem::Call(CallKind::Value), CALL | FAULT | POLL, false;
-    Ret = "RET", "RET", Ax, [None, None, None], Sem::Return, END, true;
-    Trap = "TRAP", "TRAP", ABx, [Src, Site16, None], Sem::Trap, FAULT | END, false;
-    Wide = "WIDE", "WIDE", Wide, [None, None, None], Sem::Wide, NONE, true;
-    FremF32 = "FREM.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Rem, precision: Precision::F32 }, NONE, true;
-    FremF64 = "FREM.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Rem, precision: Precision::F64 }, NONE, true;
+    Mov = "MOV", "MOV", Abc, [Dst, Src, None], Sem::Move, NONE, true, None;
+    Mov2 = "MOV2", "MOV2", Abc, [Dst, Src, Src], Sem::MovePair, NONE, false, None;
+    Ldi = "LDI", "LDI", AsBx, [Dst, Imm16, None], Sem::LoadImm, NONE, true, None;
+    Ldk = "LDK", "LDK", ABx, [Dst, Const16, None], Sem::LoadConst, CONST, true, None;
+    AddWrap = "ADD.WRAP", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Add, mode: Mode::Wrap, imm: false }, NONE, true, None;
+    AddChkS = "ADD.CHK.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Add, mode: Mode::CheckedSigned, imm: false }, FAULT, true, None;
+    AddChkU = "ADD.CHK.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Add, mode: Mode::CheckedUnsigned, imm: false }, FAULT, true, None;
+    SubWrap = "SUB.WRAP", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Sub, mode: Mode::Wrap, imm: false }, NONE, true, None;
+    SubChkS = "SUB.CHK.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Sub, mode: Mode::CheckedSigned, imm: false }, FAULT, true, None;
+    SubChkU = "SUB.CHK.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Sub, mode: Mode::CheckedUnsigned, imm: false }, FAULT, true, None;
+    MulWrap = "MUL.WRAP", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Mul, mode: Mode::Wrap, imm: false }, NONE, true, None;
+    MulChkS = "MUL.CHK.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Mul, mode: Mode::CheckedSigned, imm: false }, FAULT, true, None;
+    MulChkU = "MUL.CHK.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Mul, mode: Mode::CheckedUnsigned, imm: false }, FAULT, true, None;
+    DivS = "DIV.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Div, mode: Mode::Signed, imm: false }, FAULT, true, None;
+    DivU = "DIV.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Div, mode: Mode::Unsigned, imm: false }, FAULT, true, None;
+    RemS = "REM.S", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Rem, mode: Mode::Signed, imm: false }, FAULT, true, None;
+    RemU = "REM.U", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Rem, mode: Mode::Unsigned, imm: false }, FAULT, true, None;
+    And = "AND", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::And, mode: Mode::Bits, imm: false }, NONE, true, None;
+    Or = "OR", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Or, mode: Mode::Bits, imm: false }, NONE, true, None;
+    Xor = "XOR", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Xor, mode: Mode::Bits, imm: false }, NONE, true, None;
+    ShlS8 = "SHL.S8", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W8), mode: Mode::Signed, imm: false }, FAULT, true, None;
+    ShlS16 = "SHL.S16", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W16), mode: Mode::Signed, imm: false }, FAULT, false, None;
+    ShlS32 = "SHL.S32", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W32), mode: Mode::Signed, imm: false }, FAULT, false, None;
+    ShlU8 = "SHL.U8", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W8), mode: Mode::Unsigned, imm: false }, FAULT, true, None;
+    ShlU16 = "SHL.U16", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W16), mode: Mode::Unsigned, imm: false }, FAULT, false, None;
+    ShlU32 = "SHL.U32", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W32), mode: Mode::Unsigned, imm: false }, FAULT, false, None;
+    Shl64 = "SHL.64", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shl(Width::W64), mode: Mode::Bits, imm: false }, FAULT, true, None;
+    ShrS8 = "SHR.S8", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W8), mode: Mode::Signed, imm: false }, FAULT, true, None;
+    ShrS16 = "SHR.S16", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W16), mode: Mode::Signed, imm: false }, FAULT, false, None;
+    ShrS32 = "SHR.S32", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W32), mode: Mode::Signed, imm: false }, FAULT, false, None;
+    ShrS64 = "SHR.S64", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W64), mode: Mode::Signed, imm: false }, FAULT, true, None;
+    ShrU8 = "SHR.U8", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W8), mode: Mode::Unsigned, imm: false }, FAULT, true, None;
+    ShrU16 = "SHR.U16", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W16), mode: Mode::Unsigned, imm: false }, FAULT, false, None;
+    ShrU32 = "SHR.U32", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W32), mode: Mode::Unsigned, imm: false }, FAULT, false, None;
+    ShrU64 = "SHR.U64", "ALU", Abc, [Dst, Src, Src], Sem::Int { op: IntOp::Shr(Width::W64), mode: Mode::Unsigned, imm: false }, FAULT, true, None;
+    AddiWrap = "ADDI.WRAP", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Add, mode: Mode::Wrap, imm: true }, NONE, true, None;
+    AddiChkS = "ADDI.CHK.S", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Add, mode: Mode::CheckedSigned, imm: true }, FAULT, true, None;
+    SubiWrap = "SUBI.WRAP", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Sub, mode: Mode::Wrap, imm: true }, NONE, true, None;
+    SubiChkS = "SUBI.CHK.S", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Sub, mode: Mode::CheckedSigned, imm: true }, FAULT, true, None;
+    AddiChkU = "ADDI.CHK.U", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Add, mode: Mode::CheckedUnsigned, imm: true }, FAULT, true, None;
+    MuliChkS = "MULI.CHK.S", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::Mul, mode: Mode::CheckedSigned, imm: true }, FAULT, true, None;
+    Andi = "ANDI", "ALUI", Abc, [Dst, Src, Imm8], Sem::Int { op: IntOp::And, mode: Mode::Bits, imm: true }, NONE, true, None;
+    ShliS8 = "SHLI.S8", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W8), mode: Mode::Signed, imm: true }, NONE, true, None;
+    ShliS16 = "SHLI.S16", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W16), mode: Mode::Signed, imm: true }, NONE, false, None;
+    ShliS32 = "SHLI.S32", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W32), mode: Mode::Signed, imm: true }, NONE, false, None;
+    ShliU8 = "SHLI.U8", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W8), mode: Mode::Unsigned, imm: true }, NONE, true, None;
+    ShliU16 = "SHLI.U16", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W16), mode: Mode::Unsigned, imm: true }, NONE, false, None;
+    ShliU32 = "SHLI.U32", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W32), mode: Mode::Unsigned, imm: true }, NONE, false, None;
+    Shli64 = "SHLI.64", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shl(Width::W64), mode: Mode::Bits, imm: true }, NONE, true, None;
+    ShriS = "SHRI.S", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shr(Width::W64), mode: Mode::Signed, imm: true }, NONE, true, None;
+    ShriU = "SHRI.U", "ALUI", Abc, [Dst, Src, Shift8], Sem::Int { op: IntOp::Shr(Width::W64), mode: Mode::Unsigned, imm: true }, NONE, true, None;
+    NegWrap = "NEG.WRAP", "UN", Abc, [Dst, Src, None], Sem::Int { op: IntOp::Neg, mode: Mode::Wrap, imm: false }, NONE, true, None;
+    NegChkS = "NEG.CHK.S", "UN", Abc, [Dst, Src, None], Sem::Int { op: IntOp::Neg, mode: Mode::CheckedSigned, imm: false }, FAULT, true, None;
+    NegChkU = "NEG.CHK.U", "UN", Abc, [Dst, Src, None], Sem::Int { op: IntOp::Neg, mode: Mode::CheckedUnsigned, imm: false }, FAULT, true, None;
+    Not = "NOT", "UN", Abc, [Dst, Src, None], Sem::Int { op: IntOp::Not, mode: Mode::Bits, imm: false }, NONE, true, None;
+    CvtWrap = "CVT.WRAP", "CVT", Abc, [Dst, Src, Width8], Sem::Convert { checked: false }, NONE, true, None;
+    CvtChk = "CVT.CHK", "CVT", Abc, [Dst, Src, Width8], Sem::Convert { checked: true }, FAULT, true, None;
+    FaddF32 = "FADD.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Add, precision: Precision::F32 }, NONE, true, None;
+    FaddF64 = "FADD.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Add, precision: Precision::F64 }, NONE, true, None;
+    FsubF32 = "FSUB.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Sub, precision: Precision::F32 }, NONE, true, None;
+    FsubF64 = "FSUB.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Sub, precision: Precision::F64 }, NONE, true, None;
+    FmulF32 = "FMUL.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Mul, precision: Precision::F32 }, NONE, true, None;
+    FmulF64 = "FMUL.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Mul, precision: Precision::F64 }, NONE, true, None;
+    FdivF32 = "FDIV.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Div, precision: Precision::F32 }, NONE, true, None;
+    FdivF64 = "FDIV.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Div, precision: Precision::F64 }, NONE, true, None;
+    FnegF32 = "FNEG.F32", "FALU", Abc, [Dst, Src, None], Sem::Float { op: FloatOp::Neg, precision: Precision::F32 }, NONE, true, None;
+    FnegF64 = "FNEG.F64", "FALU", Abc, [Dst, Src, None], Sem::Float { op: FloatOp::Neg, precision: Precision::F64 }, NONE, true, None;
+    FcvtI2f32 = "FCVT.I2F32", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::IntToF32), NONE, true, None;
+    FcvtI2f64 = "FCVT.I2F64", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::IntToF64), NONE, true, None;
+    FcvtF32i = "FCVT.F32I", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::F32ToInt), FAULT, true, None;
+    FcvtF64i = "FCVT.F64I", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::F64ToInt), FAULT, true, None;
+    FcvtF32f64 = "FCVT.F32F64", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::F32ToF64), NONE, true, None;
+    FcvtF64f32 = "FCVT.F64F32", "FCVT", Abc, [Dst, Src, Width8], Sem::FloatConvert(FloatConversion::F64ToF32), NONE, true, None;
+    CbEq = "CB.EQ", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Eq, imm: false }, BRANCH | POLL, true, None;
+    CbNe = "CB.NE", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Ne, imm: false }, BRANCH | POLL, true, None;
+    CbLt = "CB.LT", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Lt, imm: false }, BRANCH | POLL, true, None;
+    CbLe = "CB.LE", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Le, imm: false }, BRANCH | POLL, true, None;
+    CbLo = "CB.LO", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Lo, imm: false }, BRANCH | POLL, true, None;
+    CbLs = "CB.LS", "CB", Abc, [Src, Src, Disp8], Sem::Branch { cond: Cond::Ls, imm: false }, BRANCH | POLL, true, None;
+    CbiEq = "CBI.EQ", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Eq, imm: true }, BRANCH | POLL, true, None;
+    CbiNe = "CBI.NE", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Ne, imm: true }, BRANCH | POLL, true, None;
+    CbiLt = "CBI.LT", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Lt, imm: true }, BRANCH | POLL, true, None;
+    CbiGt = "CBI.GT", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Gt, imm: true }, BRANCH | POLL, true, None;
+    CbiLo = "CBI.LO", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Lo, imm: true }, BRANCH | POLL, true, None;
+    CbiHi = "CBI.HI", "CBI", Abc, [Src, Imm8, Disp8], Sem::Branch { cond: Cond::Hi, imm: true }, BRANCH | POLL, true, None;
+    FcbFeqF32 = "FCB.FEQ.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Eq, precision: Precision::F32 }, BRANCH | POLL, false, None;
+    FcbFneF32 = "FCB.FNE.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ne, precision: Precision::F32 }, BRANCH | POLL, false, None;
+    FcbFltF32 = "FCB.FLT.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Lt, precision: Precision::F32 }, BRANCH | POLL, false, None;
+    FcbFleF32 = "FCB.FLE.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Le, precision: Precision::F32 }, BRANCH | POLL, false, None;
+    FcbFultF32 = "FCB.FULT.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ult, precision: Precision::F32 }, BRANCH | POLL, false, None;
+    FcbFuleF32 = "FCB.FULE.F32", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ule, precision: Precision::F32 }, BRANCH | POLL, false, None;
+    FcbFeqF64 = "FCB.FEQ.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Eq, precision: Precision::F64 }, BRANCH | POLL, false, None;
+    FcbFneF64 = "FCB.FNE.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ne, precision: Precision::F64 }, BRANCH | POLL, false, None;
+    FcbFltF64 = "FCB.FLT.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Lt, precision: Precision::F64 }, BRANCH | POLL, false, None;
+    FcbFleF64 = "FCB.FLE.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Le, precision: Precision::F64 }, BRANCH | POLL, false, None;
+    FcbFultF64 = "FCB.FULT.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ult, precision: Precision::F64 }, BRANCH | POLL, false, None;
+    FcbFuleF64 = "FCB.FULE.F64", "FCB", Abc, [Src, Src, Disp8], Sem::FloatBranch { cond: FloatCond::Ule, precision: Precision::F64 }, BRANCH | POLL, false, None;
+    TbTrue = "TB.TRUE", "TB", AsBx, [Src, Disp16, None], Sem::TestBranch(Test::True), BRANCH | POLL, true, None;
+    TbFalse = "TB.FALSE", "TB", AsBx, [Src, Disp16, None], Sem::TestBranch(Test::False), BRANCH | POLL, true, None;
+    TbNone = "TB.NONE", "TB", AsBx, [Src, Disp16, None], Sem::TestBranch(Test::None), BRANCH | POLL, false, None;
+    TbSome = "TB.SOME", "TB", AsBx, [Src, Disp16, None], Sem::TestBranch(Test::Some), BRANCH | POLL, false, None;
+    CsetEq = "CSET.EQ", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Eq), NONE, true, None;
+    CsetNe = "CSET.NE", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Ne), NONE, true, None;
+    CsetLt = "CSET.LT", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Lt), NONE, true, None;
+    CsetLe = "CSET.LE", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Le), NONE, true, None;
+    CsetLo = "CSET.LO", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Lo), NONE, true, None;
+    CsetLs = "CSET.LS", "CSET", Abc, [Dst, Src, Src], Sem::Set(Cond::Ls), NONE, true, None;
+    FcsetFeqF32 = "FCSET.FEQ.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Eq, precision: Precision::F32 }, NONE, true, None;
+    FcsetFneF32 = "FCSET.FNE.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ne, precision: Precision::F32 }, NONE, true, None;
+    FcsetFltF32 = "FCSET.FLT.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Lt, precision: Precision::F32 }, NONE, true, None;
+    FcsetFleF32 = "FCSET.FLE.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Le, precision: Precision::F32 }, NONE, true, None;
+    FcsetFultF32 = "FCSET.FULT.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ult, precision: Precision::F32 }, NONE, true, None;
+    FcsetFuleF32 = "FCSET.FULE.F32", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ule, precision: Precision::F32 }, NONE, true, None;
+    FcsetFeqF64 = "FCSET.FEQ.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Eq, precision: Precision::F64 }, NONE, true, None;
+    FcsetFneF64 = "FCSET.FNE.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ne, precision: Precision::F64 }, NONE, true, None;
+    FcsetFltF64 = "FCSET.FLT.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Lt, precision: Precision::F64 }, NONE, true, None;
+    FcsetFleF64 = "FCSET.FLE.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Le, precision: Precision::F64 }, NONE, true, None;
+    FcsetFultF64 = "FCSET.FULT.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ult, precision: Precision::F64 }, NONE, true, None;
+    FcsetFuleF64 = "FCSET.FULE.F64", "FCSET", Abc, [Dst, Src, Src], Sem::FloatSet { cond: FloatCond::Ule, precision: Precision::F64 }, NONE, true, None;
+    Sel = "SEL", "SEL", Abc, [SrcDst, Src, Src], Sem::Select, NONE, false, None;
+    J = "J", "J", SAx, [Disp24, None, None], Sem::Jump, BRANCH | POLL | END, true, None;
+    JX = "J_X", "J_X", JX, [None, None, None], Sem::Jump, BRANCH | POLL | END, true, None;
+    LoopSEx = "LOOP.S.EX", "LOOP", AsBx, [SrcDst, Disp16, None], Sem::Loop { signed: true, inclusive: false }, BRANCH | POLL, false, None;
+    LoopSIn = "LOOP.S.IN", "LOOP", AsBx, [SrcDst, Disp16, None], Sem::Loop { signed: true, inclusive: true }, BRANCH | POLL, false, None;
+    LoopUEx = "LOOP.U.EX", "LOOP", AsBx, [SrcDst, Disp16, None], Sem::Loop { signed: false, inclusive: false }, BRANCH | POLL, false, None;
+    LoopUIn = "LOOP.U.IN", "LOOP", AsBx, [SrcDst, Disp16, None], Sem::Loop { signed: false, inclusive: true }, BRANCH | POLL, false, None;
+    Ldf8 = "LDF.8", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B8, extend: Extend::None }, READ | FAULT, false, None;
+    LdfS4 = "LDF.S4", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B4, extend: Extend::Sign }, READ | FAULT, false, None;
+    LdfS2 = "LDF.S2", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B2, extend: Extend::Sign }, READ | FAULT, false, None;
+    LdfS1 = "LDF.S1", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B1, extend: Extend::Sign }, READ | FAULT, false, None;
+    LdfU4 = "LDF.U4", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B4, extend: Extend::Zero }, READ | FAULT, false, None;
+    LdfU2 = "LDF.U2", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B2, extend: Extend::Zero }, READ | FAULT, false, None;
+    LdfU1 = "LDF.U1", "LD", Abc, [Dst, Src, Offset8], Sem::Load { mode: Addr::Field, access: Access::B1, extend: Extend::Zero }, READ | FAULT, false, None;
+    Ldx8 = "LDX.8", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B8, extend: Extend::None }, READ | FAULT, false, None;
+    LdxS4 = "LDX.S4", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B4, extend: Extend::Sign }, READ | FAULT, false, None;
+    LdxS2 = "LDX.S2", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B2, extend: Extend::Sign }, READ | FAULT, false, None;
+    LdxS1 = "LDX.S1", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B1, extend: Extend::Sign }, READ | FAULT, false, None;
+    LdxU4 = "LDX.U4", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B4, extend: Extend::Zero }, READ | FAULT, false, None;
+    LdxU2 = "LDX.U2", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B2, extend: Extend::Zero }, READ | FAULT, false, None;
+    LdxU1 = "LDX.U1", "LD", Abc, [Dst, Src, Src], Sem::Load { mode: Addr::Index, access: Access::B1, extend: Extend::Zero }, READ | FAULT, false, None;
+    Ldm = "LDM", "LD", ABx, [Dst, Index16, None], Sem::Load { mode: Addr::Module, access: Access::B8, extend: Extend::None }, READ, false, None;
+    Ldc = "LDC", "LD", ABx, [Dst, Index16, None], Sem::Load { mode: Addr::Captured, access: Access::B8, extend: Extend::None }, READ, false, None;
+    Lda = "LDA", "LD", Abc, [Dst, Src, Index8], Sem::Load { mode: Addr::Aggregate, access: Access::B8, extend: Extend::None }, READ | FAULT, false, None;
+    Stf8 = "STF.8", "ST", Abc, [Src, Src, Offset8], Sem::Store { mode: Addr::Field, access: Access::B8 }, WRITE | FAULT, false, None;
+    Stf4 = "STF.4", "ST", Abc, [Src, Src, Offset8], Sem::Store { mode: Addr::Field, access: Access::B4 }, WRITE | FAULT, false, None;
+    Stf2 = "STF.2", "ST", Abc, [Src, Src, Offset8], Sem::Store { mode: Addr::Field, access: Access::B2 }, WRITE | FAULT, false, None;
+    Stf1 = "STF.1", "ST", Abc, [Src, Src, Offset8], Sem::Store { mode: Addr::Field, access: Access::B1 }, WRITE | FAULT, false, None;
+    Stx8 = "STX.8", "ST", Abc, [Src, Src, Src], Sem::Store { mode: Addr::Index, access: Access::B8 }, WRITE | FAULT, false, None;
+    Stx4 = "STX.4", "ST", Abc, [Src, Src, Src], Sem::Store { mode: Addr::Index, access: Access::B4 }, WRITE | FAULT, false, None;
+    Stx2 = "STX.2", "ST", Abc, [Src, Src, Src], Sem::Store { mode: Addr::Index, access: Access::B2 }, WRITE | FAULT, false, None;
+    Stx1 = "STX.1", "ST", Abc, [Src, Src, Src], Sem::Store { mode: Addr::Index, access: Access::B1 }, WRITE | FAULT, false, None;
+    Stm = "STM", "ST", ABx, [Src, Index16, None], Sem::Store { mode: Addr::Module, access: Access::B8 }, WRITE, false, None;
+    Stc = "STC", "ST", ABx, [Src, Index16, None], Sem::Store { mode: Addr::Captured, access: Access::B8 }, WRITE, false, None;
+    Sta = "STA", "ST", Abc, [Src, Src, Index8], Sem::Store { mode: Addr::Aggregate, access: Access::B8 }, WRITE | FAULT, false, None;
+    LdkX = "LDK_X", "LDK_X", LdkX, [Dst, None, None], Sem::LoadConst, CONST, true, None;
+    LdfX = "LDF_X", "LDF_X", FieldX, [Dst, Src, Width8], Sem::LoadFieldFar, READ | FAULT, false, None;
+    StfX = "STF_X", "STF_X", FieldX, [Src, Src, Width8], Sem::StoreFieldFar, WRITE | FAULT, false, None;
+    CallScript = "CALL.SCRIPT", "CALL", ABx, [None, Site16, None], Sem::Call(CallKind::Script), CALL | FAULT | POLL, true, MayGrowVm;
+    CallHost = "CALL.HOST", "CALL", ABx, [None, Site16, None], Sem::Call(CallKind::Host), CALL | FAULT | POLL, true, HostBoundary;
+    CallValue = "CALL.VALUE", "CALL", ABx, [None, Site16, None], Sem::Call(CallKind::Value), CALL | FAULT | POLL, false, HostBoundary;
+    Ret = "RET", "RET", Ax, [None, None, None], Sem::Return, END, true, None;
+    Trap = "TRAP", "TRAP", ABx, [Src, Site16, None], Sem::Trap, FAULT | END, false, None;
+    Wide = "WIDE", "WIDE", Wide, [None, None, None], Sem::Wide, NONE, true, None;
+    FremF32 = "FREM.F32", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Rem, precision: Precision::F32 }, NONE, true, None;
+    FremF64 = "FREM.F64", "FALU", Abc, [Dst, Src, Src], Sem::Float { op: FloatOp::Rem, precision: Precision::F64 }, NONE, true, None;
 
 }
 

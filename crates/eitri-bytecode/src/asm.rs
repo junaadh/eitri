@@ -494,6 +494,7 @@ impl<const RECORD: bool> Assembler<RECORD> {
             // capacity for the next function.
             consts: self.consts.as_slice().into(),
             sites: self.sites.as_slice().into(),
+            roots: crate::FunctionRoots::scalar(self.sites.len()),
             literal_types,
             starts: starts.into_boxed_slice(),
             spans: spans.into_boxed_slice(),

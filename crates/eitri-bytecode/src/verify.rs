@@ -51,6 +51,13 @@ pub enum ErrorKind {
     BadTarget(i64),
     FallsOffEnd,
     StartMapMismatch,
+    RootMapMissing(crate::RootMapId),
+    SafepointNotInstructionStart(u32),
+    SafepointsNotSorted,
+    RootOutsideFrame(u32),
+    DynamicRootsOverlap(u32),
+    InitializedSpanOutsideFrame,
+    RootCallCountMismatch,
     UntypedLiteral,
     /// A `bool` literal that is not 0 or 1.
     BadBool(u64),
@@ -85,6 +92,23 @@ impl fmt::Display for VerifyError {
             }
             ErrorKind::FallsOffEnd => write!(f, "execution can fall off the end of the code"),
             ErrorKind::StartMapMismatch => write!(f, "the instruction-start map is wrong"),
+            ErrorKind::RootMapMissing(id) => write!(f, "root map {} does not exist", id.0),
+            ErrorKind::SafepointNotInstructionStart(pc) => {
+                write!(f, "safepoint {pc} is not an instruction start")
+            }
+            ErrorKind::SafepointsNotSorted => write!(f, "safepoints are not sorted and unique"),
+            ErrorKind::RootOutsideFrame(slot) => {
+                write!(f, "root slot r{slot} is outside the frame")
+            }
+            ErrorKind::DynamicRootsOverlap(slot) => {
+                write!(f, "dynamic root slot r{slot} overlaps another root")
+            }
+            ErrorKind::InitializedSpanOutsideFrame => {
+                write!(f, "initialized span is outside the frame")
+            }
+            ErrorKind::RootCallCountMismatch => {
+                write!(f, "root call state count differs from call sites")
+            }
             ErrorKind::UntypedLiteral => write!(f, "a literal load without a type"),
             ErrorKind::InvalidScalar(message) => f.write_str(message),
             ErrorKind::BadBool(v) => write!(f, "`bool` literal {v} is neither 0 nor 1"),
@@ -126,7 +150,94 @@ impl Slot {
 
 pub fn verify(function: &Function, callees: &Callees<'_>) -> Result<(), VerifyError> {
     let insns = structure(function, callees)?;
+    root_structure(function)?;
     types(function, callees, &insns)
+}
+
+/// Structural metadata checks are O(bitmap words + dynamic slots + states +
+/// spans), expected time using a hash set, and O(dynamic slots) scratch per
+/// map. No instruction-by-frame matrix is built. Facts and coverage are not
+/// checked here; that is a separate verifier obligation.
+fn root_structure(function: &Function) -> Result<(), VerifyError> {
+    let roots = &function.roots;
+    let frame = function.frame_size;
+    let check_id = |id: crate::RootMapId, pc| {
+        if roots.maps.get(id.0 as usize).is_none() {
+            Err(error(pc, ErrorKind::RootMapMissing(id)))
+        } else {
+            Ok(())
+        }
+    };
+    let check_state = |state: &crate::RootState, pc| {
+        check_id(state.map, pc)?;
+        for span in &state.initialized {
+            if span
+                .first
+                .checked_add(span.count)
+                .is_none_or(|end| end > frame)
+            {
+                return Err(error(pc, ErrorKind::InitializedSpanOutsideFrame));
+            }
+        }
+        Ok(())
+    };
+    check_id(roots.entry, 0)?;
+    for map in &roots.maps {
+        for (word_index, &word) in map.ordinary.iter().enumerate() {
+            if word == 0 {
+                continue;
+            }
+            let start = word_index.saturating_mul(64);
+            let valid = (frame as usize).saturating_sub(start).min(64);
+            let invalid = if valid == 64 {
+                0
+            } else {
+                word & (u64::MAX << valid)
+            };
+            if invalid != 0 {
+                let slot = start.saturating_add(invalid.trailing_zeros() as usize);
+                return Err(error(
+                    0,
+                    ErrorKind::RootOutsideFrame(u32::try_from(slot).unwrap_or(u32::MAX)),
+                ));
+            }
+        }
+        let mut used = eitri_base::FxHashSet::default();
+        for &(type_slot, payload_slot) in &map.dynamic {
+            for slot in [type_slot, payload_slot] {
+                if slot >= frame {
+                    return Err(error(0, ErrorKind::RootOutsideFrame(slot)));
+                }
+                let ordinary = map
+                    .ordinary
+                    .get(slot as usize / 64)
+                    .is_some_and(|word| word & (1u64 << (slot % 64)) != 0);
+                if ordinary || !used.insert(slot) {
+                    return Err(error(0, ErrorKind::DynamicRootsOverlap(slot)));
+                }
+            }
+        }
+    }
+    if roots.calls.len() != function.sites.len() {
+        return Err(error(0, ErrorKind::RootCallCountMismatch));
+    }
+    for call in &roots.calls {
+        for state in [&call.pre, &call.suspended, &call.post] {
+            check_state(state, 0)?;
+        }
+    }
+    let mut previous = None;
+    for (pc, state) in &roots.safepoints {
+        if previous.is_some_and(|old| old >= *pc) {
+            return Err(error(pc.0, ErrorKind::SafepointsNotSorted));
+        }
+        if !function.is_start(pc.0 as usize) {
+            return Err(error(pc.0, ErrorKind::SafepointNotInstructionStart(pc.0)));
+        }
+        check_state(state, pc.0)?;
+        previous = Some(*pc);
+    }
+    Ok(())
 }
 
 /// A decoded instruction and its PC.

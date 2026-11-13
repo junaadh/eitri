@@ -117,6 +117,8 @@ pub struct Function {
     /// One-slot constants, by `LDK`/`LDK_X` index.
     pub consts: Box<[u64]>,
     pub sites: Box<[CallSite]>,
+    /// Cold root publication metadata, indexed independently of call sites.
+    pub roots: crate::FunctionRoots,
     /// The type each literal load (`LDI`, `LDK`, `LDK_X`) produces, by PC,
     /// sorted: a literal `1` may be an `i64` or the `true` of `b ^ 1`.
     pub literal_types: Box<[(u32, ValueType)]>,

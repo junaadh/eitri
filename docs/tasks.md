@@ -712,6 +712,7 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   Cross-store shape equality uses iterative coinductive pair comparison (9b2);
   portable recursive signatures use bounded, iterative path back-references (9b3);
   Named enum graph and split-union layouts landed (9c1–9c2); language and registration remain later work.
+- Step 4 (10a): scalar root metadata and structural verification landed; coverage remains 10b; checks and measurements: `/tmp/orchestra/eitri-10a-done.md`.
 
 ### T015 — Implement allocation and non-moving collection
 
