@@ -1,0 +1,2 @@
+enum Item { Empty, Full(value: i64) }
+let result = match Item.Full(value: 1) { .Empty => 0, .Full() => 1 }

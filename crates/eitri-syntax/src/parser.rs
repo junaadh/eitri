@@ -561,7 +561,8 @@ impl Parser<'_> {
                     Some(self.expect(T::Ident, "a case name")?)
                 };
                 let begin = self.match_bindings.len();
-                if self.eat(T::LParen).is_some() {
+                let parenthesized = self.eat(T::LParen).is_some();
+                if parenthesized {
                     while !self.at(T::RParen) {
                         let name = if self.at(T::Wildcard) {
                             self.bump()
@@ -587,6 +588,7 @@ impl Parser<'_> {
                 };
                 self.match_arms.push(crate::ast::MatchArm {
                     case,
+                    parenthesized,
                     bindings,
                     body,
                 });

@@ -2096,3 +2096,16 @@ p50/p99 8,667/12,200 ns, execution 250/375 ns, total 8,917/12,500 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 nested aggregate methods. Samples: `/private/tmp/eitri-t017-19-samples.csv`;
 report: `/private/tmp/eitri-t017-19-bench.txt`.
+
+### T017-20 bare receiver method calls
+
+Bare calls resolve to the current struct or enum receiver. Mutating calls use
+the existing receiver result and copy-back convention; immutable receivers
+reject them. Managed payloads survive forced collection in both interpreters
+and lowering modes. Lookup remains bounded by the 256-method limit.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,291/13,500 ns, execution 250/334 ns, total 9,500/13,800 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+aggregate methods. Samples: `/private/tmp/eitri-t017-20-samples.csv`; report:
+`/private/tmp/eitri-t017-20-bench.txt`.

@@ -230,6 +230,7 @@ pub enum MatchBody {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MatchArm {
     pub case: Option<TokenId>,
+    pub parenthesized: bool,
     pub bindings: List<TokenId>,
     pub body: MatchBody,
 }

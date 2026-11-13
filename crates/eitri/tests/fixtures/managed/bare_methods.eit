@@ -1,0 +1,16 @@
+//! host: test
+import test from "test"
+struct Item { count: i64, text: string }
+extend Item {
+    fn get() -> i64 { return count }
+    mutating fn add() -> void { count += 1 }
+    mutating fn twice() -> i64 { add(); add(); return get() }
+}
+enum Choice { Empty, Full(value: string) }
+extend Choice {
+    fn ready() -> bool { return match self { .Empty => false, .Full(value) => value == "yes" } }
+    fn check() -> bool { return ready() }
+}
+var item = Item { count: 1, text: "held" }
+test.check(item.twice() == 3 && item.count == 3 && item.text == "held")
+test.check(Choice.Full(value: "yes").check())

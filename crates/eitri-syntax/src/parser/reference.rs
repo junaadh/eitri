@@ -398,7 +398,8 @@ impl Parser<'_> {
                 Some(self.expect(T::Ident, "a case name")?)
             };
             let mut bindings = Vec::new();
-            if self.eat(T::LParen).is_some() {
+            let parenthesized = self.eat(T::LParen).is_some();
+            if parenthesized {
                 while !self.at(T::RParen) {
                     let name = if self.at(T::Wildcard) {
                         self.bump()
@@ -421,6 +422,7 @@ impl Parser<'_> {
             };
             arms.push(crate::ast::MatchArm {
                 case,
+                parenthesized,
                 bindings,
                 body,
             });

@@ -1,0 +1,5 @@
+struct Item { value: i64 }
+extend Item {
+    mutating fn bump() -> void { value += 1 }
+    fn bad() -> void { bump() }
+}

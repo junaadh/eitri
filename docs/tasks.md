@@ -848,6 +848,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   methods and read-only fields rejecting writes.
 - T017-19: nested bare receiver fields support writes and mutating calls;
   read-only enclosing fields still reject mutation.
+- T017-20: bare receiver method calls work in struct and enum methods,
+  preserving receiver updates and mutability checks.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

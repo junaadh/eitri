@@ -1906,7 +1906,7 @@ impl<'i> Checker<'_, 'i> {
                     covered[index] = true;
                     let fields = self.ast().params(cases[index].fields);
                     let bindings = &self.ast().match_bindings[arm.bindings];
-                    if !bindings.is_empty() && bindings.len() != fields.len() {
+                    if arm.parenthesized && bindings.len() != fields.len() {
                         self.report(
                             Code::ArgumentCount,
                             "pattern payload arity mismatch",
@@ -1934,6 +1934,13 @@ impl<'i> Checker<'_, 'i> {
                     );
                 }
             } else {
+                if arm.parenthesized {
+                    self.report(
+                        Code::TypeMismatch,
+                        "wildcard pattern cannot have payload bindings",
+                        self.span(expr),
+                    );
+                }
                 fallback = true;
             }
             let ty = match arm.body {
