@@ -93,8 +93,12 @@ impl Heap {
     /// Collect from ordinary root-map bits for each published frame. Invalid
     /// metadata is rejected before collection, leaving the heap untouched.
     /// Dynamic and guarded values are not executable in this stage.
-    pub fn collect_frames(&mut self, frames: &[RootFrame<'_>]) -> Result<(), InvalidRoots> {
-        let mut roots = Vec::new();
+    pub fn collect_frames(
+        &mut self,
+        frames: &[RootFrame<'_>],
+        extra: &[HeapRef],
+    ) -> Result<(), InvalidRoots> {
+        let mut roots = extra.to_vec();
         for frame in frames {
             if !frame.map.dynamic.is_empty() || !frame.map.guarded.is_empty() {
                 return Err(InvalidRoots);
@@ -168,10 +172,13 @@ mod tests {
             ..Default::default()
         };
         let slots = [Some(dead), Some(live)];
-        heap.collect_frames(&[RootFrame {
-            map: &map,
-            slots: &slots,
-        }])
+        heap.collect_frames(
+            &[RootFrame {
+                map: &map,
+                slots: &slots,
+            }],
+            &[],
+        )
         .unwrap();
         assert_eq!(heap.string(live), Some("live"));
         assert_eq!(heap.string(dead), None);
@@ -181,10 +188,13 @@ mod tests {
         };
         let before = heap.bytes();
         assert_eq!(
-            heap.collect_frames(&[RootFrame {
-                map: &bad,
-                slots: &slots
-            }]),
+            heap.collect_frames(
+                &[RootFrame {
+                    map: &bad,
+                    slots: &slots
+                }],
+                &[]
+            ),
             Err(InvalidRoots)
         );
         assert_eq!(heap.bytes(), before);

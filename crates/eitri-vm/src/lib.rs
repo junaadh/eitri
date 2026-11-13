@@ -187,6 +187,8 @@ struct Machine<'a> {
     frames: &'a mut Vec<Frame>,
     heap: &'a mut heap::Heap,
     references: &'a mut Vec<Option<heap::HeapRef>>,
+    host_roots: &'a mut Vec<heap::HeapRef>,
+    host_signatures: &'a [eitri_bytecode::Signature],
     force_gc: bool,
     memory_limit: usize,
     budget: u64,
@@ -245,6 +247,7 @@ pub struct Call<'c, 'a> {
     /// Absolute slot ranges.
     args: SlotRange,
     results: SlotRange,
+    host_index: u32,
 }
 
 impl<'c> Call<'c, '_> {
@@ -266,6 +269,120 @@ impl<'c> Call<'c, '_> {
     #[inline]
     pub fn set_result(&mut self, index: usize, value: u64) {
         self.results()[index] = value;
+    }
+
+    /// Borrow a UTF-8 argument until the next mutable use of this call.
+    /// The view cannot be retained across reentry:
+    ///
+    /// ```compile_fail,E0502
+    /// use eitri_vm::{Call, Host, HostError};
+    /// struct Callback;
+    /// impl Host for Callback {
+    ///     fn call(&mut self, cx: &mut Call<'_, '_>, _: u32) -> Result<(), HostError> {
+    ///         let text = cx.string_arg(0).unwrap();
+    ///         let f = cx.function("callback").unwrap();
+    ///         cx.call(self, f, &[], &mut [])?;
+    ///         println!("{text}");
+    ///         Ok(())
+    ///     }
+    /// }
+    /// ```
+    pub fn string_arg(&self, index: usize) -> Option<&str> {
+        let signature = self.machine.host_signatures.get(self.host_index as usize)?;
+        if signature.params.get(index) != Some(&eitri_bytecode::ValueType::String) {
+            return None;
+        }
+        let reference = self
+            .machine
+            .references
+            .get(self.args.first as usize + index)?
+            .as_ref()?;
+        self.machine.heap.string(*reference)
+    }
+
+    /// Copy a UTF-8 string into a declared string result slot.
+    pub fn set_result_string(&mut self, index: usize, value: &str) -> Result<(), HostError> {
+        let m = &mut *self.machine;
+        if m.host_signatures
+            .get(self.host_index as usize)
+            .and_then(|s| s.results.get(index))
+            != Some(&eitri_bytecode::ValueType::String)
+        {
+            return Err(HostError::from(
+                "host string result does not match its signature",
+            ));
+        }
+        if m.force_gc {
+            collect_at(
+                m.heap,
+                m.references,
+                (m.host_roots, m.frames),
+                m.functions,
+                self.caller.function,
+                self.caller.base,
+                self.caller.call_pc as usize,
+            );
+        }
+        let mut result = m.heap.alloc_string(value, m.memory_limit);
+        if result.is_err() {
+            collect_at(
+                m.heap,
+                m.references,
+                (m.host_roots, m.frames),
+                m.functions,
+                self.caller.function,
+                self.caller.base,
+                self.caller.call_pc as usize,
+            );
+            result = m.heap.alloc_string(value, m.memory_limit);
+        }
+        let reference = result.map_err(|_| {
+            HostError::Fault(Fault {
+                kind: FaultKind::Memory,
+                trace: Vec::new(),
+            })
+        })?;
+        m.host_roots.push(reference);
+        m.references
+            .resize(m.references.len().max(self.results.end() as usize), None);
+        m.references[self.results.first as usize + index] = Some(reference);
+        Ok(())
+    }
+
+    fn finish_host(&self) -> Result<(), HostError> {
+        if let Some(signature) = self.machine.host_signatures.get(self.host_index as usize) {
+            for (i, ty) in signature.results.iter().enumerate() {
+                if *ty == eitri_bytecode::ValueType::String
+                    && self
+                        .machine
+                        .references
+                        .get(self.results.first as usize + i)
+                        .and_then(|v| *v)
+                        .is_none()
+                {
+                    return Err(HostError::from("host did not initialize a string result"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_host(&mut self) {
+        if self
+            .machine
+            .host_signatures
+            .get(self.host_index as usize)
+            .is_some_and(|s| s.results.contains(&eitri_bytecode::ValueType::String))
+        {
+            self.machine.references.resize(
+                self.machine
+                    .references
+                    .len()
+                    .max(self.results.end() as usize),
+                None,
+            );
+            self.machine.references[self.results.slots_usize()].fill(None);
+        }
     }
 
     /// The script function named `name`, if the program has one, for this
@@ -389,6 +506,8 @@ pub struct VmScratch {
     // References are carried separately from scalar words so their pointer
     // provenance is preserved even on machines where pointers are not u64s.
     references: Vec<Option<heap::HeapRef>>,
+    host_roots: Vec<heap::HeapRef>,
+    host_signatures: Vec<eitri_bytecode::Signature>,
     heap: heap::Heap,
     force_gc: bool,
     memory_limit: usize,
@@ -400,6 +519,8 @@ impl Default for VmScratch {
             slots: Vec::new(),
             frames: Vec::new(),
             references: Vec::new(),
+            host_roots: Vec::new(),
+            host_signatures: Vec::new(),
             heap: heap::Heap::default(),
             force_gc: false,
             memory_limit: usize::MAX,
@@ -410,6 +531,11 @@ impl Default for VmScratch {
 impl VmScratch {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Install the registered host signatures used to validate string access.
+    pub fn set_host_signatures(&mut self, signatures: Vec<eitri_bytecode::Signature>) {
+        self.host_signatures = signatures;
     }
 
     /// Collect at each execution safepoint when managed execution is enabled.
@@ -432,6 +558,16 @@ impl VmScratch {
         self.slots.capacity() * 8
             + self.frames.capacity() * size_of::<Frame>()
             + self.references.capacity() * size_of::<Option<heap::HeapRef>>()
+            + self.host_roots.capacity() * size_of::<heap::HeapRef>()
+            + self.host_signatures.capacity() * size_of::<eitri_bytecode::Signature>()
+            + self
+                .host_signatures
+                .iter()
+                .map(|s| {
+                    (s.params.capacity() + s.results.capacity())
+                        * size_of::<eitri_bytecode::ValueType>()
+                })
+                .sum::<usize>()
             + self.heap.bytes()
     }
 }
@@ -465,6 +601,7 @@ fn machine<'a>(
     scratch.slots.clear();
     scratch.frames.clear();
     scratch.references.clear();
+    scratch.host_roots.clear();
     let function = &functions[entry];
     scratch.slots.resize(function.frame_size as usize, 0);
     let first = function.signature.param_base() as usize;
@@ -475,6 +612,8 @@ fn machine<'a>(
         frames: &mut scratch.frames,
         heap: &mut scratch.heap,
         references: &mut scratch.references,
+        host_roots: &mut scratch.host_roots,
+        host_signatures: &scratch.host_signatures,
         force_gc: scratch.force_gc,
         memory_limit: scratch.memory_limit,
         budget: limits.budget,
@@ -490,7 +629,7 @@ fn machine<'a>(
 fn collect_at(
     heap: &mut heap::Heap,
     references: &mut Vec<Option<heap::HeapRef>>,
-    frames: &[Frame],
+    (host_roots, frames): (&[heap::HeapRef], &[Frame]),
     functions: &IndexVec<FunctionId, Function>,
     id: FunctionId,
     base: usize,
@@ -533,7 +672,7 @@ fn collect_at(
         map: root_map(function, pc as u32, false),
         slots: &references[base..base + function.frame_size as usize],
     });
-    heap.collect_frames(&roots)
+    heap.collect_frames(&roots, host_roots)
         .expect("verified supported root maps");
 }
 
@@ -662,7 +801,15 @@ fn execute(
                     if target <= start {
                         poll!();
                         if m.force_gc {
-                            collect_at(m.heap, m.references, m.frames, functions, id, base, start);
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            );
                         }
                     }
                     pc = target;
@@ -719,7 +866,15 @@ fn execute(
                     }
                     Op::StrNew => {
                         if m.force_gc {
-                            collect_at(m.heap, m.references, m.frames, functions, id, base, start);
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            );
                         }
                         m.references.resize(
                             m.references.len().max(base + function.frame_size as usize),
@@ -728,7 +883,15 @@ fn execute(
                         let literal = &function.strings[(word >> 16) as usize];
                         let mut allocated = m.heap.alloc_string(literal, m.memory_limit);
                         if allocated.is_err() {
-                            collect_at(m.heap, m.references, m.frames, functions, id, base, start);
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            );
                             allocated = m.heap.alloc_string(literal, m.memory_limit);
                         }
                         m.references[base + a!()] = Some(allocated.map_err(|_| {
@@ -817,7 +980,15 @@ fn execute(
                         let site = function.sites[(word >> 16) as usize];
                         poll!();
                         if m.force_gc {
-                            collect_at(m.heap, m.references, m.frames, functions, id, base, start);
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            );
                         }
                         match site.target {
                             CallTarget::Host(index) => {
@@ -825,6 +996,7 @@ fn execute(
                                 // and spend from it.
                                 m.budget = budget;
                                 let frame_size = function.frame_size as usize;
+                                let roots_floor = m.host_roots.len();
                                 let mut cx = Call {
                                     machine: &mut *m,
                                     caller: Frame {
@@ -837,8 +1009,12 @@ fn execute(
                                     top: base + frame_size,
                                     args: absolute(site.args, base),
                                     results: absolute(site.result, base),
+                                    host_index: index,
                                 };
-                                let outcome = host.call(&mut cx, index);
+                                cx.prepare_host();
+                                let outcome =
+                                    host.call(&mut cx, index).and_then(|()| cx.finish_host());
+                                m.host_roots.truncate(roots_floor);
                                 budget = m.budget;
                                 // A nested run may have moved the slot stack.
                                 s = &mut m.slots[base..base + frame_size];

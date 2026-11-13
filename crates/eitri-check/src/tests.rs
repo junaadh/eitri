@@ -191,8 +191,8 @@ fn host_registration_is_checked() {
             .collect()
     };
     assert_eq!(
-        error("pub fn f(x: string) -> void", &mut hosts, &mut interner),
-        ["not supported yet: type `string`"]
+        error("pub fn f(x: bytes) -> void", &mut hosts, &mut interner),
+        ["not supported yet: type `bytes`"]
     );
     assert_eq!(
         error("pub fn f(x: void) -> void", &mut hosts, &mut interner),
@@ -407,7 +407,7 @@ fn differential_against_the_reference_checker() {
         seed ^= seed >> 27;
         seed.wrapping_mul(0x2545_f491_4f6c_dd1d)
     };
-    for _ in 0..6000 {
+    for _ in 0..7000 {
         let mut text = corpus[(next() % corpus.len() as u64) as usize].clone();
         for _ in 0..1 + next() % 3 {
             let (from, tos) = SWAPS[(next() % SWAPS.len() as u64) as usize];

@@ -155,6 +155,7 @@ impl LayoutStore {
         let store = Self::build_many(types.nodes.len(), &indexes, domain, |id| {
             Ok(match types.nodes.get(id).ok_or(LayoutError::InvalidId)?.0 {
                 TypeDesc::Scalar(kind) => Shape::Scalar(kind),
+                TypeDesc::String => Shape::ManagedReference(8),
                 TypeDesc::Void => Shape::Void,
                 TypeDesc::FixedArray { count, element } => Shape::Array(count, element.0 as usize),
                 TypeDesc::Optional(child) => Shape::Optional(child.0 as usize),
@@ -504,6 +505,7 @@ pub(crate) fn named_layout(
             if id < base {
                 return Ok(match types.nodes[id].0 {
                     TypeDesc::Scalar(kind) => Shape::Scalar(kind),
+                    TypeDesc::String => Shape::ManagedReference(8),
                     TypeDesc::Void => Shape::Void,
                     TypeDesc::FixedArray { count, element } => {
                         Shape::Array(count, element.0 as usize)

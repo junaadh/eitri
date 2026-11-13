@@ -754,6 +754,12 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   roots, retained handles, and full-runtime accounting remain; T015 stays open.
   The measurement and algorithm bounds are in the
   [T015-2 ledger](implementation/vm-research.md#t015-2-managed-control-flow).
+- T015-3: host functions accept borrowed UTF-8 string arguments and return
+  copied managed strings. Arguments and pending results survive forced GC
+  during reentry; wrong or missing result initialization and memory exhaustion
+  fault. Host-initiated script calls with string values, retained handles and
+  full-runtime memory accounting remain. T015 stays open; measurements are in
+  the [T015-3 ledger](implementation/vm-research.md#t015-3-host-strings).
 
 ### T016 — Implement strings, bytes, and characters
 

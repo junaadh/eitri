@@ -51,8 +51,8 @@ while i < 10 {
 
 > [!NOTE]
 > Eitri is young. The scalar slice (integers, floats, characters, booleans, functions,
-> `if`, `while`, host calls) runs end to end; strings, collections,
-> closures, and the rest of the [specification](docs/README.md) are on the
+> `if`, `while`, host calls) and a managed string slice run end to end;
+> collections, closures, and the rest of the [specification](docs/README.md) are on the
 > [task list](docs/tasks.md). The Rust API is experimental.
 
 ## Quick start

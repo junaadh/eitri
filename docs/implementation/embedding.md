@@ -150,6 +150,12 @@ registration API does not yet implement named declarations.
 
 ## Values across the boundary
 
+T015-3 implements UTF-8 string arguments and results for script-to-host calls.
+Rust hosts borrow an argument with `Call::string_arg` and return an owned copy
+with `Call::set_result_string`; the latter accounts against the managed heap
+limit. The runtime roots arguments and pending results across host reentry.
+Host-initiated script calls still accept and return scalar values only.
+
 | Eitri type | Host sees | Notes |
 |---|---|---|
 | `i8`, `i64`, `u8`, `u64`, `f32`, `f64`, `bool`, `char` | The native value | Read straight from the slot |

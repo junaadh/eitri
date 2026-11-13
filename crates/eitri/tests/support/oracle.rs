@@ -47,6 +47,8 @@ pub trait Host {
         index: u32,
         args: &[u64],
         results: &mut [u64],
+        string_args: &[Option<String>],
+        string_result: &mut Option<String>,
     ) -> Result<(), HostError>;
 }
 
@@ -174,6 +176,7 @@ impl Oracle {
             below: 0,
             nesting: 0,
             locals: vec![None; checked.bindings.len()],
+            strings: checked.strings.clone(),
         };
         let mut result = Ok(());
         for &item in &ast.items {
@@ -275,6 +278,7 @@ enum Unwind {
 type Flow<T> = Result<T, Unwind>;
 
 struct Eval<'a> {
+    strings: Vec<String>,
     tokens: &'a Tokens,
     ast: &'a Ast,
     checked: &'a Checked,
@@ -451,7 +455,7 @@ impl Eval<'_> {
                 let Value::String(index) = self.expr(host, base)? else {
                     unreachable!()
                 };
-                Ok(Value::Int(self.checked.strings[index as usize].len() as i64))
+                Ok(Value::Int(self.strings[index as usize].len() as i64))
             }
             Expr::Call { args, .. }
                 if matches!(self.checked.resolutions[e], Res::Convert { .. }) =>
@@ -612,10 +616,34 @@ impl Eval<'_> {
         args: &[Value],
         span: Span,
     ) -> Flow<Value> {
-        let words: Vec<u64> = args.iter().map(|value| value.word()).collect();
+        let words: Vec<u64> = args
+            .iter()
+            .map(|value| {
+                if matches!(value, Value::String(_)) {
+                    0
+                } else {
+                    value.word()
+                }
+            })
+            .collect();
+        let string_args: Vec<_> = args
+            .iter()
+            .map(|value| match value {
+                Value::String(index) => Some(self.strings[*index as usize].clone()),
+                _ => None,
+            })
+            .collect();
         let function = self.hosts.function(h);
         let mut results = vec![0u64; usize::from(function.ret != Ty::Void)];
-        if let Err(error) = host.call(self, h.as_u32(), &words, &mut results) {
+        let mut string_result = None;
+        if let Err(error) = host.call(
+            self,
+            h.as_u32(),
+            &words,
+            &mut results,
+            &string_args,
+            &mut string_result,
+        ) {
             let (message, mut trace) = match error {
                 HostError::Message(message) => (message, Vec::new()),
                 HostError::Fault(fault) => (fault.message, fault.trace),
@@ -634,10 +662,17 @@ impl Eval<'_> {
                 trace,
             }));
         }
-        Ok(Value::from_word(
-            function.ret,
-            results.first().copied().unwrap_or(0),
-        ))
+        if function.ret == Ty::String {
+            let value = string_result.expect("test host initializes string result");
+            let index = self.strings.len() as u32;
+            self.strings.push(value);
+            Ok(Value::String(index))
+        } else {
+            Ok(Value::from_word(
+                function.ret,
+                results.first().copied().unwrap_or(0),
+            ))
+        }
     }
 
     fn find(&self, name: &str) -> Option<FnId> {

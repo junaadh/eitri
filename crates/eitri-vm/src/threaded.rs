@@ -89,6 +89,8 @@ pub(crate) fn nested(
             frames: &mut *m.frames,
             heap: &mut *m.heap,
             references: &mut *m.references,
+            host_roots: &mut *m.host_roots,
+            host_signatures: m.host_signatures,
             force_gc: m.force_gc,
             memory_limit: m.memory_limit,
             budget: m.budget,
@@ -318,7 +320,7 @@ fn trace(st: &mut State<'_>, pc: usize) {
     collect_at(
         st.m.heap,
         st.m.references,
-        st.m.frames,
+        (st.m.host_roots, st.m.frames),
         st.m.functions,
         st.id,
         st.base,
@@ -593,6 +595,7 @@ extern "rust-preserve-none" fn call_host(
     };
     // The host reaches its windows through the shared state, by index, so
     // a nested run may grow the slot stack under it.
+    let roots_floor = st.m.host_roots.len();
     let mut cx = Call {
         machine: &mut st.m,
         caller: Frame {
@@ -605,8 +608,11 @@ extern "rust-preserve-none" fn call_host(
         top: st.base + len,
         args: absolute(site.args, st.base),
         results: absolute(site.result, st.base),
+        host_index: index,
     };
-    let outcome = st.host.call(&mut cx, index);
+    cx.prepare_host();
+    let outcome = st.host.call(&mut cx, index).and_then(|()| cx.finish_host());
+    st.m.host_roots.truncate(roots_floor);
     // SAFETY: the current frame, `base..base + len`, is still inside the
     // slot stack (nested runs only grow it); the stack may have moved.
     let s = unsafe { st.m.slots.as_mut_ptr().add(st.base) };

@@ -48,8 +48,10 @@ Pointer-preserving references occupy a sidecar to the scalar `u64` stack;
 verified ordinary root maps select references at allocations, calls, and taken
 backward branches. Managed root construction follows control-flow liveness and publishes distinct
 call states; script calls copy reference arguments and results between frames.
-Dynamic roots, aggregates, handles, and host string values remain later work.
-Forced-collection tests run both interpreters.
+A host string result is copied into the heap and rooted until the host call
+returns; host string arguments remain live across reentry. Dynamic roots,
+aggregates, retained handles, and string values in host-initiated script calls
+remain later work. Forced-collection tests run both interpreters.
 The managed-object byte limit counts object structures and string payloads;
 allocator overhead, collection scratch, compiler storage and code are not yet
 covered. Collection is expected O(objects + roots), with hash-collision

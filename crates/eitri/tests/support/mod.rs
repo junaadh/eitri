@@ -21,6 +21,8 @@ pub struct TestHost {
     id: u32,
     fail: u32,
     reenter: u32,
+    decorate: u32,
+    text_len: u32,
     pub effects: String,
 }
 
@@ -46,6 +48,8 @@ impl TestHost {
             id: index("id"),
             fail: index("fail"),
             reenter: index("reenter"),
+            decorate: index("decorate"),
+            text_len: index("text_len"),
             effects: String::new(),
         }
     }
@@ -82,6 +86,18 @@ impl TestHost {
 
 impl eitri::Host for TestHost {
     fn call(&mut self, cx: &mut eitri::Call<'_, '_>, index: u32) -> Result<(), eitri::HostError> {
+        if index == self.decorate {
+            let result = format!("[{}]", cx.string_arg(0).ok_or("missing string argument")?);
+            self.effects += &format!("effect: test.decorate({result})\n");
+            cx.set_result_string(0, &result)?;
+            return Ok(());
+        }
+        if index == self.text_len {
+            let length = cx.string_arg(0).ok_or("missing string argument")?.len();
+            self.effects += &format!("effect: test.text_len({length})\n");
+            cx.set_result(0, length as u64);
+            return Ok(());
+        }
         let value = match self.begin(index, cx.args()) {
             Action::Return(value) => value,
             Action::Fail => return Err(FAILED.into()),
@@ -106,7 +122,21 @@ impl oracle::Host for TestHost {
         index: u32,
         args: &[u64],
         results: &mut [u64],
+        string_args: &[Option<String>],
+        string_result: &mut Option<String>,
     ) -> Result<(), oracle::HostError> {
+        if index == self.decorate {
+            let value = format!("[{}]", string_args[0].as_deref().unwrap());
+            self.effects += &format!("effect: test.decorate({value})\n");
+            *string_result = Some(value);
+            return Ok(());
+        }
+        if index == self.text_len {
+            let length = string_args[0].as_deref().unwrap().len();
+            self.effects += &format!("effect: test.text_len({length})\n");
+            results[0] = length as u64;
+            return Ok(());
+        }
         let value = match self.begin(index, args) {
             Action::Return(value) => value,
             Action::Fail => return Err(oracle::HostError::Message(FAILED.into())),

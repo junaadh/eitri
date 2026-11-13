@@ -330,8 +330,11 @@ impl Context {
         declarations: &str,
     ) -> Result<(), Vec<Diagnostic>> {
         self.hosts
-            .register(path, declarations, &mut self.interner)
-            .map(drop)
+            .register(path, declarations, &mut self.interner)?;
+        self.scratch
+            .vm
+            .set_host_signatures(eitri_lower::host_signatures(&self.hosts));
+        Ok(())
     }
 
     /// Whether a host module is registered as `path`.
@@ -578,6 +581,18 @@ impl Context {
                     .iter()
                     .chain(&f.signature.results)
                     .any(|t| *t == eitri_bytecode::ValueType::String)
+                || f.sites.iter().any(|site| match site.target {
+                    CallTarget::Host(index) => {
+                        registered.get(index as usize).is_some_and(|signature| {
+                            signature
+                                .params
+                                .iter()
+                                .chain(&signature.results)
+                                .any(|t| *t == eitri_bytecode::ValueType::String)
+                        })
+                    }
+                    CallTarget::Script(_) => false,
+                })
         });
         for (index, function) in functions.as_mut_slice().iter_mut().enumerate() {
             if managed {

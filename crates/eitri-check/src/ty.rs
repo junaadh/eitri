@@ -33,7 +33,7 @@ impl Ty {
             Self::F64 => S::F64,
             Self::Char => S::Char,
             Self::Bool => S::Bool,
-            Self::String => return None,
+            Self::String => return Some(TypeDesc::String),
             Self::Void => return Some(TypeDesc::Void),
             Self::Error => return None,
         }))

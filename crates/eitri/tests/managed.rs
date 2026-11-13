@@ -203,3 +203,92 @@ test.emit(main())
         }
     }
 }
+
+#[test]
+fn host_string_fixture_survives_forced_collection() {
+    let source = include_str!("fixtures/managed/host_strings.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                host.effects,
+                "effect: test.decorate([☃])\neffect: test.text_len(5)\neffect: test.emit(10)\n"
+            );
+            assert_eq!(context.managed_heap_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+fn host_string_argument_and_result_survive_reentry() {
+    struct Reentrant;
+    impl eitri::Host for Reentrant {
+        fn call(&mut self, cx: &mut eitri::Call<'_, '_>, _: u32) -> Result<(), eitri::HostError> {
+            assert_eq!(cx.string_arg(0), Some("argument"));
+            cx.set_result_string(0, "result")?;
+            let callback = cx.function("callback").unwrap();
+            cx.call(self, callback, &[], &mut [0])?;
+            assert_eq!(cx.string_arg(0), Some("argument"));
+            Ok(())
+        }
+    }
+    let source = r#"
+import test from "test"
+fn callback() -> i64 { return "garbage".len(); }
+let result = test.decorate("argument")
+if result.len() != 6 { let failure = 1 / 0; }
+"#;
+    for threaded in [false, true] {
+        let mut context = Context::new();
+        context.set_threaded(threaded);
+        context.set_force_gc(true);
+        context.register_host_module("test", TEST_MODULE).unwrap();
+        let compiled = context.compile(source).unwrap();
+        context.execute(&compiled, &mut Reentrant).unwrap();
+        assert_eq!(context.managed_heap_bytes(), 0);
+    }
+}
+
+#[test]
+fn host_string_result_requires_initialization_and_obeys_heap_limit() {
+    struct ResultHost(bool);
+    impl eitri::Host for ResultHost {
+        fn call(&mut self, cx: &mut eitri::Call<'_, '_>, _: u32) -> Result<(), eitri::HostError> {
+            if self.0 {
+                cx.set_result_string(0, "created by host")?;
+            }
+            Ok(())
+        }
+    }
+    let source = "import host from \"host\"\nlet s = host.get()\ns.len()";
+    for threaded in [false, true] {
+        let mut context = Context::new();
+        context.set_threaded(threaded);
+        context.set_force_gc(true);
+        context
+            .register_host_module("host", "pub fn get() -> string")
+            .unwrap();
+        let compiled = context.compile(source).unwrap();
+        let err = context
+            .execute(&compiled, &mut ResultHost(false))
+            .unwrap_err();
+        assert!(err.message.contains("did not initialize"));
+        context.set_heap_limit(0);
+        let err = context
+            .execute(&compiled, &mut ResultHost(true))
+            .unwrap_err();
+        assert_eq!(err.message, "managed memory limit exceeded");
+        assert_eq!(context.managed_heap_bytes(), 0);
+    }
+}

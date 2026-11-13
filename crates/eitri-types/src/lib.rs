@@ -53,6 +53,7 @@ pub enum ScalarKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TypeDesc {
     Scalar(ScalarKind),
+    String,
     Void,
     #[non_exhaustive]
     Optional(TypeId),
@@ -112,6 +113,7 @@ impl TypeStore {
         }
         let (prefix, children): (Vec<u8>, &[TypeId]) = match &desc {
             TypeDesc::Void => (vec![0], &[]),
+            TypeDesc::String => (vec![12], &[]),
             TypeDesc::Scalar(kind) => (vec![*kind as u8], &[]),
             TypeDesc::Optional(child) => (vec![9], std::slice::from_ref(child)),
             TypeDesc::FixedArray { count, element } => {

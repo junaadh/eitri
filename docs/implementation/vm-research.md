@@ -1690,3 +1690,20 @@ T015-1 baseline and does not measure managed workloads; it supports no causal
 latency claim. Managed analysis costs and its unbounded compiler-memory risk are
 recorded in [VM garbage collection](vm.md#garbage-collection). No conservative
 scanning experiment or Lua comparison was performed.
+
+
+### T015-3 host strings
+
+On 2026-11-13, `cargo bench --locked -p eitri --bench source_to_result --
+20001` measured 20,001 individual samples per cell, release profile, threaded
+interpreter, macOS 27.0.1 AArch64 and Rust 1.101.0-nightly with LLVM 23.1.5;
+the CPU model was unavailable. The reused scalar module measured compile
+p50/p99 7.375/12.4 µs, execution 0.208/0.333 µs, total 7.583/12.8 µs,
+48 allocations / 4,668 B, 344 code bytes and 2,978 metadata bytes. The
+host-call workload measured execution 9.792/12.5 µs (p50/p99), versus
+6.542/10.5 µs in the non-interleaved T015-2 run; this difference is a signal
+for profiling, not a controlled estimate of overhead. This benchmark does not
+measure string calls. Context creation, I/O and host work are excluded from
+the reused run. The few-microsecond target remains missed. Report and raw
+samples: `/tmp/orchestra/eitri-t015-3-bench.txt` and
+`/tmp/orchestra/eitri-t015-3-samples.csv`. No Lua comparison was run.

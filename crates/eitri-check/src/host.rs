@@ -233,7 +233,7 @@ fn value_type(
             ));
             Ty::Error
         }
-        TypeName::Supported(Ty::String) | TypeName::Unsupported => {
+        TypeName::Unsupported => {
             diagnostics.push(error(
                 Code::Unsupported,
                 format!("not supported yet: type `{name}`"),

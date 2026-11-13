@@ -223,6 +223,16 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
                 .chain(&f.signature.results)
                 .any(|t| *t == ValueType::String)
         })
+        || functions
+            .iter()
+            .flat_map(|f| &f.sites)
+            .any(|site| match site.target {
+                CallTarget::Host(index) => {
+                    let host = input.hosts.function(HostFnId::from_u32(index));
+                    host.ret == Ty::String || host.params.contains(&Ty::String)
+                }
+                CallTarget::Script(_) => false,
+            })
     {
         let signatures = Program::signatures_of(&functions);
         let hosts = host_signatures(input.hosts);

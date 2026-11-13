@@ -645,6 +645,13 @@ pub fn string_roots(
             for slot in 0..frame {
                 suspended[slot] &= !defs[i][slot];
             }
+            // Host argument views can be fetched again after reentry.
+            let site = function.sites[insn.decoded.operands.b as usize];
+            if matches!(site.target, CallTarget::Host(_)) {
+                for slot in site.args.slots() {
+                    suspended[slot as usize] = true;
+                }
+            }
             let mut after = state.clone();
             transfer(function, callees, insn, &mut after)?;
             calls[insn.decoded.operands.b as usize] = crate::CallRoots {

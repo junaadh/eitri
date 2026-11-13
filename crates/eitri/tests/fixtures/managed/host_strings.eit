@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+fn main() -> i64 {
+    let text = test.decorate("☃")
+    return test.text_len(text) + text.len()
+}
+test.emit(main())

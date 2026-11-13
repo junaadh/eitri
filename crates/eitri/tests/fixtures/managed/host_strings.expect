@@ -1,0 +1,4 @@
+effect: test.decorate([☃])
+effect: test.text_len(5)
+effect: test.emit(10)
+ok
