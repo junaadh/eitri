@@ -61,6 +61,8 @@ pub enum ErrorKind {
     DynamicRootsOverlap(u32),
     InitializedSpanOutsideFrame,
     RootCallCountMismatch,
+    UnsupportedGuardedRoots,
+    InvalidRootGuard,
     MissingSafepoint,
     RootNotInitialized(u32),
     RootWrongShape(u32),
@@ -117,6 +119,10 @@ impl fmt::Display for VerifyError {
             ErrorKind::RootCallCountMismatch => {
                 write!(f, "root call state count differs from call sites")
             }
+            ErrorKind::UnsupportedGuardedRoots => {
+                write!(f, "guarded roots require managed verifier facts")
+            }
+            ErrorKind::InvalidRootGuard => write!(f, "invalid guarded root recipe"),
             ErrorKind::MissingSafepoint => write!(f, "missing safepoint root state"),
             ErrorKind::RootNotInitialized(slot) => {
                 write!(f, "root slot r{slot} is not definitely initialized")
@@ -236,6 +242,28 @@ fn root_structure(function: &Function) -> Result<(), VerifyError> {
             }
         }
     }
+    for map in &roots.maps {
+        for recipe in &map.guarded {
+            if recipe.guards.is_empty() || recipe.type_slot == recipe.payload_slot {
+                return Err(error(0, ErrorKind::InvalidRootGuard));
+            }
+            for slot in [recipe.type_slot, recipe.payload_slot]
+                .into_iter()
+                .chain(recipe.guards.iter().map(|&(slot, _)| slot))
+            {
+                if slot >= frame {
+                    return Err(error(0, ErrorKind::RootOutsideFrame(slot)));
+                }
+            }
+            if recipe
+                .guards
+                .iter()
+                .any(|&(slot, _)| slot == recipe.type_slot || slot == recipe.payload_slot)
+            {
+                return Err(error(0, ErrorKind::InvalidRootGuard));
+            }
+        }
+    }
     if roots.calls.len() != function.sites.len() {
         return Err(error(0, ErrorKind::RootCallCountMismatch));
     }
@@ -266,6 +294,11 @@ fn root_structure(function: &Function) -> Result<(), VerifyError> {
 /// hash-set time; collisions can increase that bound.
 pub fn verify_root_state(facts: &[crate::RootFact], map: &crate::RootMap) -> Result<(), ErrorKind> {
     use crate::RootShape;
+    // Flat scalar facts have no conditional case information; never certify
+    // guarded pairs as unconditional or read an inactive payload.
+    if !map.guarded.is_empty() {
+        return Err(ErrorKind::UnsupportedGuardedRoots);
+    }
     let mut covered = eitri_base::FxHashSet::default();
     for (word_index, &word) in map.ordinary.iter().enumerate() {
         let mut bits = word;
@@ -326,6 +359,9 @@ fn scalar_root_state(
     map: &crate::RootMap,
     spans: &[crate::SlotRange],
 ) -> Result<(), ErrorKind> {
+    if !map.guarded.is_empty() {
+        return Err(ErrorKind::UnsupportedGuardedRoots);
+    }
     for span in spans {
         for slot in span.slots() {
             if !matches!(slots[slot as usize], Slot::Ty(_)) {

@@ -10,12 +10,23 @@ pub struct SafepointPc(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FaultPc(pub u32);
 
+/// One dynamic root guarded by every enclosing `(tag slot, case)` pair,
+/// outermost first. A flat path encodes nested guards without recursive
+/// allocation or recursive traversal. Inactive payload bytes are never read.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GuardedRoot {
+    pub guards: Vec<(u32, u32)>,
+    pub type_slot: u32,
+    pub payload_slot: u32,
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct RootMap {
     /// Bit i describes ordinary frame slot i. Trailing zero words are allowed.
     pub ordinary: Vec<u64>,
     /// Type and payload slot for each dynamic value.
     pub dynamic: Vec<(u32, u32)>,
+    /// Dynamic pairs that may be read only under their complete case path.
+    pub guarded: Vec<GuardedRoot>,
 }
 /// Independently derived slot shape, including the partner of a dynamic slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,13 +90,12 @@ impl FunctionRoots {
     /// Only this metadata can currently be regenerated after rewriting scalar
     /// code. Other states must be preserved until managed lowering exists.
     pub fn can_regenerate_scalar(&self) -> bool {
-        self.maps
+        self.maps.iter().all(|m| {
+            m.dynamic.is_empty() && m.guarded.is_empty() && m.ordinary.iter().all(|&w| w == 0)
+        }) && self
+            .safepoints
             .iter()
-            .all(|m| m.dynamic.is_empty() && m.ordinary.iter().all(|&w| w == 0))
-            && self
-                .safepoints
-                .iter()
-                .all(|(_, s)| s.initialized.is_empty())
+            .all(|(_, s)| s.initialized.is_empty())
             && self.calls.iter().all(|c| {
                 c.pre.initialized.is_empty()
                     && c.suspended.initialized.is_empty()
@@ -103,6 +113,12 @@ impl FunctionRoots {
                 .map(|map| {
                     map.ordinary.capacity() * size_of::<u64>()
                         + map.dynamic.capacity() * size_of::<(u32, u32)>()
+                        + map.guarded.capacity() * size_of::<GuardedRoot>()
+                        + map
+                            .guarded
+                            .iter()
+                            .map(|root| root.guards.capacity() * size_of::<(u32, u32)>())
+                            .sum::<usize>()
                 })
                 .sum::<usize>()
             + self.safepoints.capacity() * size_of::<(SafepointPc, RootState)>()

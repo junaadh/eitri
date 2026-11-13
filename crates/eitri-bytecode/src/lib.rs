@@ -22,8 +22,8 @@ pub use encoding::{DecodeError, Decoded, EncodeError, MAX_SLOT, Operands, decode
 pub use function::{CallSite, CallTarget, Function, FunctionId, Signature, SlotRange, ValueType};
 pub use root_builder::{RootBuildError, RootBuilder, RootCheckpoint, RootLayout};
 pub use roots::{
-    CallRoots, FaultPc, FunctionRoots, RootFact, RootMap, RootMapId, RootShape, RootState,
-    SafepointPc,
+    CallRoots, FaultPc, FunctionRoots, GuardedRoot, RootFact, RootMap, RootMapId, RootShape,
+    RootState, SafepointPc,
 };
 pub use spec::{AllocationClass, OPS, Op, OpInfo};
 pub use verify::{Callees, ErrorKind, VerifyError, verify, verify_root_state};

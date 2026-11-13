@@ -615,6 +615,7 @@ fn required_root_states_and_call_initialization() {
         changed.roots.maps.push(RootMap {
             ordinary: vec![1],
             dynamic: vec![],
+            guarded: vec![],
         });
         let call = &mut changed.roots.calls[0];
         if suspended {
@@ -635,6 +636,7 @@ fn required_root_states_and_call_initialization() {
     changed.roots.maps.push(RootMap {
         ordinary: vec![1],
         dynamic: vec![],
+        guarded: vec![],
     });
     changed.roots.calls[0].post.map = RootMapId(1);
     assert_eq!(kind(&changed), ErrorKind::RootWrongShape(0));
@@ -658,6 +660,7 @@ fn synthetic_root_facts_check_coverage_and_shape() {
     let map = RootMap {
         ordinary: vec![1 << 1],
         dynamic: vec![(2, 3)],
+        guarded: vec![],
     };
     assert_eq!(verify_root_state(&facts, &map), Ok(()));
     assert_eq!(
@@ -665,7 +668,8 @@ fn synthetic_root_facts_check_coverage_and_shape() {
             &facts,
             &RootMap {
                 ordinary: vec![0],
-                dynamic: vec![(2, 3)]
+                dynamic: vec![(2, 3)],
+                guarded: vec![],
             }
         ),
         Err(ErrorKind::RootMissing(1))
@@ -675,7 +679,8 @@ fn synthetic_root_facts_check_coverage_and_shape() {
             &facts,
             &RootMap {
                 ordinary: vec![1],
-                dynamic: vec![(2, 3)]
+                dynamic: vec![(2, 3)],
+                guarded: vec![],
             }
         ),
         Err(ErrorKind::RootWrongShape(0))
@@ -685,7 +690,8 @@ fn synthetic_root_facts_check_coverage_and_shape() {
             &facts,
             &RootMap {
                 ordinary: vec![1 << 4],
-                dynamic: vec![(2, 3)]
+                dynamic: vec![(2, 3)],
+                guarded: vec![],
             }
         ),
         Err(ErrorKind::RootNotInitialized(4))
@@ -695,7 +701,8 @@ fn synthetic_root_facts_check_coverage_and_shape() {
             &facts,
             &RootMap {
                 ordinary: vec![1 << 1],
-                dynamic: vec![(2, 0)]
+                dynamic: vec![(2, 0)],
+                guarded: vec![],
             }
         ),
         Err(ErrorKind::InvalidDynamicPair(2, 0))
@@ -705,7 +712,8 @@ fn synthetic_root_facts_check_coverage_and_shape() {
             &facts,
             &RootMap {
                 ordinary: vec![1 << 1],
-                dynamic: vec![]
+                dynamic: vec![],
+                guarded: vec![],
             }
         ),
         Err(ErrorKind::RootMissing(2))
@@ -839,7 +847,7 @@ fn synthetic_root_builder_resolves_wide_far_poll_and_limits() {
             SlotRange { first: 0, count: 2 },
             &RootLayout {
                 ordinary: vec![0],
-                dynamic: vec![(0, 1)]
+                dynamic: vec![(0, 1)],
             }
         ),
         Err(RootBuildError::OverlappingLayout)
@@ -853,4 +861,28 @@ fn synthetic_root_builder_resolves_wide_far_poll_and_limits() {
         builder.finish(&[]),
         Err(RootBuildError::MissingPc)
     ));
+}
+
+#[test]
+fn guarded_roots_are_bounded_and_not_accepted_as_unconditional_pairs() {
+    let mut asm = Assembler::new();
+    asm.load(2, 1, I64, S).unwrap();
+    asm.ret(S).unwrap();
+    let mut f = asm.finish("guarded", sig(&[], &[])).unwrap();
+    let guarded = GuardedRoot {
+        guards: vec![(0, 1)],
+        type_slot: 1,
+        payload_slot: 2,
+    };
+    f.roots.maps[0].guarded.push(guarded);
+    assert!(!f.roots.can_regenerate_scalar());
+    assert_eq!(kind(&f), ErrorKind::UnsupportedGuardedRoots);
+    assert_eq!(
+        verify_root_state(&[], &f.roots.maps[0]),
+        Err(ErrorKind::UnsupportedGuardedRoots)
+    );
+    f.roots.maps[0].guarded[0].guards[0].0 = 3;
+    assert_eq!(kind(&f), ErrorKind::RootOutsideFrame(3));
+    f.roots.maps[0].guarded[0].guards.clear();
+    assert_eq!(kind(&f), ErrorKind::InvalidRootGuard);
 }

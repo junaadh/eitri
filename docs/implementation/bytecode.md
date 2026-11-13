@@ -5,6 +5,16 @@ Evidence and counterarguments: [D1, D5–D13, D23, D28–D36](vm-research.md#dec
 See [execution design](execution-design.md) for IDs, frames, GC, and tiering.
 Exact widths below are hypotheses for E3 and E11, not values proven by a paper.
 
+### Managed verification decision (T014)
+
+Managed slot types and their transitions will be established by verifier-only
+managed instructions and layout-bearing signatures, not by trusting root-map
+annotations. These instructions must be rejected by execution until their VM
+semantics land. Dynamic roots within unions require active-case guards,
+including nested guards; inactive payload bytes must never be read. This is a
+design decision; managed instructions and managed verification are not yet
+implemented.
+
 ## Design discipline
 
 The instruction set follows the AArch64 discipline: a small set of regular
