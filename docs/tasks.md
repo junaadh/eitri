@@ -713,7 +713,7 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   portable recursive signatures use bounded, iterative path back-references (9b3);
   Named enum graph and split-union layouts landed (9c1–9c2); language and registration remain later work.
 - Step 4 (10a–10b): root metadata, structural and scalar coverage checks landed; synthetic managed facts covered; checks and measurements: `/tmp/orchestra/eitri-10b-done.md`.
-- Step 5 (11, first half): bounded synthetic lifetime/map builder and scalar lowering plumbing landed; managed CFG lowering, optimizer preservation and accounting remain.
+- Step 5 (11–11b, partial): bounded builder, verified diagnostic boundary, root-safe optimizer fallback and scalar type/root accounting landed; synthetic managed CFG lowering and layout accounting remain.
 
 ### T015 — Implement allocation and non-moving collection
 

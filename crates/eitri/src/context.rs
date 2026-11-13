@@ -30,6 +30,8 @@ pub enum OptimizeError {
     /// [`Context::optimize_kept`] on code that kept no logical
     /// instructions.
     NoIr,
+    /// The retained function failed verification before optimization.
+    InvalidBytecode(eitri_bytecode::VerifyError),
 }
 
 /// Caller-owned execution context, borrowed exclusively during submission.
@@ -213,7 +215,8 @@ impl Context {
         // Everything the code carries: words, constants, sites, signatures,
         // literal types, frame sizes, and spans. Code alone can coincide:
         // `return 1` and `return true` have the same words.
-        let same = old.as_slice() == new.as_slice();
+        let same =
+            old.len() == new.len() && old.iter().zip(new.iter()).all(|(a, b)| a.equivalent(b));
         if !same {
             return Err(OptimizeError::SourceMismatch);
         }
@@ -230,17 +233,30 @@ impl Context {
     ) -> Result<eitri_bytecode::opt::Report, OptimizeError> {
         self.check_bindings(compiled)
             .map_err(OptimizeError::HostBindings)?;
-        let bodies = compiled.program.bodies.take().ok_or(OptimizeError::NoIr)?;
+        if compiled.program.bodies.is_none() {
+            return Err(OptimizeError::NoIr);
+        }
         let mut report = eitri_bytecode::opt::Report::default();
         let functions = &mut compiled.program.functions;
-        let mut kept = IndexVec::with_capacity(bodies.len());
         let hosts = eitri_lower::host_signatures(&self.hosts);
         let signatures = Program::signatures_of(functions);
         let callees = Callees {
             functions: &signatures,
             hosts: &hosts,
         };
+        // Validate the retained artifact before any rewrites. Unsupported
+        // metadata is preserved verbatim instead of silently regenerated.
+        for function in functions.iter() {
+            eitri_bytecode::verify(function, &callees).map_err(OptimizeError::InvalidBytecode)?;
+        }
+        let bodies = compiled.program.bodies.take().expect("checked above");
+        let mut kept = IndexVec::with_capacity(bodies.len());
         for (function, body) in functions.as_mut_slice().iter_mut().zip(bodies.iter()) {
+            if !function.roots.can_regenerate_scalar() {
+                report.skipped += 1;
+                kept.push(body.clone());
+                continue;
+            }
             let optimized = eitri_bytecode::opt::optimize(body, function, &mut report);
             let built = eitri_bytecode::ir::assemble(
                 &optimized,
@@ -728,7 +744,9 @@ impl Compiled {
 
     /// Bytes of everything else the functions carry: constants, call
     /// sites, literal types, instruction-start bits, source spans, names,
-    /// signatures, and recorded host bindings (heap parts only).
+    /// signatures, and recorded host bindings (heap parts only). Scalar
+    /// function type vectors and owned portable host signatures are counted.
+    /// Artifacts currently retain no layout stores; their layout bytes are zero.
     pub fn metadata_bytes(&self) -> usize {
         self.host_bindings.capacity() * size_of::<HostBinding>()
             + self
@@ -752,8 +770,8 @@ impl Compiled {
                         + size_of_val(&*f.starts)
                         + size_of_val(&*f.spans)
                         + f.name.len()
-                        + f.signature.params.len()
-                        + f.signature.results.len()
+                        + f.signature.params.capacity() * size_of::<eitri_bytecode::ValueType>()
+                        + f.signature.results.capacity() * size_of::<eitri_bytecode::ValueType>()
                 })
                 .sum::<usize>()
     }
@@ -816,5 +834,81 @@ fn report(program: &Program, fault: Fault, hosts: &Hosts, interner: &Interner) -
         code: None,
         message,
         trace,
+    }
+}
+
+#[cfg(test)]
+mod root_optimizer_tests {
+    use super::*;
+    use eitri_bytecode::{RootMap, RootMapId};
+    const SOURCE: &str = "fn id(n: i64) -> i64 {\n return n\n}\nlet x = id(1)\n";
+
+    #[test]
+    fn optimize_accepts_equivalent_renumbered_root_maps() {
+        let mut context = Context::new();
+        let mut compiled = context.compile(SOURCE).unwrap();
+        for f in compiled.program.functions.as_mut_slice().iter_mut() {
+            f.roots.maps.insert(0, RootMap::default());
+            f.roots.entry = RootMapId(f.roots.entry.0 + 1);
+            for (_, state) in &mut f.roots.safepoints {
+                state.map.0 += 1;
+            }
+            for call in &mut f.roots.calls {
+                call.pre.map.0 += 1;
+                call.suspended.map.0 += 1;
+                call.post.map.0 += 1;
+            }
+        }
+        context.optimize(&mut compiled, SOURCE).unwrap();
+        assert!(compiled.is_optimized());
+    }
+
+    #[test]
+    fn invalid_root_metadata_rejects_optimization_without_losing_ir() {
+        let mut context = Context::new();
+        context.set_keep_ir(true);
+        let mut compiled = context.compile(SOURCE).unwrap();
+        compiled.program.functions.as_mut_slice()[0].roots.entry = RootMapId(99);
+        assert!(matches!(
+            context.optimize_kept(&mut compiled),
+            Err(OptimizeError::InvalidBytecode(_))
+        ));
+        assert!(compiled.program.bodies.is_some());
+        assert!(!compiled.optimized);
+    }
+
+    #[test]
+    fn metadata_counts_retained_signature_capacity() {
+        let mut context = Context::new();
+        let mut compiled = context.compile(SOURCE).unwrap();
+        let before = compiled.metadata_bytes();
+        let sig = &mut compiled.program.functions.as_mut_slice()[0].signature;
+        let old = sig.params.capacity();
+        sig.params.reserve(32);
+        let added = (sig.params.capacity() - old) * size_of::<eitri_bytecode::ValueType>();
+        assert!(added > 0);
+        assert_eq!(compiled.metadata_bytes(), before + added);
+    }
+
+    #[test]
+    fn optimizer_keeps_nontrivial_root_states_unchanged() {
+        let mut context = Context::new();
+        context.set_keep_ir(true);
+        let mut compiled = context.compile(SOURCE).unwrap();
+        let function = compiled
+            .program
+            .functions
+            .as_mut_slice()
+            .iter_mut()
+            .find(|f| !f.sites.is_empty())
+            .unwrap();
+        function.roots.calls[0]
+            .pre
+            .initialized
+            .push(function.sites[0].args);
+        let original = function.clone();
+        let report = context.optimize_kept(&mut compiled).unwrap();
+        assert!(report.skipped >= 1);
+        assert!(compiled.program.functions.iter().any(|f| *f == original));
     }
 }

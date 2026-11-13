@@ -130,6 +130,20 @@ pub struct Function {
 }
 
 impl Function {
+    /// Compare executable contents while treating map IDs as local indexes.
+    pub fn equivalent(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.signature == other.signature
+            && self.frame_size == other.frame_size
+            && self.code == other.code
+            && self.consts == other.consts
+            && self.sites == other.sites
+            && self.literal_types == other.literal_types
+            && self.starts == other.starts
+            && self.spans == other.spans
+            && self.roots.equivalent(&other.roots)
+    }
+
     pub fn is_start(&self, pc: usize) -> bool {
         pc < self.code.len() && self.starts[pc / 64] >> (pc % 64) & 1 == 1
     }

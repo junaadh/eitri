@@ -50,6 +50,48 @@ pub struct FunctionRoots {
     pub calls: Vec<CallRoots>,
 }
 impl FunctionRoots {
+    /// Compare referenced states by map contents, independent of local IDs and
+    /// unused maps. PCs and initialized spans remain part of the comparison.
+    pub fn equivalent(&self, other: &Self) -> bool {
+        let map_eq = |a: RootMapId, b: RootMapId| match (
+            self.maps.get(a.0 as usize),
+            other.maps.get(b.0 as usize),
+        ) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        };
+        let state_eq =
+            |a: &RootState, b: &RootState| a.initialized == b.initialized && map_eq(a.map, b.map);
+        map_eq(self.entry, other.entry)
+            && self.safepoints.len() == other.safepoints.len()
+            && self
+                .safepoints
+                .iter()
+                .zip(&other.safepoints)
+                .all(|((pa, a), (pb, b))| pa == pb && state_eq(a, b))
+            && self.calls.len() == other.calls.len()
+            && self.calls.iter().zip(&other.calls).all(|(a, b)| {
+                state_eq(&a.pre, &b.pre)
+                    && state_eq(&a.suspended, &b.suspended)
+                    && state_eq(&a.post, &b.post)
+            })
+    }
+    /// Only this metadata can currently be regenerated after rewriting scalar
+    /// code. Other states must be preserved until managed lowering exists.
+    pub fn can_regenerate_scalar(&self) -> bool {
+        self.maps
+            .iter()
+            .all(|m| m.dynamic.is_empty() && m.ordinary.iter().all(|&w| w == 0))
+            && self
+                .safepoints
+                .iter()
+                .all(|(_, s)| s.initialized.is_empty())
+            && self.calls.iter().all(|c| {
+                c.pre.initialized.is_empty()
+                    && c.suspended.initialized.is_empty()
+                    && c.post.initialized.is_empty()
+            })
+    }
     /// Heap storage retained by this metadata, excluding the inline struct.
     pub fn heap_bytes(&self) -> usize {
         use std::mem::size_of;

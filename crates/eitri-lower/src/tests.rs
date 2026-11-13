@@ -198,3 +198,50 @@ fn simple_lowering_materializes_operands_and_comparisons() {
         simple.functions.len()
     );
 }
+
+#[test]
+fn root_builder_diagnostics_and_verification_are_transactional() {
+    use crate::{install_verified_roots, root_build_diagnostic};
+    use eitri_base::Span;
+    use eitri_bytecode::{RootBuildError, RootBuilder, RootLayout, SlotRange};
+    use eitri_diag::Code;
+    let source = SourceId::from_u32(0);
+    let diagnostic = root_build_diagnostic(RootBuildError::Limit, source, Span::default());
+    assert_eq!(diagnostic.code, Some(Code::Limit));
+    let mut program = compile_mode("fn f(n: i64) -> i64 {\n return n\n}\n", false);
+    let signatures = program.signatures();
+    let callees = Callees {
+        functions: &signatures,
+        hosts: &[],
+    };
+    let function = program
+        .functions
+        .as_mut_slice()
+        .iter_mut()
+        .find(|f| !f.signature.params.is_empty())
+        .unwrap();
+    let original = function.roots.clone();
+    let mut builder = RootBuilder::new(function.frame_size).unwrap();
+    builder.at_poll(77).unwrap();
+    let error = install_verified_roots(function, builder, &[], &callees, source, Span::default())
+        .unwrap_err();
+    assert_eq!(error.code, Some(Code::Limit));
+    assert_eq!(function.roots, original);
+    let mut builder = RootBuilder::new(function.frame_size).unwrap();
+    builder
+        .note_definition(
+            SlotRange { first: 1, count: 1 },
+            &RootLayout {
+                ordinary: vec![0],
+                dynamic: vec![],
+            },
+        )
+        .unwrap();
+    builder.at_entry().unwrap();
+    let error = install_verified_roots(function, builder, &[], &callees, source, Span::default())
+        .unwrap_err();
+    assert_eq!(error.severity, eitri_diag::Severity::Bug);
+    assert_eq!(function.roots, original);
+    let builder = RootBuilder::new(function.frame_size).unwrap();
+    install_verified_roots(function, builder, &[], &callees, source, Span::default()).unwrap();
+}

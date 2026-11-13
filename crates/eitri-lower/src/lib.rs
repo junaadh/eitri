@@ -225,6 +225,47 @@ fn too_large(input: &Input<'_>, name: &str, span: Span) -> Diagnostic {
     .with_label(DiagLabel::primary(input.source, span))
 }
 
+/// Convert root-builder failures into a source-located implementation-limit
+/// diagnostic. Callers must propagate every builder operation through this
+/// boundary rather than discarding a failed snapshot.
+pub fn root_build_diagnostic(
+    error: eitri_bytecode::RootBuildError,
+    source: eitri_base::SourceId,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        Code::Limit,
+        format!("implementation limit: root metadata could not be constructed ({error:?})"),
+    )
+    .with_label(DiagLabel::primary(source, span))
+}
+
+/// Finish and verify root metadata before publishing it to a function. A
+/// failed build or verification leaves the original metadata intact. The
+/// present verifier supports scalar executable facts; managed fact derivation
+/// remains a prerequisite for managed lowering.
+pub fn install_verified_roots(
+    function: &mut Function,
+    builder: eitri_bytecode::RootBuilder,
+    pc_map: &[(u32, Vec<eitri_bytecode::SafepointPc>)],
+    callees: &eitri_bytecode::Callees<'_>,
+    source: eitri_base::SourceId,
+    span: Span,
+) -> Result<(), Diagnostic> {
+    let roots = builder
+        .finish(pc_map)
+        .map_err(|e| root_build_diagnostic(e, source, span))?;
+    let old = std::mem::replace(&mut function.roots, roots);
+    if let Err(error) = eitri_bytecode::verify(function, callees) {
+        function.roots = old;
+        return Err(
+            Diagnostic::bug(format!("invalid generated root metadata: {error}"))
+                .with_label(DiagLabel::primary(source, span)),
+        );
+    }
+    Ok(())
+}
+
 type Lowered<T> = Result<T, AsmError>;
 
 struct Lowerer<'a, 'i, const R: bool, const SIMPLE: bool> {

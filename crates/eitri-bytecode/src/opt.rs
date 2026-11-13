@@ -45,6 +45,12 @@ pub struct Report {
 /// signature and frame size.
 pub fn optimize(body: &Body, function: &Function, report: &mut Report) -> Body {
     let mut body = body.clone();
+    // This optimizer has only scalar facts. Retain unknown root lifetimes
+    // unchanged until managed map regeneration is available.
+    if !function.roots.can_regenerate_scalar() {
+        report.skipped += 1;
+        return body;
+    }
     let frame = function.frame_size as usize;
     let results = function.signature.results.len() as u32;
     // Each pass re-analyzes: rewrites change liveness.
