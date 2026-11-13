@@ -532,7 +532,19 @@ impl Eval<'_> {
         use BinaryOp::*;
         let ty = a.ty();
         if let (Value::String(left), Value::String(right)) = (a, b) {
-            assert_eq!(op, Add);
+            let lhs = &self.strings[left as usize];
+            let rhs = &self.strings[right as usize];
+            if op != Add {
+                return Ok(Value::Bool(match op {
+                    Eq => lhs == rhs,
+                    NotEq => lhs != rhs,
+                    Lt => lhs < rhs,
+                    LtEq => lhs <= rhs,
+                    Gt => lhs > rhs,
+                    GtEq => lhs >= rhs,
+                    _ => unreachable!(),
+                }));
+            }
             let text = format!(
                 "{}{}",
                 self.strings[left as usize], self.strings[right as usize]

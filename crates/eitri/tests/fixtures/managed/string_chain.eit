@@ -1,0 +1,5 @@
+//! host: test
+import test from "test"
+let value = test.decorate("a") + (test.decorate("b") + test.decorate("c"))
+test.check(value == "[a][b][c]")
+test.emit(value.len())

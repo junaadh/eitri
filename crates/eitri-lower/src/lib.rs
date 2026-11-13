@@ -965,15 +965,32 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 ..
             } => self.logic_value(e, dst),
             Expr::Binary {
-                op: BinaryOp::Add,
-                lhs,
-                rhs,
-            } if checked.types[e] == Ty::String => {
+                op: BinaryOp::Add, ..
+            } if checked.types[e] == Ty::String => self.string_join(e, dst),
+            Expr::Binary { op, lhs, rhs }
+                if checked.types[lhs] == Ty::String && compare(op).is_some() =>
+            {
                 let left = self.expr(lhs, None)?;
                 let right = self.expr(rhs, None)?;
                 let slot = self.dst(dst);
                 self.asm.emit(
-                    Op::StrConcat,
+                    Op::StrCompare,
+                    Operands::abc(slot.into(), left.into(), right.into()),
+                    span,
+                )?;
+                let zero = self.temp();
+                self.asm.load(zero, 0, ValueType::I64, span)?;
+                let (opcode, left, right) = match op {
+                    BinaryOp::Eq => (Op::CsetEq, slot, zero),
+                    BinaryOp::NotEq => (Op::CsetNe, slot, zero),
+                    BinaryOp::Lt => (Op::CsetLt, slot, zero),
+                    BinaryOp::LtEq => (Op::CsetLe, slot, zero),
+                    BinaryOp::Gt => (Op::CsetLt, zero, slot),
+                    BinaryOp::GtEq => (Op::CsetLe, zero, slot),
+                    _ => unreachable!(),
+                };
+                self.asm.emit(
+                    opcode,
                     Operands::abc(slot.into(), left.into(), right.into()),
                     span,
                 )?;
@@ -1011,6 +1028,60 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 unreachable!("checked code has no bare members or errors")
             }
         }
+    }
+
+    /// Flatten concatenation in source order and evaluate every part before
+    /// allocating the result. The contiguous window is also the root set at
+    /// the join safepoint.
+    fn string_join(&mut self, root: ExprId, dst: Option<u32>) -> Lowered<u32> {
+        let ast = self.input.ast;
+        let mark = self.stack.len();
+        self.stack.push(root);
+        let mut count = 0u32;
+        while self.stack.len() > mark {
+            let node = self.stack.pop().expect("above mark");
+            if let Expr::Binary {
+                op: BinaryOp::Add,
+                lhs,
+                rhs,
+            } = ast.exprs[node]
+                && self.checked.types[node] == Ty::String
+            {
+                self.stack.push(rhs);
+                self.stack.push(lhs);
+            } else {
+                count = count.checked_add(1).ok_or(AsmError::CodeTooLarge)?;
+            }
+        }
+        let first = self.top;
+        self.top = first.checked_add(count).ok_or(AsmError::CodeTooLarge)?;
+        let end = self.top;
+        let mut index = 0;
+        self.stack.push(root);
+        while self.stack.len() > mark {
+            let node = self.stack.pop().expect("above mark");
+            if let Expr::Binary {
+                op: BinaryOp::Add,
+                lhs,
+                rhs,
+            } = ast.exprs[node]
+                && self.checked.types[node] == Ty::String
+            {
+                self.stack.push(rhs);
+                self.stack.push(lhs);
+            } else {
+                self.expr(node, Some(first + index))?;
+                self.top = end;
+                index += 1;
+            }
+        }
+        let slot = self.dst(dst);
+        self.asm.emit(
+            Op::StrJoin,
+            Operands::abc(slot.into(), first.into(), (end - 1).into()),
+            ast.span(root),
+        )?;
+        Ok(slot)
     }
 
     /// `&&`/`||` as a value: branch, then write `true` or `false`.

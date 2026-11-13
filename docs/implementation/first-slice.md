@@ -48,8 +48,10 @@ borrow string arguments through `Call::string_arg` and copy UTF-8 results into
 the managed heap through `Call::set_result_string`. A borrowed argument cannot
 cross reentry; the host can fetch it again afterwards. `Call::call_values`
 supports mixed scalar and string arguments and copies string results out of
-host-initiated reentrant script calls. Single binary string concatenation is supported; concatenation chains,
-comparisons, and other methods remain unsupported. No host effects occur for a rejected program.
+host-initiated reentrant script calls. String concatenation chains use one
+result allocation, and strings support content comparisons, `.len()` and
+`.is_empty()`. Other methods remain unsupported. No host effects occur for a
+rejected program.
 Hosts may retain a string argument across calls and executions and
 return it to a script; explicit release removes its collector root.
 

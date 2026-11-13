@@ -133,6 +133,33 @@ impl Heap {
         self.finish_string(text, limit, memory)
     }
 
+    /// Join a verified contiguous window of live string references with one
+    /// allocation for the result payload.
+    pub fn join(
+        &mut self,
+        parts: &[Option<HeapRef>],
+        limit: usize,
+        memory: &mut Option<eitri_base::MemoryBudget>,
+    ) -> Result<HeapRef, HeapLimit> {
+        let mut length = 0usize;
+        for part in parts {
+            let reference = part.expect("verified string operand");
+            length = length
+                .checked_add(self.string(reference).expect("live string root").len())
+                .ok_or(HeapLimit)?;
+        }
+        self.reserve_object(length, limit, memory)?;
+        let mut text = String::new();
+        super::reserve_string_vm(&mut text, length, memory).map_err(|_| HeapLimit)?;
+        for part in parts {
+            text.push_str(
+                self.string(part.expect("verified string operand"))
+                    .expect("live string root"),
+            );
+        }
+        self.finish_string(text, limit, memory)
+    }
+
     fn reserve_object(
         &mut self,
         text_len: usize,

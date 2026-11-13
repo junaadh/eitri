@@ -1313,9 +1313,62 @@ fn execute(
                             fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)
                         })?);
                     }
+                    Op::StrJoin => {
+                        if m.force_gc {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        }
+                        let mut value = m.heap.join(
+                            &m.references[base + b!()..=base + c!()],
+                            m.memory_limit,
+                            m.memory,
+                        );
+                        if value.is_err() {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                            value = m.heap.join(
+                                &m.references[base + b!()..=base + c!()],
+                                m.memory_limit,
+                                m.memory,
+                            );
+                        }
+                        m.references[base + a!()] = Some(value.map_err(|_| {
+                            fault(&m.frames[floor..], FaultKind::OutOfMemory, id, start)
+                        })?);
+                    }
                     Op::StrLen => {
                         let reference = m.references[base + b!()].expect("verified managed slot");
                         s[a!()] = m.heap.string(reference).expect("live string root").len() as u64;
+                    }
+                    Op::StrCompare => {
+                        let left = m.references[base + b!()].expect("verified string operand");
+                        let right = m.references[base + c!()].expect("verified string operand");
+                        let order = m
+                            .heap
+                            .string(left)
+                            .expect("live string root")
+                            .cmp(m.heap.string(right).expect("live string root"));
+                        s[a!()] = match order {
+                            std::cmp::Ordering::Less => -1i64 as u64,
+                            std::cmp::Ordering::Equal => 0,
+                            std::cmp::Ordering::Greater => 1,
+                        };
                     }
                     Op::Ldi => s[a!()] = (word >> 16) as i16 as i64 as u64,
                     Op::Ldk => s[a!()] = function.consts[(word >> 16) as usize],

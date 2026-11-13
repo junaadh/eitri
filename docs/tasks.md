@@ -59,8 +59,8 @@ and the decisions (D) and experiments (E) from the ledger it implements. The
 |---|---|---|
 | M0 | Fresh scalar source executes and calls a typed host function | T001–T012, T045–T047; first reproducible source-to-result measurements |
 | M1 | Managed data, results, and closures execute with correct roots | T013–T020; forced-GC and retained-callback checks |
-| M2 | Stage 1 core language and embedding workload | T021–T026, T048–T050; explicit Stage 1 corpus and Lua equivalent |
-| M3 | Generics, interfaces, extern data, and C embedding | T027–T030, T051; Stage 2 gate |
+| M2 | Stage 1 core language and embedding workload | T021–T026, T048–T051; explicit Stage 1 corpus and Lua equivalent |
+| M3 | Generics, interfaces, extern data, and C embedding | T027–T030, T066; Stage 2 gate |
 | M4 | Stackful async, tasks, and channels | T031–T033; Stage 3 gate |
 | M5 | Dynamic data, runtime facilities, and the standard library | T034–T036, T052–T056; Stage 4 gate: Lua parity |
 | M6 | Measured optimizations and optional native/AOT execution | T037–T043, T057–T060; individual experimental gates |
@@ -735,7 +735,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 
 ### T015 — Implement allocation and non-moving collection
 
-- [ ] Depends on: T014.
+- [x] Depends on: T014.
+- allocation, the non-moving collector and managed strings run end to end; full peak-memory enforcement (fallible growth through the text assembler, optimisation, verifier and VM) moves to T051, Runtime memory quota.
 - Add memory accounting, non-moving mark-sweep, runtime/host roots, artifact
   roots, retained handles, and generation-checked host identities. Implement
   precise roots first; conservative scanning remains an independent experiment.
@@ -772,11 +773,6 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   interpreters. Other handle kinds and full-runtime memory accounting remain;
   T015 stays open. See the
   [T015-5 ledger](implementation/vm-research.md#t015-5-string-reentry).
-- Quota work in progress: source compilation and managed-string execution
-  have budget-aware reservation paths, and a growing string faults without
-  preventing a later run. Text assembly, optimization, diagnostics, and
-  some transient allocations still need the same enforcement. T015 stays
-  open; [measurements](implementation/vm-research.md#t015-quota-work-in-progress).
 
 ### T016 — Implement strings, bytes, and characters
 
@@ -786,9 +782,9 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: separately compiled equal strings hash equally, UTF-8 boundaries
   are respected, source lifetime is safe, and no runtime interning assumption
   replaces required content comparison.
-- Work in progress: single binary string concatenation and `string.is_empty()`
-  run on both interpreters; concatenation chains remain unsupported pending
-  the required fused allocation. The broader task remains open.
+- T016-1: fused string concatenation, content comparisons, `.len()` and
+  `.is_empty()` run on both interpreters, with forced-GC and verifier tests.
+  Slicing, formatting, and the remaining string methods remain open.
 
 ### T017 — Implement aggregates and tagged values
 
@@ -829,6 +825,13 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   skipped work without hiding the primary failure.
 
 ## M2: complete the Stage 1 workload
+
+### T051 — Runtime memory quota
+
+- [ ] Depends on: T015.
+- Complete full peak-memory enforcement with fallible, quota-charged growth
+  through the text assembler, optimisation, verifier, diagnostics and VM.
+  Check failure and host recovery; preserve active-artifact accounting.
 
 ### T021 — Complete core syntax and checking
 
@@ -980,7 +983,7 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   catch drift; ownership and errors are tested in release as well as debug.
   Freeze ABI promises only after this implementation review.
 
-### T051 — Implement the generic collection library
+### T066 — Implement the generic collection library
 
 - [ ] Depends on: T027, T028.
 - Refs: [Collections: array methods](language/collections.md#array-methods),
@@ -1049,7 +1052,7 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 
 ### T052 — Decide and implement the string pattern library
 
-- [ ] Depends on: T050, T051.
+- [ ] Depends on: T050, T066.
 - Refs: [Strings: methods](language/strings.md#methods),
   [Open questions: Lua parity](open-questions.md#lua-parity).
 - First record a decision: Lua pattern syntax, or a regular-expression
@@ -1102,7 +1105,7 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 
 ### T056 — Audit Lua parity
 
-- [ ] Depends on: T036, T051–T055.
+- [ ] Depends on: T036, T051–T055, T066.
 - Refs: [Eitri and Lua](lua.md).
 - For every row of the parity tables, write an Eitri fixture that achieves
   the outcome and the Lua program it replaces. A row without a working
@@ -1402,7 +1405,7 @@ data. These tasks do not authorize replacing the correctness baseline first.
 | [Optionals](language/optionals.md) | T017, T021 |
 | [Errors and faults](language/errors.md) | T006, T012, T020 |
 | [Pattern matching](language/pattern-matching.md) | T017, T021, T034 (type patterns) |
-| [Collections](language/collections.md) | T018, T051 |
+| [Collections](language/collections.md) | T018, T066 |
 | [Expressions](language/expressions.md) | T008, T013, T018, T021, T049 |
 | [Strings](language/strings.md) | T016, T050, T052 |
 | [Modules](language/modules.md) | T022, T023 |
@@ -1436,5 +1439,4 @@ a debugger with breakpoints (T055); a mandatory native tier (T043).
 
 ## Immediate next task
 
-**T015 — complete allocation and non-moving collection**. T015-1 establishes
-managed strings; complete the remaining root, handle, and accounting work.
+**T016 — implement strings**. Start with concatenation and content comparison.

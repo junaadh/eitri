@@ -357,6 +357,8 @@ pub enum Sem {
     StringAlloc,
     StringLen,
     StringConcat,
+    StringCompare,
+    StringJoin,
     Int {
         op: IntOp,
         mode: Mode,
@@ -666,6 +668,8 @@ ops! {
     StrNew = "STR.NEW", "STR", ABx, [Dst, Index16, None], Sem::StringAlloc, FAULT, true, Managed;
     StrLen = "STR.LEN", "STR", Abc, [Dst, Src, None], Sem::StringLen, NONE, true, None;
     StrConcat = "STR.CONCAT", "STR", Abc, [Dst, Src, Src], Sem::StringConcat, FAULT, true, Managed;
+    StrCompare = "STR.COMPARE", "STR", Abc, [Dst, Src, Src], Sem::StringCompare, NONE, true, None;
+    StrJoin = "STR.JOIN", "STR", Abc, [Dst, Src, Src], Sem::StringJoin, FAULT, true, Managed;
 
 }
 

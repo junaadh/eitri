@@ -1,0 +1,6 @@
+effect: test.decorate([a])
+effect: test.decorate([b])
+effect: test.decorate([c])
+effect: test.check(true)
+effect: test.emit(9)
+ok

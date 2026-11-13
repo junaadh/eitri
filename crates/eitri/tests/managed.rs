@@ -6,6 +6,32 @@ use support::{TEST_MODULE, TestHost};
 const SOURCE: &str = include_str!("fixtures/managed/string_lengths.eit");
 
 #[test]
+fn joined_parts_survive_collection_and_keep_source_order() {
+    let source = include_str!("fixtures/managed/string_chain.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                host.effects,
+                "effect: test.decorate([a])\neffect: test.decorate([b])\neffect: test.decorate([c])\neffect: test.check(true)\neffect: test.emit(9)\n"
+            );
+            assert_eq!(context.managed_heap_bytes(), 0);
+        }
+    }
+}
+
+#[test]
 fn strings_survive_every_safepoint_and_are_reclaimed_after_run() {
     for threaded in [false, true] {
         for simple in [false, true] {

@@ -385,11 +385,45 @@ fn managed_op(
             st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
             Ok(None)
         }
+        Op::StrJoin => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let mut value = st.m.heap.join(
+                &st.m.references[st.base + b..=st.base + c],
+                st.m.memory_limit,
+                st.m.memory,
+            );
+            if value.is_err() {
+                trace(st, pc)?;
+                value = st.m.heap.join(
+                    &st.m.references[st.base + b..=st.base + c],
+                    st.m.memory_limit,
+                    st.m.memory,
+                );
+            }
+            st.m.references[st.base + a] = Some(value.map_err(|_| FaultKind::OutOfMemory)?);
+            Ok(None)
+        }
         Op::StrLen => {
             let reference = st.m.references[st.base + b].expect("verified managed slot");
             Ok(Some(
                 st.m.heap.string(reference).expect("live string root").len() as u64,
             ))
+        }
+        Op::StrCompare => {
+            let left = st.m.references[st.base + b].expect("verified string operand");
+            let right = st.m.references[st.base + c].expect("verified string operand");
+            let order =
+                st.m.heap
+                    .string(left)
+                    .expect("live string root")
+                    .cmp(st.m.heap.string(right).expect("live string root"));
+            Ok(Some(match order {
+                std::cmp::Ordering::Less => -1i64 as u64,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            }))
         }
         _ => unreachable!(),
     }
@@ -469,6 +503,8 @@ managed_handler!(mov, Op::Mov);
 managed_handler!(str_new, Op::StrNew);
 managed_handler!(str_len, Op::StrLen);
 managed_handler!(str_concat, Op::StrConcat);
+managed_handler!(str_compare, Op::StrCompare);
+managed_handler!(str_join, Op::StrJoin);
 slot_handler!(ldi, Op::Ldi);
 slot_handler!(ldk, Op::Ldk);
 slot_handler!(add_wrap, Op::AddWrap);
@@ -587,7 +623,7 @@ extern "rust-preserve-none" fn wide(
     }
     if matches!(
         Op::from_byte(op),
-        Some(Op::Mov | Op::StrNew | Op::StrLen | Op::StrConcat)
+        Some(Op::Mov | Op::StrNew | Op::StrLen | Op::StrConcat | Op::StrCompare | Op::StrJoin)
     ) {
         let op = Op::from_byte(op).expect("verified opcode");
         match managed_op(st, op, a, b, c, word, pc) {
@@ -990,6 +1026,8 @@ static TABLE: [Handler; 256] = {
     table[Op::StrNew as usize] = str_new;
     table[Op::StrLen as usize] = str_len;
     table[Op::StrConcat as usize] = str_concat;
+    table[Op::StrCompare as usize] = str_compare;
+    table[Op::StrJoin as usize] = str_join;
     table[Op::Ldi as usize] = ldi;
     table[Op::Ldk as usize] = ldk;
     table[Op::LdkX as usize] = ldk_x;

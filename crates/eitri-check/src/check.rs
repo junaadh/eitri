@@ -1323,31 +1323,9 @@ impl<'i> Checker<'_, 'i> {
         let mut lhs_span = self.span(leftmost);
         while self.spine.len() > mark {
             let node = self.spine.pop().unwrap();
-            let Expr::Binary { op, lhs, rhs } = ast.exprs[node] else {
+            let Expr::Binary { op, rhs, .. } = ast.exprs[node] else {
                 unreachable!()
             };
-            if op == BinaryOp::Add
-                && lhs_ty == Ty::String
-                && (matches!(
-                    ast.exprs[lhs],
-                    Expr::Binary {
-                        op: BinaryOp::Add,
-                        ..
-                    }
-                ) || matches!(
-                    ast.exprs[rhs],
-                    Expr::Binary {
-                        op: BinaryOp::Add,
-                        ..
-                    }
-                ))
-            {
-                self.report(
-                    Code::Unsupported,
-                    "not supported yet: string concatenation chains",
-                    self.span(node),
-                );
-            }
             let valid = valid_operand(op, lhs_ty);
             if !valid && lhs_ty == Ty::Void && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
                 self.report(
@@ -1417,8 +1395,8 @@ fn valid_operand(op: BinaryOp, ty: Ty) -> bool {
     }
     match op {
         And | Or => ty == Ty::Bool,
-        Eq | NotEq => !matches!(ty, Ty::Void | Ty::String),
-        Lt | LtEq | Gt | GtEq => ty.numeric() || ty == Ty::Char,
+        Eq | NotEq => ty != Ty::Void,
+        Lt | LtEq | Gt | GtEq => ty.numeric() || matches!(ty, Ty::Char | Ty::String),
         Add => ty.numeric() || ty == Ty::String,
         Sub | Mul | Div | Rem => ty.numeric(),
         WrapAdd | WrapSub | WrapMul | BitAnd | BitOr | BitXor | Shl | Shr => ty.integer(),

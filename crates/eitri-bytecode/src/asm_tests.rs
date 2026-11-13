@@ -917,3 +917,41 @@ fn managed_string_roots_are_verified_against_slot_types() {
         ErrorKind::NoConstant(_)
     ));
 }
+
+#[test]
+fn string_join_verifies_every_part_and_roots_the_whole_window() {
+    let build = |middle_is_string: bool, reverse: bool| {
+        let mut asm = Assembler::new();
+        asm.emit(Op::StrNew, Operands::abc(1, 0, 0), S).unwrap();
+        if middle_is_string {
+            asm.emit(Op::StrNew, Operands::abc(2, 0, 0), S).unwrap();
+        } else {
+            asm.load(2, 0, I64, S).unwrap();
+        }
+        asm.emit(Op::StrNew, Operands::abc(3, 0, 0), S).unwrap();
+        let (first, last) = if reverse { (3, 1) } else { (1, 3) };
+        asm.emit(Op::StrJoin, Operands::abc(4, first, last), S)
+            .unwrap();
+        asm.emit(Op::StrLen, Operands::abc(0, 4, 0), S).unwrap();
+        asm.ret(S).unwrap();
+        let mut f = asm.finish("join", sig(&[], &[I64])).unwrap();
+        f.strings = vec![Box::<str>::from("x")].into_boxed_slice();
+        f
+    };
+    let mut f = build(true, false);
+    let signatures = IndexVec::from_raw(vec![f.signature.clone()]);
+    let callees = Callees {
+        functions: &signatures,
+        hosts: &[],
+    };
+    f.roots = string_roots(&f, &callees).unwrap();
+    verify(&f, &callees).unwrap();
+    let join = f.roots.safepoints.last().unwrap().1.map.0 as usize;
+    f.roots.maps[join].ordinary[0] &= !(1 << 2);
+    assert_eq!(
+        verify(&f, &callees).unwrap_err().kind,
+        ErrorKind::RootMissing(2)
+    );
+    assert!(string_roots(&build(false, false), &callees).is_err());
+    assert!(string_roots(&build(true, true), &callees).is_err());
+}

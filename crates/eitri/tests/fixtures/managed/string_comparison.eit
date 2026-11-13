@@ -1,0 +1,12 @@
+//! host: test
+import test from "test"
+fn same(a: string, b: string) -> bool { return a == b; }
+let a = "ca" + "fé"
+let b = "café"
+test.check(same(a, b))
+test.check(a != "cafe")
+test.check("a" < "é")
+test.check("é" > "z")
+test.check(a <= b)
+test.check(a >= b)
+if a == b { test.emit(a.len()); }

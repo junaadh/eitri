@@ -697,6 +697,11 @@ pub fn string_roots_budgeted(
             }
         }
         match insn.decoded.op.info().sem {
+            Sem::StringJoin => {
+                let first = insn.decoded.operands.b as usize;
+                let last = insn.decoded.operands.c as usize;
+                uses[i * frame + first..=i * frame + last].fill(true);
+            }
             Sem::Call(_) => {
                 let site = function.sites[insn.decoded.operands.b as usize];
                 for slot in site.args.slots() {
@@ -857,6 +862,12 @@ fn structure(
             if matches!(role, Role::Site16) {
                 check_site(function, callees, at, decoded.op, value as u32)?;
             }
+        }
+        if decoded.op == Op::StrJoin && decoded.operands.b > decoded.operands.c {
+            return Err(error(
+                at,
+                ErrorKind::InvalidScalar("invalid string join range"),
+            ));
         }
         if info.format.ext_role() == Role::Const32
             && decoded.operands.ext as usize >= function.consts.len()
@@ -1130,6 +1141,17 @@ fn transfer(
         Sem::StringConcat => {
             read(state, pc, b, Some(ValueType::String))?;
             read(state, pc, c, Some(ValueType::String))?;
+            write(state, a, ValueType::String);
+        }
+        Sem::StringCompare => {
+            read(state, pc, b, Some(ValueType::String))?;
+            read(state, pc, c, Some(ValueType::String))?;
+            write(state, a, I64);
+        }
+        Sem::StringJoin => {
+            for slot in b..=c {
+                read(state, pc, slot, Some(ValueType::String))?;
+            }
             write(state, a, ValueType::String);
         }
         Sem::Move => {
