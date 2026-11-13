@@ -11,6 +11,7 @@ eitri-bytecode.workspace = true
 eitri-check.workspace = true
 eitri-diag.workspace = true
 eitri-syntax.workspace = true
+eitri-types.workspace = true
 
 [lints]
 workspace = true

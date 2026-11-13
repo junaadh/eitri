@@ -53,6 +53,7 @@ dependencies = [
  "eitri-check",
  "eitri-diag",
  "eitri-syntax",
+ "eitri-types",
 ]
 
 [[package]]

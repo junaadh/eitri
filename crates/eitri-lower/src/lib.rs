@@ -48,6 +48,10 @@ pub const ENTRY: FunctionId = FunctionId::from_u32(0);
 pub struct Program {
     pub functions: IndexVec<FunctionId, Function>,
     pub entry: FunctionId,
+    /// Owned layouts. Scalar-only programs need no layout table. Managed
+    /// bytecode must check its required storage domain before using this table;
+    /// IDs are local to it and must never be compared across programs.
+    pub layouts: Option<eitri_types::LayoutStore>,
     /// Each function's logical instructions (`.eits` in memory), when
     /// lowering was asked to keep them.
     pub bodies: Option<IndexVec<FunctionId, Body>>,
@@ -213,6 +217,7 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
     Ok(Program {
         functions,
         entry: ENTRY,
+        layouts: None,
         bodies,
     })
 }

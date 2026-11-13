@@ -215,8 +215,12 @@ impl Context {
         // Everything the code carries: words, constants, sites, signatures,
         // literal types, frame sizes, and spans. Code alone can coincide:
         // `return 1` and `return true` have the same words.
-        let same =
-            old.len() == new.len() && old.iter().zip(new.iter()).all(|(a, b)| a.equivalent(b));
+        // Managed layouts do not yet have a cross-artifact comparison. Reject
+        // instead of accepting coincidentally equal local layout IDs.
+        let same = compiled.program.layouts.is_none()
+            && fresh.program.layouts.is_none()
+            && old.len() == new.len()
+            && old.iter().zip(new.iter()).all(|(a, b)| a.equivalent(b));
         if !same {
             return Err(OptimizeError::SourceMismatch);
         }
@@ -542,6 +546,7 @@ impl Context {
         let program = Program {
             functions,
             entry,
+            layouts: None,
             bodies: Some(IndexVec::from_raw(bodies)),
         };
         let signatures = program.signatures();
@@ -745,10 +750,14 @@ impl Compiled {
     /// Bytes of everything else the functions carry: constants, call
     /// sites, literal types, instruction-start bits, source spans, names,
     /// signatures, and recorded host bindings (heap parts only). Scalar
-    /// function type vectors and owned portable host signatures are counted.
-    /// Artifacts currently retain no layout stores; their layout bytes are zero.
+    /// function type vectors, owned portable host signatures, and frame
+    /// layout table allocations are counted.
     pub fn metadata_bytes(&self) -> usize {
-        self.host_bindings.capacity() * size_of::<HostBinding>()
+        self.program
+            .layouts
+            .as_ref()
+            .map_or(0, |layouts| layouts.heap_bytes())
+            + self.host_bindings.capacity() * size_of::<HostBinding>()
             + self
                 .host_bindings
                 .iter()
@@ -888,6 +897,42 @@ mod root_optimizer_tests {
         let added = (sig.params.capacity() - old) * size_of::<eitri_bytecode::ValueType>();
         assert!(added > 0);
         assert_eq!(compiled.metadata_bytes(), before + added);
+    }
+
+    #[test]
+    fn artifact_owns_and_accounts_for_layouts() {
+        use eitri_types::{LayoutStore, ScalarKind, StorageDomain, TypeDesc, TypeStore};
+
+        let mut context = Context::new();
+        let mut compiled = context.compile(SOURCE).unwrap();
+        let before = compiled.metadata_bytes();
+        let layouts = {
+            let mut types = TypeStore::default();
+            let ty = types.intern(TypeDesc::Scalar(ScalarKind::I64)).unwrap();
+            LayoutStore::for_type(&types, ty, StorageDomain::Frame).unwrap()
+        };
+        let root = layouts.root();
+        let bytes = layouts.heap_bytes();
+        assert!(bytes > 0);
+        compiled.program.layouts = Some(layouts);
+        assert_eq!(compiled.metadata_bytes(), before + bytes);
+        assert!(matches!(
+            context.optimize(&mut compiled, SOURCE),
+            Err(OptimizeError::SourceMismatch)
+        ));
+        drop(context);
+        assert_eq!(
+            compiled
+                .program
+                .layouts
+                .as_ref()
+                .unwrap()
+                .get(root)
+                .unwrap()
+                .frame_slots(),
+            1
+        );
+        assert_eq!(compiled.metadata_bytes(), before + bytes);
     }
 
     #[test]

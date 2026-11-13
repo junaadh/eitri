@@ -715,6 +715,18 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Step 4 (10a–10b): root metadata, structural and scalar coverage checks landed; synthetic managed facts covered; checks and measurements: `/tmp/orchestra/eitri-10b-done.md`.
 - Step 5 (partial): synthetic CFG facts and an active-layout visitor are tested; independently verifiable managed slot transitions, installation and optimization remain; layout accounting awaits owned layouts.
 - Managed-verification decision: verifier-only managed instructions/signatures and guarded dynamic recipes; implementation remains incomplete (12b).
+- Layout accounting foundation: `LayoutStore::heap_bytes` counts retained descriptor
+  and plan allocations; a program can own a layout store, and compiled
+  artifact metadata reports its heap bytes. Scalar programs do not allocate one.
+  Cross-artifact optimization conservatively rejects a retained layout store until
+  its semantic comparison is implemented. Managed production and verification,
+  and connecting their layout IDs and checking storage domains, remain incomplete.
+  T011 (2,001 samples, threaded release): reused module compile p50/p99
+  8.750/10.2 µs, execution 0.209/0.292 µs, total 9.000/10.5 µs;
+  metadata 2,978 B and 48 allocations/4,588 B per run. Raw samples and
+  environment are in `/tmp/orchestra/eitri-t014-layout-ownership-samples.csv`
+  and `/tmp/orchestra/eitri-t014-layout-ownership-bench.txt`; the run was not
+  interleaved with the previous baseline and does not establish a latency change.
 
 ### T015 — Implement allocation and non-moving collection
 
