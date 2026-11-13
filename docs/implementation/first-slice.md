@@ -71,6 +71,17 @@ binding receives the UTF-8 byte offset before the character or line binding.
 Taken loop back edges poll the execution budget.
 Standalone range values and other collection iterators remain future work.
 
+## Local structs (T017-1)
+
+Nonempty structs of up to 256 fields can contain scalar, string, and nested
+struct values. They can be constructed, copied, and read locally; fields can be
+assigned through a `var`. Field initializers run in source order. Inline cycles
+are rejected, and a flattened value is limited to 65,536 frame slots. Structs pass and return through script calls; host-initiated calls to
+aggregate signatures, empty structs, and field defaults are rejected for now.
+Methods declared with `extend` can use explicit `self`; mutating methods require
+mutable receivers. Bare field names and static methods remain unsupported. Layout discovery takes O(declarations + fields) time and space; field
+lookup scans at most 256 fields, for O(256 × source fields) total checking.
+
 ## Types
 
 | Type | Where | Notes |

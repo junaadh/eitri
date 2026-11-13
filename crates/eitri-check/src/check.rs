@@ -45,6 +45,8 @@ pub enum Res {
     None,
     Binding(BindingId),
     Function(FnId),
+    Method(FnId),
+    MutMethod(FnId, BindingId),
     Host(HostFnId),
     StringLen,
     StringIsEmpty,
@@ -63,6 +65,9 @@ pub enum Res {
     StringTrimEnd,
     StringConvert(Ty),
     StringLiteral(u32),
+    Struct(eitri_syntax::ast::StructId),
+    EnumCase(eitri_syntax::ast::EnumId, u32),
+    Field(u32),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
     Convert {
@@ -89,6 +94,12 @@ pub struct Checked {
     /// For `let`: the declared binding; for assignment: the target.
     pub stmt_bindings: IndexVec<StmtId, Option<BindingId>>,
     pub signatures: IndexVec<FnId, Signature>,
+    pub struct_fields: IndexVec<eitri_syntax::ast::StructId, List<Ty>>,
+    pub struct_widths: IndexVec<eitri_syntax::ast::StructId, u32>,
+    pub enum_starts: IndexVec<eitri_syntax::ast::EnumId, u32>,
+    pub enum_widths: IndexVec<eitri_syntax::ast::EnumId, u32>,
+    pub enum_case_types: Vec<List<Ty>>,
+    pub pattern_bindings: IndexVec<TokenId, Option<BindingId>>,
     pub param_types: ListPool<Ty>,
     /// Each function's parameters, in order.
     pub params: IndexVec<FnId, IdRange<BindingId>>,
@@ -116,6 +127,12 @@ impl Checked {
         self.resolutions.clear();
         self.stmt_bindings.clear();
         self.signatures.clear();
+        self.struct_fields.clear();
+        self.struct_widths.clear();
+        self.enum_starts.clear();
+        self.enum_widths.clear();
+        self.enum_case_types.clear();
+        self.pattern_bindings.clear();
         self.param_types.clear();
         self.params.clear();
         self.ints.clear();
@@ -165,6 +182,11 @@ pub struct CheckScratch {
     checked: Checked,
     /// The innermost declaration of each spelling, by symbol index.
     heads: Vec<Option<Name>>,
+    struct_names: Vec<Option<eitri_syntax::ast::StructId>>,
+    enum_names: Vec<Option<eitri_syntax::ast::EnumId>>,
+    struct_states: Vec<u8>,
+    struct_stack: Vec<(eitri_syntax::ast::StructId, usize, u32)>,
+    methods: Vec<FnId>,
     /// Hidden heads to restore when scopes close.
     undo: Vec<(Symbol, Option<Name>)>,
     /// Pending left spines of binary chains.
@@ -196,6 +218,12 @@ impl CheckScratch {
             + c.resolutions.capacity() * size_of::<Res>()
             + c.stmt_bindings.capacity() * size_of::<Option<BindingId>>()
             + c.signatures.capacity() * size_of::<Signature>()
+            + c.struct_fields.capacity() * size_of::<List<Ty>>()
+            + c.struct_widths.capacity() * size_of::<u32>()
+            + c.enum_starts.capacity() * size_of::<u32>()
+            + c.enum_widths.capacity() * size_of::<u32>()
+            + c.enum_case_types.capacity() * size_of::<List<Ty>>()
+            + c.pattern_bindings.capacity() * size_of::<Option<BindingId>>()
             + c.param_types.heap_bytes()
             + c.params.capacity() * size_of::<IdRange<BindingId>>()
             + c.ints.capacity() * size_of::<i64>()
@@ -203,6 +231,11 @@ impl CheckScratch {
             + c.strings.iter().map(String::capacity).sum::<usize>()
             + c.imports.capacity() * size_of::<Option<HostModuleId>>()
             + self.heads.capacity() * size_of::<Option<Name>>()
+            + self.struct_names.capacity() * size_of::<Option<eitri_syntax::ast::StructId>>()
+            + self.enum_names.capacity() * size_of::<Option<eitri_syntax::ast::EnumId>>()
+            + self.struct_states.capacity() * size_of::<u8>()
+            + self.struct_stack.capacity() * size_of::<(eitri_syntax::ast::StructId, usize, u32)>()
+            + self.methods.capacity() * size_of::<FnId>()
             + self.undo.capacity() * size_of::<(Symbol, Option<Name>)>()
             + self.spine.capacity() * size_of::<ExprId>()
             + self.links.capacity() * size_of::<IfLink>()
@@ -239,6 +272,18 @@ impl CheckScratch {
             .reserve_budgeted(count.saturating_sub(c.stmt_bindings.len()), budget)?;
         c.signatures
             .reserve_budgeted(count.saturating_sub(c.signatures.len()), budget)?;
+        c.struct_fields
+            .reserve_budgeted(count.saturating_sub(c.struct_fields.len()), budget)?;
+        c.struct_widths
+            .reserve_budgeted(count.saturating_sub(c.struct_widths.len()), budget)?;
+        c.enum_starts
+            .reserve_budgeted(count.saturating_sub(c.enum_starts.len()), budget)?;
+        c.enum_widths
+            .reserve_budgeted(count.saturating_sub(c.enum_widths.len()), budget)?;
+        let enum_cases = count.saturating_sub(c.enum_case_types.len());
+        budget.reserve_vec(&mut c.enum_case_types, enum_cases)?;
+        c.pattern_bindings
+            .reserve_budgeted(count.saturating_sub(c.pattern_bindings.len()), budget)?;
         c.param_types.reserve_budgeted(count, budget)?;
         c.params
             .reserve_budgeted(count.saturating_sub(c.params.len()), budget)?;
@@ -252,6 +297,11 @@ impl CheckScratch {
         reserve_total!(&mut c.strings, count);
         reserve_total!(&mut c.imports, count);
         reserve_total!(&mut self.heads, symbol_count);
+        reserve_total!(&mut self.struct_names, symbol_count);
+        reserve_total!(&mut self.enum_names, symbol_count);
+        reserve_total!(&mut self.struct_states, count);
+        reserve_total!(&mut self.struct_stack, count);
+        reserve_total!(&mut self.methods, count);
         reserve_total!(&mut self.undo, count);
         reserve_total!(&mut self.spine, count);
         reserve_total!(&mut self.links, count);
@@ -283,6 +333,13 @@ pub fn check<'s>(
 ) -> &'s Checked {
     scratch.checked.clear();
     scratch.heads.clear();
+    scratch.struct_names.clear();
+    scratch.enum_names.clear();
+    scratch.enum_names.resize(input.interner.len(), None);
+    scratch.struct_states.clear();
+    scratch.struct_stack.clear();
+    scratch.methods.clear();
+    scratch.struct_names.resize(input.interner.len(), None);
     scratch.undo.clear();
     scratch.spine.clear();
     scratch.links.clear();
@@ -295,11 +352,20 @@ pub fn check<'s>(
         .resolutions
         .resize(ast.exprs.len(), Res::None);
     scratch.checked.stmt_bindings.resize(ast.stmts.len(), None);
+    scratch
+        .checked
+        .pattern_bindings
+        .resize(input.tokens.len(), None);
     let mut checker = Checker {
         input,
         diagnostics,
         out: &mut scratch.checked,
         heads: &mut scratch.heads,
+        struct_names: &mut scratch.struct_names,
+        enum_names: &mut scratch.enum_names,
+        struct_states: &mut scratch.struct_states,
+        struct_stack: &mut scratch.struct_stack,
+        methods: &mut scratch.methods,
         undo: &mut scratch.undo,
         spine: &mut scratch.spine,
         links: &mut scratch.links,
@@ -325,6 +391,7 @@ enum Params<'i> {
 struct FnContext {
     id: FnId,
     ret: Ty,
+    self_binding: Option<BindingId>,
 }
 
 struct Checker<'a, 'i> {
@@ -332,6 +399,11 @@ struct Checker<'a, 'i> {
     diagnostics: &'a mut Diagnostics,
     out: &'a mut Checked,
     heads: &'a mut Vec<Option<Name>>,
+    struct_names: &'a mut Vec<Option<eitri_syntax::ast::StructId>>,
+    enum_names: &'a mut Vec<Option<eitri_syntax::ast::EnumId>>,
+    struct_states: &'a mut Vec<u8>,
+    struct_stack: &'a mut Vec<(eitri_syntax::ast::StructId, usize, u32)>,
+    methods: &'a mut Vec<FnId>,
     undo: &'a mut Vec<(Symbol, Option<Name>)>,
     spine: &'a mut Vec<ExprId>,
     links: &'a mut Vec<IfLink>,
@@ -509,6 +581,26 @@ impl<'i> Checker<'_, 'i> {
                 );
                 Ty::Error
             }
+            TypeName::Unknown
+                if self
+                    .enum_names
+                    .get(self.symbol(token).index())
+                    .copied()
+                    .flatten()
+                    .is_some() =>
+            {
+                Ty::Enum(self.enum_names[self.symbol(token).index()].unwrap())
+            }
+            TypeName::Unknown
+                if self
+                    .struct_names
+                    .get(self.symbol(token).index())
+                    .copied()
+                    .flatten()
+                    .is_some() =>
+            {
+                Ty::Struct(self.struct_names[self.symbol(token).index()].unwrap())
+            }
             TypeName::Unknown => {
                 self.report(
                     Code::UnknownName,
@@ -553,11 +645,191 @@ impl<'i> Checker<'_, 'i> {
             self.declare(symbol, module.map_or(Name::Poisoned, Name::Module));
         }
 
+        for (id, decl) in ast.enums.iter_enumerated() {
+            let symbol = self.symbol(decl.name);
+            if symbol.index() >= self.enum_names.len() {
+                self.enum_names.resize(symbol.index() + 1, None);
+            }
+            if self.enum_names[symbol.index()].replace(id).is_some() {
+                self.report(
+                    Code::DuplicateName,
+                    "duplicate enum name",
+                    self.token_span(decl.name),
+                );
+            }
+        }
+        // Struct names are indexed by interned symbol, so type lookup is O(1).
+        for (id, decl) in ast.structs.iter_enumerated() {
+            let symbol = self.symbol(decl.name);
+            if symbol.index() >= self.struct_names.len() {
+                self.struct_names.resize(symbol.index() + 1, None);
+            }
+            if self.struct_names[symbol.index()].replace(id).is_some()
+                || self
+                    .enum_names
+                    .get(symbol.index())
+                    .copied()
+                    .flatten()
+                    .is_some()
+            {
+                self.report(
+                    Code::DuplicateName,
+                    "duplicate struct name",
+                    self.token_span(decl.name),
+                );
+            }
+        }
+        for (_, decl) in ast.enums.iter_enumerated() {
+            let cases = &ast.enum_cases[decl.cases];
+            self.out
+                .enum_starts
+                .push(self.out.enum_case_types.len() as u32);
+            if cases.is_empty() || cases.len() > 256 {
+                self.report(
+                    Code::Limit,
+                    "enum must have between 1 and 256 cases",
+                    self.token_span(decl.name),
+                );
+                self.out
+                    .enum_case_types
+                    .extend(std::iter::repeat_n(List::EMPTY, cases.len()));
+                self.out.enum_widths.push(1);
+                continue;
+            }
+            let mut width = 1u32;
+            for case in cases {
+                if cases
+                    .iter()
+                    .filter(|other| self.symbol(other.name) == self.symbol(case.name))
+                    .count()
+                    != 1
+                {
+                    self.report(
+                        Code::DuplicateName,
+                        "duplicate enum case",
+                        self.token_span(case.name),
+                    );
+                }
+                let fields = ast.params(case.fields);
+                if fields.len() > 256 {
+                    self.report(
+                        Code::Limit,
+                        "implementation limit: more than 256 payload fields",
+                        self.token_span(case.name),
+                    );
+                    self.out.enum_case_types.push(List::EMPTY);
+                    continue;
+                }
+                let mut types = [Ty::Error; 256];
+                for (index, field) in fields.iter().enumerate() {
+                    let ty = self.ty(field.ty, false);
+                    if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: aggregate enum payload",
+                            self.token_span(field.name),
+                        );
+                    }
+                    if fields
+                        .iter()
+                        .filter(|other| self.symbol(other.name) == self.symbol(field.name))
+                        .count()
+                        != 1
+                    {
+                        self.report(
+                            Code::DuplicateName,
+                            "duplicate payload field",
+                            self.token_span(field.name),
+                        );
+                    }
+                    types[index] = ty;
+                }
+                width = width.saturating_add(fields.len() as u32);
+                self.out
+                    .enum_case_types
+                    .push(self.out.param_types.push(&types[..fields.len()]));
+            }
+            if width > 65_536 {
+                self.report(
+                    Code::Limit,
+                    "implementation limit: enum exceeds 65536 slots",
+                    self.token_span(decl.name),
+                );
+            }
+            self.out.enum_widths.push(width);
+        }
+        // Field lookup is linear; cap fields so duplicate and initializer checking
+        // remain O(256 * source fields), even for adversarial declarations.
+        for (_, decl) in ast.structs.iter_enumerated() {
+            if ast.params(decl.fields).len() > 256 {
+                self.report(
+                    Code::Limit,
+                    "implementation limit: more than 256 struct fields",
+                    self.token_span(decl.name),
+                );
+                self.out.struct_fields.push(List::EMPTY);
+                continue;
+            }
+            let mut fields = [Ty::Error; 256];
+            let mut field_count = 0;
+            if ast.params(decl.fields).is_empty() {
+                self.report(
+                    Code::Unsupported,
+                    "not supported yet: empty structs",
+                    self.token_span(decl.name),
+                );
+            }
+            for field in ast.params(decl.fields) {
+                let ty = self.ty(field.ty, false);
+                if matches!(ty, Ty::Enum(_)) {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: enum struct fields",
+                        self.token_span(field.name),
+                    );
+                }
+                if ast
+                    .params(decl.fields)
+                    .iter()
+                    .filter(|other| self.symbol(other.name) == self.symbol(field.name))
+                    .count()
+                    != 1
+                {
+                    self.report(
+                        Code::DuplicateName,
+                        "duplicate struct field",
+                        self.token_span(field.name),
+                    );
+                }
+                fields[field_count] = ty;
+                field_count += 1;
+            }
+            let list = self.out.param_types.push(&fields[..field_count]);
+            self.out.struct_fields.push(list);
+        }
+
+        self.struct_layouts();
+        for (id, decl) in ast.fns.iter_enumerated() {
+            if decl.receiver.is_some() {
+                self.methods.push(id);
+            }
+        }
+        if self.methods.len() > 256 {
+            self.report(
+                Code::Limit,
+                "implementation limit: more than 256 methods",
+                Span::default(),
+            );
+            return;
+        }
+
         // Every signature before any body, so calls may come first.
         for (id, decl) in ast.fns.iter_enumerated() {
             let mut params = Vec::new();
             if params
-                .try_reserve_exact(ast.params(decl.params).len())
+                .try_reserve_exact(
+                    ast.params(decl.params).len() + usize::from(decl.receiver.is_some()),
+                )
                 .is_err()
             {
                 self.report(
@@ -567,12 +839,72 @@ impl<'i> Checker<'_, 'i> {
                 );
                 return;
             }
+            if let Some(receiver) = decl.receiver {
+                let ty = self.ty(TypeExpr::Named(receiver), false);
+                if !matches!(ty, Ty::Struct(_) | Ty::Error) {
+                    self.report(
+                        Code::TypeMismatch,
+                        "extension requires a struct",
+                        self.token_span(receiver),
+                    );
+                }
+                params.push(ty);
+                let earlier = self
+                    .methods
+                    .iter()
+                    .take_while(|&&method| method != id)
+                    .map(|&method| &ast.fns[method])
+                    .filter(|other| {
+                        other
+                            .receiver
+                            .is_some_and(|r| self.symbol(r) == self.symbol(receiver))
+                            && self.symbol(other.name) == self.symbol(decl.name)
+                    })
+                    .count();
+                if earlier != 0 {
+                    self.report(
+                        Code::DuplicateName,
+                        "duplicate method",
+                        self.token_span(decl.name),
+                    );
+                }
+            }
             for param in ast.params(decl.params) {
-                params.push(self.ty(param.ty, false));
+                let ty = self.ty(param.ty, false);
+                params.push(ty);
             }
             let ret = self.ty(decl.ret, true);
+            let slots = params
+                .iter()
+                .copied()
+                .chain(std::iter::once(ret))
+                .map(|ty| match ty {
+                    Ty::Void => 0,
+                    Ty::Struct(id) => self.out.struct_widths[id],
+                    Ty::Enum(id) => self.out.enum_widths[id],
+                    _ => 1,
+                })
+                .fold(0u32, u32::saturating_add);
+            let slots = slots.saturating_add(if decl.mutating {
+                params.first().map_or(0, |ty| match ty {
+                    Ty::Struct(id) => self.out.struct_widths[*id],
+                    _ => 0,
+                })
+            } else {
+                0
+            });
+            if slots > 65_536 {
+                self.report(
+                    Code::Limit,
+                    "implementation limit: function signature exceeds 65536 slots",
+                    self.token_span(decl.name),
+                );
+            }
             let params = self.out.param_types.push(&params);
             self.out.signatures.push(Signature { params, ret });
+            if decl.receiver.is_some() {
+                continue;
+            }
             if !self.check_name(decl.name) {
                 continue;
             }
@@ -605,6 +937,58 @@ impl<'i> Checker<'_, 'i> {
         }
     }
 
+    /// Iterative DFS is O(declarations + fields), with O(declarations) scratch.
+    /// Flattened values are bounded by the 65,536-slot bytecode frame.
+    fn struct_layouts(&mut self) {
+        let count = self.input.ast.structs.len();
+        self.struct_states.resize(count, 0);
+        self.out.struct_widths.resize(count, 1);
+        for root in self.input.ast.structs.indices().iter() {
+            if self.struct_states[root.index()] != 0 {
+                continue;
+            }
+            self.struct_states[root.index()] = 1;
+            self.struct_stack.push((root, 0, 0));
+            while let Some(&(id, next, width)) = self.struct_stack.last() {
+                let list = self.out.struct_fields[id];
+                let fields = &self.out.param_types[list];
+                if next == fields.len() {
+                    self.out.struct_widths[id] = width.max(1);
+                    self.struct_states[id.index()] = 2;
+                    self.struct_stack.pop();
+                    continue;
+                }
+                let field = fields[next];
+                let field_width = match field {
+                    Ty::Struct(child) if self.struct_states[child.index()] == 0 => {
+                        self.struct_states[child.index()] = 1;
+                        self.struct_stack.push((child, 0, 0));
+                        continue;
+                    }
+                    Ty::Struct(child) if self.struct_states[child.index()] == 1 => {
+                        self.report(
+                            Code::TypeMismatch,
+                            "recursive inline struct type",
+                            self.token_span(self.input.ast.structs[id].name),
+                        );
+                        1
+                    }
+                    Ty::Struct(child) => self.out.struct_widths[child],
+                    _ => 1,
+                };
+                let total = width.saturating_add(field_width);
+                if total > 65_536 {
+                    self.report(
+                        Code::Limit,
+                        "implementation limit: struct exceeds 65536 slots",
+                        self.token_span(self.input.ast.structs[id].name),
+                    );
+                }
+                *self.struct_stack.last_mut().unwrap() = (id, next + 1, total.min(65_537));
+            }
+        }
+    }
+
     fn function(&mut self, id: FnId) {
         let ast = self.input.ast;
         let decl = ast.fns[id];
@@ -612,11 +996,22 @@ impl<'i> Checker<'_, 'i> {
         self.current = Some(FnContext {
             id,
             ret: signature.ret,
+            self_binding: None,
         });
         let mark = self.mark();
         let first = self.out.bindings.next_index();
+        let offset = usize::from(decl.receiver.is_some());
+        if let Some(receiver) = decl.receiver {
+            let binding = self.out.bindings.push(Binding {
+                name: receiver,
+                mutable: decl.mutating,
+                ty: self.out.param_types[signature.params][0],
+                owner: Some(id),
+            });
+            self.current.as_mut().unwrap().self_binding = Some(binding);
+        }
         for (index, param) in ast.params(decl.params).iter().enumerate() {
-            let ty = self.out.param_types[signature.params][index];
+            let ty = self.out.param_types[signature.params][index + offset];
             let duplicate = ast.params(decl.params)[..index]
                 .iter()
                 .any(|earlier| self.symbol(earlier.name) == self.symbol(param.name));
@@ -735,6 +1130,50 @@ impl<'i> Checker<'_, 'i> {
             Stmt::Expr(expr) => {
                 self.expr(expr, None, false);
             }
+            Stmt::AssignField {
+                target, op, value, ..
+            } => {
+                let ty = self.value(target, None);
+                let Expr::Member { base, .. } = self.ast().exprs[target] else {
+                    unreachable!()
+                };
+                let mut root = base;
+                while let Expr::Member { base, .. } = self.ast().exprs[root] {
+                    root = base;
+                }
+                let binding = match self.ast().exprs[root] {
+                    Expr::Name(_) | Expr::SelfValue(_) => match self.out.resolutions[root] {
+                        Res::Binding(b) => Some(b),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if !binding.is_some_and(|b| self.out.bindings[b].mutable) {
+                    self.report(
+                        Code::AssignToImmutable,
+                        "cannot assign through an immutable value",
+                        self.span(target),
+                    );
+                }
+                if let AssignOp::Compound(binary) = op
+                    && !valid_operand(binary, ty)
+                {
+                    self.mismatch(ty, Ty::I64, self.span(target));
+                }
+                if matches!(op, AssignOp::Compound(_)) && ty == Ty::String {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: compound assignment to string fields",
+                        self.span(target),
+                    );
+                }
+                let shifts = matches!(op, AssignOp::Compound(BinaryOp::Shl | BinaryOp::Shr));
+                let rhs = self.value(value, if shifts { None } else { Some(ty) });
+                if shifts && rhs != Ty::Error && !rhs.integer() {
+                    self.mismatch(rhs, Ty::I64, self.span(value));
+                }
+                self.out.stmt_bindings[id] = binding;
+            }
             Stmt::For(for_id) => {
                 let eitri_syntax::ast::ForStmt {
                     name,
@@ -841,7 +1280,12 @@ impl<'i> Checker<'_, 'i> {
     }
 
     fn assign(&mut self, stmt: StmtId, target: TokenId, op: AssignOp, value: ExprId) {
-        let binding = match self.resolve(target) {
+        let resolved = if self.input.tokens.kind(target) == eitri_syntax::TokenKind::SelfLower {
+            self.current.and_then(|f| f.self_binding).map(Name::Binding)
+        } else {
+            self.resolve(target)
+        };
+        let binding = match resolved {
             Some(Name::Binding(b)) => Some(b),
             Some(Name::Function(_) | Name::Module(_)) => None,
             Some(Name::Poisoned) | None => {
@@ -980,8 +1424,36 @@ impl<'i> Checker<'_, 'i> {
             }
             Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
             Expr::Bool(_) => Ty::Bool,
+            Expr::SelfValue(token) => {
+                if let Some(binding) = self.current.and_then(|f| f.self_binding) {
+                    self.out.resolutions[expr] = Res::Binding(binding);
+                    self.out.bindings[binding].ty
+                } else {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: `self` outside methods",
+                        self.token_span(token),
+                    );
+                    Ty::Error
+                }
+            }
             Expr::Name(token) => self.name(expr, token),
-            Expr::Member { base, name } => self.member_value(base, name),
+            Expr::StructLiteral { name, fields } => self.struct_literal(expr, name, fields),
+            Expr::EnumShorthand(name) => self.enum_value(expr, None, name, expected, None),
+            Expr::NamedCall { callee, args } => self.enum_named_call(expr, callee, args, expected),
+            Expr::Member { base, name } => {
+                if let Expr::Name(token) = self.ast().exprs[base]
+                    && let Some(id) = self
+                        .enum_names
+                        .get(self.symbol(token).index())
+                        .copied()
+                        .flatten()
+                {
+                    self.enum_value(expr, Some(id), name, expected, None)
+                } else {
+                    self.member_value(expr, base, name)
+                }
+            }
             Expr::Unary { op, operand } => {
                 let operand_ty = if op == UnaryOp::Not {
                     Some(Ty::Bool)
@@ -1016,6 +1488,7 @@ impl<'i> Checker<'_, 'i> {
             Expr::Binary { .. } => self.binary_chain(expr, expected),
             Expr::Call { callee, args } => self.call(expr, callee, args),
             Expr::If(id) => self.if_expr(expr, id, expected, used),
+            Expr::Match(id) => self.match_expr(expr, id, expected, used),
             Expr::Error => Ty::Error,
         };
         self.out.types[expr] = ty;
@@ -1236,7 +1709,309 @@ impl<'i> Checker<'_, 'i> {
         }
     }
 
-    fn member_value(&mut self, base: ExprId, name: TokenId) -> Ty {
+    fn match_expr(
+        &mut self,
+        expr: ExprId,
+        id: eitri_syntax::ast::MatchId,
+        expected: Option<Ty>,
+        used: bool,
+    ) -> Ty {
+        let node = self.ast().matches[id];
+        let subject = self.value(node.subject, None);
+        let Ty::Enum(enum_id) = subject else {
+            if subject != Ty::Error {
+                self.report(
+                    Code::TypeMismatch,
+                    "match requires an enum",
+                    self.span(node.subject),
+                );
+            }
+            return Ty::Error;
+        };
+        let cases = &self.ast().enum_cases[self.ast().enums[enum_id].cases];
+        if cases.len() > 256 {
+            return Ty::Error;
+        }
+        let mut covered = [false; 256];
+        let mut fallback = false;
+        let mut result = expected;
+        for arm in &self.ast().match_arms[node.arms] {
+            let mark = self.mark();
+            if let Some(case) = arm.case {
+                if let Some(index) = cases
+                    .iter()
+                    .position(|item| self.symbol(item.name) == self.symbol(case))
+                {
+                    covered[index] = true;
+                    let fields = self.ast().params(cases[index].fields);
+                    let bindings = &self.ast().match_bindings[arm.bindings];
+                    if !bindings.is_empty() && bindings.len() != fields.len() {
+                        self.report(
+                            Code::ArgumentCount,
+                            "pattern payload arity mismatch",
+                            self.token_span(case),
+                        );
+                    }
+                    let types =
+                        self.out.enum_case_types[self.out.enum_starts[enum_id] as usize + index];
+                    for (i, &token) in bindings.iter().enumerate() {
+                        if self.input.tokens.kind(token) == eitri_syntax::TokenKind::Wildcard {
+                            continue;
+                        }
+                        let ty = self.out.param_types[types]
+                            .get(i)
+                            .copied()
+                            .unwrap_or(Ty::Error);
+                        let binding = self.new_binding(token, false, ty);
+                        self.out.pattern_bindings[token] = Some(binding);
+                    }
+                } else {
+                    self.report(
+                        Code::UnknownName,
+                        "unknown enum case",
+                        self.token_span(case),
+                    );
+                }
+            } else {
+                fallback = true;
+            }
+            let ty = match arm.body {
+                eitri_syntax::ast::MatchBody::Expr(body) => {
+                    if used {
+                        self.value(body, result)
+                    } else {
+                        self.expr(body, None, false);
+                        Ty::Void
+                    }
+                }
+                eitri_syntax::ast::MatchBody::Block(body) => {
+                    if used {
+                        self.block_value(body, result)
+                    } else {
+                        self.statements(body);
+                        Ty::Void
+                    }
+                }
+            };
+            if used && result.is_none() && ty != Ty::Error {
+                result = Some(ty);
+            }
+            self.restore(mark);
+        }
+        if cases.len() > 256 || (!fallback && covered[..cases.len()].iter().any(|seen| !seen)) {
+            self.report(Code::TypeMismatch, "non-exhaustive match", self.span(expr));
+        }
+        if used {
+            result.unwrap_or(Ty::Error)
+        } else {
+            Ty::Void
+        }
+    }
+
+    fn enum_value(
+        &mut self,
+        expr: ExprId,
+        owner: Option<eitri_syntax::ast::EnumId>,
+        name: TokenId,
+        expected: Option<Ty>,
+        args: Option<List<eitri_syntax::ast::FieldInit>>,
+    ) -> Ty {
+        let id = owner.or(match expected {
+            Some(Ty::Enum(id)) => Some(id),
+            _ => None,
+        });
+        let Some(id) = id else {
+            self.report(
+                Code::TypeMismatch,
+                "enum case requires an expected type",
+                self.span(expr),
+            );
+            return Ty::Error;
+        };
+        let cases = &self.ast().enum_cases[self.ast().enums[id].cases];
+        let Some(index) = cases
+            .iter()
+            .position(|case| self.symbol(case.name) == self.symbol(name))
+        else {
+            self.report(
+                Code::UnknownName,
+                "unknown enum case",
+                self.token_span(name),
+            );
+            return Ty::Error;
+        };
+        let fields = self.ast().params(cases[index].fields);
+        let types = self.out.enum_case_types[self.out.enum_starts[id] as usize + index];
+        if fields.len() > 256 {
+            return Ty::Error;
+        }
+        let mut seen = [false; 256];
+        if let Some(args) = args {
+            for arg in &self.ast().field_inits[args] {
+                if let Some(i) = fields
+                    .iter()
+                    .position(|f| self.symbol(f.name) == self.symbol(arg.name))
+                {
+                    if std::mem::replace(&mut seen[i], true) {
+                        self.report(
+                            Code::DuplicateName,
+                            "duplicate payload initializer",
+                            self.token_span(arg.name),
+                        );
+                    }
+                    self.value(arg.value, Some(self.out.param_types[types][i]));
+                } else {
+                    self.report(
+                        Code::UnknownName,
+                        "unknown payload field",
+                        self.token_span(arg.name),
+                    );
+                    self.value(arg.value, None);
+                }
+            }
+        }
+        if fields.len() > 256 || seen[..fields.len()].iter().any(|seen| !seen) {
+            self.report(
+                Code::ArgumentCount,
+                "missing enum payload field",
+                self.span(expr),
+            );
+        }
+        self.out.resolutions[expr] = Res::EnumCase(id, index as u32);
+        Ty::Enum(id)
+    }
+
+    fn enum_named_call(
+        &mut self,
+        expr: ExprId,
+        callee: ExprId,
+        args: List<eitri_syntax::ast::FieldInit>,
+        expected: Option<Ty>,
+    ) -> Ty {
+        match self.ast().exprs[callee] {
+            Expr::EnumShorthand(name) => self.enum_value(expr, None, name, expected, Some(args)),
+            Expr::Member { base, name } => {
+                if let Expr::Name(token) = self.ast().exprs[base]
+                    && let Some(id) = self
+                        .enum_names
+                        .get(self.symbol(token).index())
+                        .copied()
+                        .flatten()
+                {
+                    self.enum_value(expr, Some(id), name, expected, Some(args))
+                } else {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: labeled arguments",
+                        self.span(expr),
+                    );
+                    Ty::Error
+                }
+            }
+            _ => {
+                self.report(
+                    Code::Unsupported,
+                    "not supported yet: labeled arguments",
+                    self.span(expr),
+                );
+                Ty::Error
+            }
+        }
+    }
+
+    fn struct_literal(
+        &mut self,
+        expr: ExprId,
+        name: TokenId,
+        fields: List<eitri_syntax::ast::FieldInit>,
+    ) -> Ty {
+        let Some(id) = self
+            .struct_names
+            .get(self.symbol(name).index())
+            .copied()
+            .flatten()
+        else {
+            self.report(
+                Code::UnknownName,
+                "unknown struct type",
+                self.token_span(name),
+            );
+            return Ty::Error;
+        };
+        let decl = self.input.ast.structs[id];
+        let declared = self.input.ast.params(decl.fields);
+        let types = self.out.struct_fields[id];
+        if declared.len() > 256 {
+            return Ty::Error;
+        }
+        let mut seen = [false; 256];
+        for field in &self.input.ast.field_inits[fields] {
+            let index = declared
+                .iter()
+                .position(|f| self.symbol(f.name) == self.symbol(field.name));
+            if let Some(index) = index {
+                if std::mem::replace(&mut seen[index], true) {
+                    self.report(
+                        Code::DuplicateName,
+                        "duplicate field initializer",
+                        self.token_span(field.name),
+                    );
+                }
+                self.value(field.value, Some(self.out.param_types[types][index]));
+            } else {
+                self.report(
+                    Code::UnknownName,
+                    "unknown struct field",
+                    self.token_span(field.name),
+                );
+                self.value(field.value, None);
+            }
+        }
+        if seen[..declared.len()].iter().any(|&field| !field) {
+            self.report(Code::TypeMismatch, "missing struct field", self.span(expr));
+        }
+        self.out.resolutions[expr] = Res::Struct(id);
+        Ty::Struct(id)
+    }
+
+    fn member_value(&mut self, expr: ExprId, base: ExprId, name: TokenId) -> Ty {
+        let may_be_struct = match self.input.ast.exprs[base] {
+            Expr::Name(token) => match self.lookup(self.symbol(token)) {
+                Some(Name::Binding(binding)) => {
+                    matches!(self.out.bindings[binding].ty, Ty::Struct(_))
+                }
+                _ => false,
+            },
+            _ => true,
+        };
+        if may_be_struct {
+            if let Ty::Struct(id) = self.value(base, None) {
+                let fields = self.input.ast.params(self.input.ast.structs[id].fields);
+                if let Some(index) = fields
+                    .iter()
+                    .position(|f| self.symbol(f.name) == self.symbol(name))
+                {
+                    let fields = &self.out.param_types[self.out.struct_fields[id]];
+                    if let Some(&ty) = fields.get(index) {
+                        self.out.resolutions[expr] = Res::Field(index as u32);
+                        return ty;
+                    }
+                    return Ty::Error;
+                }
+                self.report(
+                    Code::UnknownName,
+                    "unknown struct field",
+                    self.token_span(name),
+                );
+                return Ty::Error;
+            }
+            self.report(
+                Code::Unsupported,
+                "not supported yet: member access",
+                self.token_span(name),
+            );
+            return Ty::Error;
+        }
         if self.host_function(base, name).is_ok() {
             self.report(
                 Code::Unsupported,
@@ -1251,6 +2026,80 @@ impl<'i> Checker<'_, 'i> {
         let ast = self.input.ast;
         if matches!(ast.exprs[callee], Expr::Name(token) if self.symbol(token).is_type_name()) {
             return self.conversion(expr, callee, ast.args(args), true);
+        }
+        if let Expr::Member { base, name } = ast.exprs[callee]
+            && self
+                .methods
+                .iter()
+                .any(|&id| self.symbol(ast.fns[id].name) == self.symbol(name))
+            && !matches!(ast.exprs[base], Expr::Name(token) if matches!(self.lookup(self.symbol(token)), Some(Name::Module(_))))
+        {
+            let receiver = self.value(base, None);
+            if let Ty::Struct(owner) = receiver {
+                let method = self
+                    .methods
+                    .iter()
+                    .copied()
+                    .map(|id| (id, &ast.fns[id]))
+                    .find(|(_, method)| {
+                        method.receiver.is_some_and(|token| {
+                            self.struct_names
+                                .get(self.symbol(token).index())
+                                .copied()
+                                .flatten()
+                                == Some(owner)
+                        }) && self.symbol(method.name) == self.symbol(name)
+                    })
+                    .map(|(id, _)| id);
+                if let Some(method) = method {
+                    let signature = self.out.signatures[method];
+                    let types = signature.params;
+                    let expected_count = types.len() - 1;
+                    if ast.args(args).len() != expected_count {
+                        self.report(
+                            Code::ArgumentCount,
+                            format!("method takes {expected_count} arguments"),
+                            self.span(expr),
+                        );
+                    }
+                    for (index, &arg) in ast.args(args).iter().enumerate() {
+                        let expected = self.out.param_types[types].get(index + 1).copied();
+                        self.value(arg, expected);
+                    }
+                    if ast.fns[method].mutating {
+                        let mut root = base;
+                        while let Expr::Member { base, .. } = ast.exprs[root] {
+                            root = base;
+                        }
+                        let binding = match self.out.resolutions[root] {
+                            Res::Binding(binding) => Some(binding),
+                            _ => None,
+                        };
+                        if !binding.is_some_and(|binding| self.out.bindings[binding].mutable) {
+                            self.report(
+                                Code::AssignToImmutable,
+                                "mutating method requires a mutable receiver",
+                                self.span(base),
+                            );
+                        }
+                        if let Some(binding) = binding {
+                            self.out.resolutions[expr] = Res::MutMethod(method, binding);
+                        }
+                    } else {
+                        self.out.resolutions[expr] = Res::Method(method);
+                    }
+                    return signature.ret;
+                }
+                self.report(
+                    Code::UnknownName,
+                    "unknown struct method",
+                    self.token_span(name),
+                );
+                for &arg in ast.args(args) {
+                    self.value(arg, None);
+                }
+                return Ty::Error;
+            }
         }
         if let Expr::Member { base, name } = ast.exprs[callee]
             && matches!(
@@ -1631,7 +2480,7 @@ fn valid_operand(op: BinaryOp, ty: Ty) -> bool {
     match op {
         Coalesce => false,
         And | Or => ty == Ty::Bool,
-        Eq | NotEq => ty != Ty::Void,
+        Eq | NotEq => ty != Ty::Void && !matches!(ty, Ty::Struct(_) | Ty::Enum(_)),
         Lt | LtEq | Gt | GtEq => ty.numeric() || matches!(ty, Ty::Char | Ty::String),
         Add => ty.numeric() || ty == Ty::String,
         Sub | Mul | Div | Rem => ty.numeric(),

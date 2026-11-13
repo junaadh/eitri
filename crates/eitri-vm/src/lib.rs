@@ -60,6 +60,7 @@ pub enum FaultKind {
     ShiftAmount,
     Conversion,
     InvalidStringSlice,
+    InvalidEnumPayload,
     Budget,
     Depth,
     OutOfMemory,
@@ -88,6 +89,7 @@ impl FaultKind {
             FaultKind::ShiftAmount => "invalid shift amount",
             FaultKind::Conversion => "numeric conversion out of range",
             FaultKind::InvalidStringSlice => "invalid string slice boundary",
+            FaultKind::InvalidEnumPayload => "invalid enum payload",
             FaultKind::Budget => "execution budget exhausted",
             FaultKind::Depth => "call depth exceeded",
             FaultKind::OutOfMemory => "managed memory limit exceeded",
@@ -506,11 +508,10 @@ impl<'c> Call<'c, '_> {
         let m = &mut *self.machine;
         let callee = &m.functions[function.id];
         let signature = &callee.signature;
-        let mismatch = args.len() != signature.params.len()
+        let mismatch = !callee.reentry_safe
+            || args.len() != signature.params.len()
             || results.len() != signature.results.len()
-            || signature
-                .results
-                .contains(&eitri_bytecode::ValueType::String)
+            || signature.results.iter().any(|ty| ty.is_managed())
             || args
                 .iter()
                 .zip(&signature.params)
@@ -578,7 +579,9 @@ impl<'c> Call<'c, '_> {
         let m = &mut *self.machine;
         let callee = &m.functions[function.id];
         let signature = &callee.signature;
-        let invalid = args.len() != signature.params.len()
+        let invalid = !callee.reentry_safe
+            || signature.results.contains(&ValueType::NullableString)
+            || args.len() != signature.params.len()
             || signature.results.len() > 1
             || args
                 .iter()
@@ -1176,7 +1179,9 @@ fn format_type_op(ty: eitri_bytecode::ValueType) -> Op {
         ValueType::F64 => Op::StrFmtF64,
         ValueType::Bool => Op::StrFmtBool,
         ValueType::Char => Op::StrFmtChar,
-        ValueType::String => unreachable!("strings use their managed payload"),
+        ValueType::String | ValueType::NullableString => {
+            unreachable!("strings use their managed payload")
+        }
     }
 }
 
@@ -1505,6 +1510,36 @@ fn execute(
                     };
                 }
                 match op {
+                    Op::NullableNull => {
+                        if m.force_gc {
+                            collect_at(
+                                m.heap,
+                                m.references,
+                                (m.host_roots, m.frames, m.memory),
+                                functions,
+                                id,
+                                base,
+                                start,
+                            )
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        }
+                        let length = m.references.len().max(base + function.frame_size as usize);
+                        resize_vm(m.references, length, None, m.memory)
+                            .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                        m.references[base + a!()] = None;
+                    }
+                    Op::NullableWrap | Op::NullableUnwrap => {
+                        let value = m.references[base + b!()];
+                        if op == Op::NullableUnwrap && value.is_none() {
+                            return Err(fault(
+                                &m.frames[floor..],
+                                FaultKind::InvalidEnumPayload,
+                                id,
+                                start,
+                            ));
+                        }
+                        m.references[base + a!()] = value;
+                    }
                     Op::Mov => {
                         s[a!()] = s[b!()];
                         if !m.references.is_empty() {
@@ -1958,11 +1993,7 @@ fn execute(
                                     callee_base + callee_fn.signature.param_base() as usize;
                                 let from = base + site.args.first as usize;
                                 copy_slots(m.slots, from, params, site.args.count as usize);
-                                if callee_fn
-                                    .signature
-                                    .params
-                                    .contains(&eitri_bytecode::ValueType::String)
-                                {
+                                if callee_fn.signature.params.iter().any(|ty| ty.is_managed()) {
                                     let length = m.references.len().max(end);
                                     resize_vm(m.references, length, None, m.memory).map_err(
                                         |kind| fault(&m.frames[floor..], kind, id, start),
@@ -2001,11 +2032,7 @@ fn execute(
                         let caller_fn = &functions[caller.function];
                         let to = caller.base + caller.result as usize;
                         copy_slots(m.slots, base, to, count);
-                        if function
-                            .signature
-                            .results
-                            .contains(&eitri_bytecode::ValueType::String)
-                        {
+                        if function.signature.results.iter().any(|ty| ty.is_managed()) {
                             m.references.copy_within(base..base + count, to);
                         }
                         id = caller.function;

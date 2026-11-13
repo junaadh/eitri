@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+struct Inner { n: i64, text: string }
+struct Outer { first: Inner, tail: i64, second: Inner }
+var value = Outer { first: Inner { n: 1, text: "one" }, tail: 7, second: Inner { n: 2, text: "two" } }
+let copy = value
+value.first.n = 10
+value.first.text = "changed"
+value.second = value.first
+test.emit(value.first.n)
+test.check(value.second.text == "changed")
+test.emit(copy.first.n)
+test.check(copy.first.text == "one")
+test.emit(value.tail)

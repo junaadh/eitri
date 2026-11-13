@@ -1,0 +1,23 @@
+//! host: test
+import test from "test"
+enum Message { Empty, Text(value: string), Number(n: i64) }
+fn pass(v: Message) -> Message { return v }
+let a = Message.Text(value: "hello")
+let b = pass(a)
+let c: Message = .Empty
+let d: Message = .Number(n: 7)
+test.check(true)
+let length = match b {
+    .Empty => 0,
+    .Text(value) => value.len(),
+    .Number(n) => n,
+}
+test.emit(length)
+let n = match d {
+    .Text(value) => value.len(),
+    .Empty => 0,
+    .Number(value) => value,
+}
+test.emit(n)
+let zero = match c { .Empty => 9, _ => 0 }
+test.emit(zero)

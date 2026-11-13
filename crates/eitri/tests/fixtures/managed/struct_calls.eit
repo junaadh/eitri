@@ -1,0 +1,19 @@
+//! host: test
+import test from "test"
+struct Item { n: i64, text: string }
+struct Pair { item: Item, count: i64 }
+fn adjust(p: Pair, delta: i64) -> Pair {
+    var result = p
+    result.item.n += delta
+    result.item.text = result.item.text + "!"
+    return result
+}
+fn score(p: Pair) -> i64 {
+    return p.item.n + p.count
+}
+let old = Pair { item: Item { n: 3, text: "x" }, count: 5 }
+let updated = adjust(old, 4)
+test.emit(score(updated))
+test.check(updated.item.text == "x!")
+test.emit(old.item.n)
+test.check(old.item.text == "x")

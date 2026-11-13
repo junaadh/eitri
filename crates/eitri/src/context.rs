@@ -325,13 +325,14 @@ impl Context {
         let bodies = compiled.program.bodies.take().expect("checked above");
         let mut kept = IndexVec::with_capacity(bodies.len());
         for (function, body) in functions.as_mut_slice().iter_mut().zip(bodies.iter()) {
-            if !function.strings.is_empty()
+            if !function.reentry_safe
+                || !function.strings.is_empty()
                 || function
                     .signature
                     .params
                     .iter()
                     .chain(&function.signature.results)
-                    .any(|t| *t == eitri_bytecode::ValueType::String)
+                    .any(|t| t.is_managed())
                 || !function.roots.can_regenerate_scalar()
             {
                 report.skipped += 1;
@@ -346,7 +347,8 @@ impl Context {
                 &mut self.scratch.recording,
             );
             match built {
-                Ok((code, body)) if eitri_bytecode::verify(&code, &callees).is_ok() => {
+                Ok((mut code, body)) if eitri_bytecode::verify(&code, &callees).is_ok() => {
+                    code.reentry_safe = function.reentry_safe;
                     *function = code;
                     kept.push(body);
                 }
@@ -736,12 +738,27 @@ impl Context {
             hosts: &registered,
         };
         let managed = functions.iter().any(|f| {
-            !f.strings.is_empty()
+            let mut pc = 0;
+            let mut nullable = false;
+            while pc < f.code.len() {
+                let Ok(decoded) = eitri_bytecode::decode(&f.code, pc) else {
+                    break;
+                };
+                nullable |= matches!(
+                    decoded.op,
+                    eitri_bytecode::Op::NullableNull
+                        | eitri_bytecode::Op::NullableWrap
+                        | eitri_bytecode::Op::NullableUnwrap
+                );
+                pc += decoded.words as usize;
+            }
+            nullable
+                || !f.strings.is_empty()
                 || f.signature
                     .params
                     .iter()
                     .chain(&f.signature.results)
-                    .any(|t| *t == eitri_bytecode::ValueType::String)
+                    .any(|t| t.is_managed())
                 || f.sites.iter().any(|site| match site.target {
                     CallTarget::Host(index) => {
                         registered.get(index as usize).is_some_and(|signature| {
@@ -749,7 +766,7 @@ impl Context {
                                 .params
                                 .iter()
                                 .chain(&signature.results)
-                                .any(|t| *t == eitri_bytecode::ValueType::String)
+                                .any(|t| t.is_managed())
                         })
                     }
                     CallTarget::Script(_) => false,

@@ -530,6 +530,13 @@ impl<'i> Checker<'_, 'i> {
             Stmt::Expr(expr) => {
                 self.expr(expr, None, false);
             }
+            Stmt::AssignField { target, .. } => {
+                self.report(
+                    Code::Unsupported,
+                    "not supported yet: assignment to fields",
+                    self.span(target),
+                );
+            }
             Stmt::For(for_id) => {
                 let eitri_syntax::ast::ForStmt {
                     name,
@@ -689,6 +696,25 @@ impl<'i> Checker<'_, 'i> {
         let ty = match self.input.ast.exprs[expr] {
             Expr::Int { token, negative } => self.int(expr, token, negative),
             Expr::Bool(_) => Ty::Bool,
+            Expr::Match(_) | Expr::EnumShorthand(_) | Expr::NamedCall { .. } => {
+                unreachable!("outside frozen M0 reference")
+            }
+            Expr::SelfValue(token) => {
+                self.report(
+                    Code::Unsupported,
+                    "not supported yet: `self`",
+                    self.token_span(token),
+                );
+                Ty::Error
+            }
+            Expr::StructLiteral { name, .. } => {
+                self.report(
+                    Code::Unsupported,
+                    "not supported yet: struct literals",
+                    self.token_span(name),
+                );
+                Ty::Error
+            }
             Expr::Name(token) => self.name(expr, token),
             Expr::Member { base, name } => self.member_value(base, name),
             Expr::Unary { op, operand } => {

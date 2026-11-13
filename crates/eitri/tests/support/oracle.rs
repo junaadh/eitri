@@ -167,6 +167,7 @@ impl Oracle {
             return None;
         }
         let mut eval = Eval {
+            structs: Vec::new(),
             tokens,
             ast,
             checked,
@@ -204,6 +205,8 @@ enum Value {
     Scalar(Ty, u64),
     Bool(bool),
     String(u32),
+    Struct(eitri_syntax::ast::StructId, u32),
+    Enum(eitri_syntax::ast::EnumId, u32, u32),
     Void,
 }
 
@@ -242,6 +245,8 @@ impl Value {
             Self::Int(_) => Ty::I64,
             Self::Bool(_) => Ty::Bool,
             Self::String(_) => Ty::String,
+            Self::Struct(id, _) => Ty::Struct(id),
+            Self::Enum(id, _, _) => Ty::Enum(id),
             Self::Scalar(ty, _) => ty,
             Self::Void => Ty::Void,
         }
@@ -288,7 +293,7 @@ impl Value {
             Value::Int(value) => value as u64,
             Value::Scalar(_, word) => word,
             Value::Bool(value) => u64::from(value),
-            Value::String(_) | Value::Void => {
+            Value::String(_) | Value::Struct(_, _) | Value::Enum(_, _, _) | Value::Void => {
                 unreachable!("the checker rejects managed or void host arguments")
             }
         }
@@ -307,6 +312,7 @@ type Flow<T> = Result<T, Unwind>;
 
 struct Eval<'a> {
     strings: Vec<String>,
+    structs: Vec<Vec<Value>>,
     tokens: &'a Tokens,
     ast: &'a Ast,
     checked: &'a Checked,
@@ -332,8 +338,17 @@ impl Eval<'_> {
         match function {
             None => "<module>".to_owned(),
             Some(f) => {
-                let token = self.ast.fns[f].name;
-                self.interner.resolve(self.tokens.symbol(token)).to_owned()
+                let decl = self.ast.fns[f];
+                let name = self.interner.resolve(self.tokens.symbol(decl.name));
+                if let Some(receiver) = decl.receiver {
+                    format!(
+                        "{}.{}",
+                        self.interner.resolve(self.tokens.symbol(receiver)),
+                        name
+                    )
+                } else {
+                    name.to_owned()
+                }
             }
         }
     }
@@ -390,6 +405,46 @@ impl Eval<'_> {
                     }
                 };
                 self.locals[binding.index()] = Some(new);
+            }
+            Stmt::AssignField {
+                target,
+                op,
+                value,
+                span,
+            } => {
+                let binding = self.checked.stmt_bindings[id].expect("checked field assignment");
+                let rhs = self.expr(host, value)?;
+                let mut path = Vec::new();
+                let mut node = target;
+                while let Expr::Member { base, .. } = self.ast.exprs[node] {
+                    let Res::Field(field) = self.checked.resolutions[node] else {
+                        unreachable!()
+                    };
+                    path.push(field as usize);
+                    node = base;
+                }
+                path.reverse();
+                let mut current = self.read(binding);
+                let mut parents = Vec::new();
+                for &field in &path {
+                    let Value::Struct(ty, index) = current else {
+                        unreachable!()
+                    };
+                    parents.push((ty, index, field));
+                    current = self.structs[index as usize][field];
+                }
+                let mut updated = match op {
+                    AssignOp::Set => rhs,
+                    AssignOp::Compound(op) => self.binary_values(op, current, rhs, span)?,
+                };
+                for (ty, index, field) in parents.into_iter().rev() {
+                    let mut fields = self.structs[index as usize].clone();
+                    fields[field] = updated;
+                    let next = self.structs.len() as u32;
+                    self.structs.push(fields);
+                    updated = Value::Struct(ty, next);
+                }
+                self.locals[binding.index()] = Some(updated);
             }
             Stmt::Expr(expr) => return self.expr(host, expr),
             Stmt::Break(_) => return Err(Unwind::Break),
@@ -515,17 +570,93 @@ impl Eval<'_> {
         Ok(Value::Void)
     }
 
+    fn write_lvalue(&mut self, target: ExprId, binding: BindingId, mut updated: Value) {
+        let mut path = Vec::new();
+        let mut node = target;
+        while let Expr::Member { base, .. } = self.ast.exprs[node] {
+            let Res::Field(field) = self.checked.resolutions[node] else {
+                unreachable!()
+            };
+            path.push(field as usize);
+            node = base;
+        }
+        path.reverse();
+        let mut current = self.read(binding);
+        let mut parents = Vec::new();
+        for field in path {
+            let Value::Struct(ty, index) = current else {
+                unreachable!()
+            };
+            parents.push((ty, index, field));
+            current = self.structs[index as usize][field];
+        }
+        for (ty, index, field) in parents.into_iter().rev() {
+            let mut fields = self.structs[index as usize].clone();
+            fields[field] = updated;
+            let next = self.structs.len() as u32;
+            self.structs.push(fields);
+            updated = Value::Struct(ty, next);
+        }
+        self.locals[binding.index()] = Some(updated);
+    }
+
     fn read(&self, binding: BindingId) -> Value {
         self.locals[binding.index()].expect("the checker rejects use before initialization")
     }
 
     fn expr(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
         let span = self.ast.span(e);
+        if let Res::EnumCase(id, case) = self.checked.resolutions[e] {
+            let declaration = self.ast.enum_cases[self.ast.enums[id].cases][case as usize];
+            let fields = self.ast.params(declaration.fields);
+            let mut values = vec![Value::Void; fields.len()];
+            if let Expr::NamedCall { args, .. } = self.ast.exprs[e] {
+                for arg in &self.ast.field_inits[args] {
+                    let index = fields
+                        .iter()
+                        .position(|field| {
+                            self.tokens.symbol(field.name) == self.tokens.symbol(arg.name)
+                        })
+                        .unwrap();
+                    values[index] = self.expr(host, arg.value)?;
+                }
+            }
+            let index = self.structs.len() as u32;
+            self.structs.push(values);
+            return Ok(Value::Enum(id, case, index));
+        }
         match self.ast.exprs[e] {
             Expr::Int { .. } | Expr::Float { .. } | Expr::Char(_) => Ok(Value::from_word(
                 self.checked.types[e],
                 self.checked.int_value(e).expect("checked literal fits") as u64,
             )),
+            Expr::StructLiteral { fields, .. } => {
+                let Res::Struct(id) = self.checked.resolutions[e] else {
+                    unreachable!()
+                };
+                let declared = self.ast.params(self.ast.structs[id].fields);
+                let mut result = vec![Value::Void; declared.len()];
+                for field in &self.ast.field_inits[fields] {
+                    let symbol = self.tokens.symbol(field.name);
+                    let index = declared
+                        .iter()
+                        .position(|f| self.tokens.symbol(f.name) == symbol)
+                        .unwrap();
+                    result[index] = self.expr(host, field.value)?;
+                }
+                let index = self.structs.len() as u32;
+                self.structs.push(result);
+                Ok(Value::Struct(id, index))
+            }
+            Expr::Member { base, .. } if matches!(self.checked.resolutions[e], Res::Field(_)) => {
+                let Res::Field(field) = self.checked.resolutions[e] else {
+                    unreachable!()
+                };
+                let Value::Struct(_, index) = self.expr(host, base)? else {
+                    unreachable!()
+                };
+                Ok(self.structs[index as usize][field as usize])
+            }
             Expr::String(_) | Expr::StringPart(_) => {
                 let Res::StringLiteral(index) = self.checked.resolutions[e] else {
                     unreachable!()
@@ -550,7 +681,7 @@ impl Eval<'_> {
                 self.convert(e, value)
             }
             Expr::Bool(value) => Ok(Value::Bool(value)),
-            Expr::Name(_) => match self.checked.resolutions[e] {
+            Expr::SelfValue(_) | Expr::Name(_) => match self.checked.resolutions[e] {
                 Res::Binding(binding) => Ok(self.read(binding)),
                 other => unreachable!("a name used as a value resolves to a binding: {other:?}"),
             },
@@ -831,17 +962,63 @@ impl Eval<'_> {
                 let value = self.expr(host, self.ast.args(args)[0])?;
                 self.convert(e, value)
             }
-            Expr::Call { args, .. } => {
-                let mut values = Vec::with_capacity(self.ast.args(args).len());
+            Expr::Call { callee, args } => {
+                let mut values = Vec::with_capacity(self.ast.args(args).len() + 1);
+                if matches!(
+                    self.checked.resolutions[e],
+                    Res::Method(_) | Res::MutMethod(_, _)
+                ) {
+                    let Expr::Member { base, .. } = self.ast.exprs[callee] else {
+                        unreachable!()
+                    };
+                    values.push(self.expr(host, base)?);
+                }
                 for &arg in self.ast.args(args) {
                     values.push(self.expr(host, arg)?);
                 }
                 // The callee starts only after the debit.
                 self.debit(span)?;
                 match self.checked.resolutions[e] {
-                    Res::Function(f) => self.call_script(host, f, &values, span),
+                    Res::Function(f) | Res::Method(f) => {
+                        self.call_script(host, f, &values, span, None)
+                    }
+                    Res::MutMethod(f, binding) => {
+                        let Expr::Member { base, .. } = self.ast.exprs[callee] else {
+                            unreachable!()
+                        };
+                        let mut updated = None;
+                        let result =
+                            self.call_script(host, f, &values, span, Some(&mut updated))?;
+                        self.write_lvalue(base, binding, updated.expect("mutating receiver"));
+                        Ok(result)
+                    }
                     Res::Host(h) => self.call_host(host, h, &values, span),
                     other => unreachable!("a checked call resolves to a function: {other:?}"),
+                }
+            }
+            Expr::Match(id) => {
+                let node = self.ast.matches[id];
+                let Value::Enum(enum_id, case, payload) = self.expr(host, node.subject)? else {
+                    unreachable!()
+                };
+                let cases = &self.ast.enum_cases[self.ast.enums[enum_id].cases];
+                let name = self.tokens.symbol(cases[case as usize].name);
+                let arm = self.ast.match_arms[node.arms]
+                    .iter()
+                    .find(|arm| {
+                        arm.case
+                            .is_none_or(|token| self.tokens.symbol(token) == name)
+                    })
+                    .copied()
+                    .expect("exhaustive match");
+                for (index, &token) in self.ast.match_bindings[arm.bindings].iter().enumerate() {
+                    if let Some(binding) = self.checked.pattern_bindings[token] {
+                        self.locals[binding.index()] = Some(self.structs[payload as usize][index]);
+                    }
+                }
+                match arm.body {
+                    eitri_syntax::ast::MatchBody::Expr(expr) => self.expr(host, expr),
+                    eitri_syntax::ast::MatchBody::Block(block) => self.block(host, block),
                 }
             }
             Expr::If(mut id) => loop {
@@ -858,7 +1035,7 @@ impl Eval<'_> {
                     },
                 }
             },
-            Expr::Member { .. } | Expr::Error => {
+            Expr::EnumShorthand(_) | Expr::NamedCall { .. } | Expr::Member { .. } | Expr::Error => {
                 unreachable!("not a value in checked code: {:?}", self.ast.exprs[e])
             }
         }
@@ -974,6 +1151,7 @@ impl Eval<'_> {
         f: FnId,
         args: &[Value],
         span: Span,
+        mutation: Option<&mut Option<Value>>,
     ) -> Flow<Value> {
         // Top-level code is not a counted frame.
         if (self.below + self.calls.len()) as u32 >= self.depth {
@@ -993,6 +1171,15 @@ impl Eval<'_> {
             Err(Unwind::Return(value)) => Ok(value),
             Err(fault) => Err(fault),
         };
+        if result.is_ok()
+            && let Some(target) = mutation
+        {
+            let receiver = self.checked.params[f]
+                .iter()
+                .next()
+                .expect("method receiver");
+            *target = self.locals[receiver.index()];
+        }
         self.current = caller;
         self.calls.pop();
         self.locals = saved;

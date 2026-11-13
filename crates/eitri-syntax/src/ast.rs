@@ -24,6 +24,9 @@ eitri_base::newtype_index! {
     pub struct FnId;
     pub struct IfId;
     pub struct ForId;
+    pub struct StructId;
+    pub struct EnumId;
+    pub struct MatchId;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +91,12 @@ pub enum Expr {
     Bool(bool),
     /// A name, resolved by the checker.
     Name(TokenId),
+    SelfValue(TokenId),
+    EnumShorthand(TokenId),
+    StructLiteral {
+        name: TokenId,
+        fields: List<FieldInit>,
+    },
     /// `base.name`. Only a host function call target in the first slice.
     Member {
         base: ExprId,
@@ -106,6 +115,10 @@ pub enum Expr {
         callee: ExprId,
         args: List<ExprId>,
     },
+    NamedCall {
+        callee: ExprId,
+        args: List<FieldInit>,
+    },
     /// The sole named argument supported before T021: integer truncation.
     Convert {
         callee: ExprId,
@@ -113,6 +126,7 @@ pub enum Expr {
     },
     /// Stored aside: its two blocks would double every node's size.
     If(IfId),
+    Match(MatchId),
     /// An unsupported or malformed construct, already reported.
     Error,
 }
@@ -174,6 +188,12 @@ pub enum Stmt {
         span: Span,
     },
     Expr(ExprId),
+    AssignField {
+        target: ExprId,
+        op: AssignOp,
+        value: ExprId,
+        span: Span,
+    },
     For(ForId),
     Break(TokenId),
     Continue(TokenId),
@@ -195,8 +215,51 @@ pub struct Param {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FieldInit {
+    pub name: TokenId,
+    pub value: ExprId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatchBody {
+    Expr(ExprId),
+    Block(Block),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MatchArm {
+    pub case: Option<TokenId>,
+    pub bindings: List<TokenId>,
+    pub body: MatchBody,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MatchExpr {
+    pub subject: ExprId,
+    pub arms: List<MatchArm>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnumCase {
+    pub name: TokenId,
+    pub fields: List<Param>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnumDecl {
+    pub name: TokenId,
+    pub cases: List<EnumCase>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StructDecl {
+    pub name: TokenId,
+    pub fields: List<Param>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FnDecl {
     pub name: TokenId,
+    pub receiver: Option<TokenId>,
+    pub mutating: bool,
     pub params: List<Param>,
     pub ret: TypeExpr,
     /// `None` for a bodiless (host) declaration.
@@ -225,6 +288,13 @@ pub struct Ast {
     pub imports: Vec<Import>,
     pub items: Vec<Item>,
     pub fns: IndexVec<FnId, FnDecl>,
+    pub structs: IndexVec<StructId, StructDecl>,
+    pub enums: IndexVec<EnumId, EnumDecl>,
+    pub enum_cases: ListPool<EnumCase>,
+    pub matches: IndexVec<MatchId, MatchExpr>,
+    pub match_arms: ListPool<MatchArm>,
+    pub match_bindings: ListPool<TokenId>,
+    pub field_inits: ListPool<FieldInit>,
     pub stmts: IndexVec<StmtId, Stmt>,
     pub exprs: IndexVec<ExprId, Expr>,
     pub ifs: IndexVec<IfId, IfExpr>,
@@ -247,6 +317,13 @@ impl Ast {
         self.imports.capacity() * size_of::<Import>()
             + self.items.capacity() * size_of::<Item>()
             + self.fns.capacity() * size_of::<FnDecl>()
+            + self.structs.capacity() * size_of::<StructDecl>()
+            + self.enums.capacity() * size_of::<EnumDecl>()
+            + self.enum_cases.heap_bytes()
+            + self.matches.capacity() * size_of::<MatchExpr>()
+            + self.match_arms.heap_bytes()
+            + self.match_bindings.heap_bytes()
+            + self.field_inits.heap_bytes()
             + self.stmts.capacity() * size_of::<Stmt>()
             + self.exprs.capacity() * size_of::<Expr>()
             + self.ifs.capacity() * size_of::<IfExpr>()
@@ -270,6 +347,16 @@ impl Ast {
         budget.reserve_vec(&mut self.items, items)?;
         self.fns
             .reserve_budgeted(count.saturating_sub(self.fns.len()), budget)?;
+        self.structs
+            .reserve_budgeted(count.saturating_sub(self.structs.len()), budget)?;
+        self.enums
+            .reserve_budgeted(count.saturating_sub(self.enums.len()), budget)?;
+        self.enum_cases.reserve_budgeted(count, budget)?;
+        self.matches
+            .reserve_budgeted(count.saturating_sub(self.matches.len()), budget)?;
+        self.match_arms.reserve_budgeted(count, budget)?;
+        self.match_bindings.reserve_budgeted(count, budget)?;
+        self.field_inits.reserve_budgeted(count, budget)?;
         self.stmts
             .reserve_budgeted(count.saturating_sub(self.stmts.len()), budget)?;
         self.exprs
@@ -290,6 +377,13 @@ impl Ast {
         self.imports.clear();
         self.items.clear();
         self.fns.clear();
+        self.structs.clear();
+        self.enums.clear();
+        self.enum_cases.clear();
+        self.matches.clear();
+        self.match_arms.clear();
+        self.match_bindings.clear();
+        self.field_inits.clear();
         self.stmts.clear();
         self.exprs.clear();
         self.ifs.clear();

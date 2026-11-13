@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+enum E { None, Text(value: string) }
+let x = E.None
+let y = x
+let value = match y { .None => 1, .Text(v) => v.len() }
+test.emit(value)

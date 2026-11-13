@@ -19,10 +19,14 @@ pub enum ValueType {
     F64,
     Char,
     String,
+    NullableString,
     Bool,
 }
 
 impl ValueType {
+    pub fn is_managed(self) -> bool {
+        matches!(self, Self::String | Self::NullableString)
+    }
     pub fn integer(self) -> bool {
         matches!(self, Self::I8 | Self::U8 | Self::I64 | Self::U64)
     }
@@ -38,7 +42,7 @@ impl ValueType {
     }
     pub fn canonical(self, word: u64) -> bool {
         match self {
-            Self::String => false,
+            Self::String | Self::NullableString => false,
             Self::Bool => word <= 1,
             Self::I8 => word == (word as i8 as i64 as u64),
             Self::U8 => word <= 255,
@@ -114,6 +118,8 @@ pub struct Function {
     /// For traces: the function's name, or `<module>`.
     pub name: Box<str>,
     pub signature: Signature,
+    /// False when the source signature contains aggregate values.
+    pub reentry_safe: bool,
     pub frame_size: u32,
     pub code: Box<[u32]>,
     /// One-slot constants, by `LDK`/`LDK_X` index.
@@ -138,6 +144,7 @@ impl Function {
     pub fn equivalent(&self, other: &Self) -> bool {
         self.name == other.name
             && self.signature == other.signature
+            && self.reentry_safe == other.reentry_safe
             && self.frame_size == other.frame_size
             && self.code == other.code
             && self.consts == other.consts

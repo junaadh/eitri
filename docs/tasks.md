@@ -804,6 +804,22 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
+- T017-1: nonempty local structs with up to 256 scalar or string fields,
+  literals, field reads and `var` field writes run on both interpreters. Copies,
+  initializer order, branches, loops and forced collection are exercised.
+  Methods, calls and enum support remain open.
+- T017-2: nested struct fields, nested writes and inline-cycle rejection run
+  on both interpreters. An iterative layout walk is tested on 2,000 levels;
+  strings in nested values survive forced collection.
+- T017-3: nested structs pass and return through script calls on both
+  interpreters, including managed fields. Aggregate signatures reject host
+  reentry; bytecode text preserves multi-slot results and that restriction.
+- T017-4: `extend` methods use explicit `self`; mutating methods update mutable
+  local or nested receivers. Both interpreter and lowering modes run the
+  method fixture with forced collection. Other method features remain open.
+- T017-5: enum construction and exhaustive case matching with scalar/string
+  payload bindings run on both interpreters and survive forced collection.
+  Aggregate payloads, enum fields in structs, and richer patterns remain open.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

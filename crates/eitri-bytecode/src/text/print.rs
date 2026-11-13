@@ -72,6 +72,21 @@ pub fn print(
     out
 }
 
+fn result_types(types: &[ValueType]) -> String {
+    match types {
+        [] => "void".to_owned(),
+        [ty] => type_name(Some(*ty)).to_owned(),
+        _ => format!(
+            "({})",
+            types
+                .iter()
+                .map(|&ty| type_name(Some(ty)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 /// A name as `@` writes it: bare when it is an identifier (dots allowed),
 /// `<module>`, or quoted.
 fn global(name: &str) -> String {
@@ -98,7 +113,7 @@ struct Printer<'a> {
 impl Printer<'_> {
     fn function(&mut self, body: &Body) {
         let f = self.function;
-        let ret = type_name(f.signature.results.first().copied());
+        let ret = result_types(&f.signature.results);
         let base = f.signature.param_base();
         let params: Vec<String> = f
             .signature
@@ -109,10 +124,11 @@ impl Printer<'_> {
             .collect();
         writeln!(
             self.out,
-            "define {ret} @{}({}) frame({}) {{",
+            "define {ret} @{}({}) frame({}){} {{",
             global(&f.name),
             params.join(", "),
-            f.frame_size
+            f.frame_size,
+            if f.reentry_safe { "" } else { " no_reentry" }
         )
         .unwrap();
         // Hex keeps literal bytes unambiguous without introducing a second
@@ -260,11 +276,15 @@ impl Printer<'_> {
                 format!("{} %r{slot}", type_name(Some(ty)))
             })
             .collect();
-        let ret = signature.results.first().copied();
-        let call = format!("{name} {} @{callee}({})", type_name(ret), args.join(", "));
-        match ret {
-            Some(_) => format!("%r{} = {call}", site.result.first),
-            None => call,
+        let call = format!(
+            "{name} {} @{callee}({})",
+            result_types(&signature.results),
+            args.join(", ")
+        );
+        if signature.results.is_empty() {
+            call
+        } else {
+            format!("%r{} = {call}", site.result.first)
         }
     }
 

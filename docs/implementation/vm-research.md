@@ -1832,3 +1832,91 @@ identity was unavailable in the sandbox; raw samples and the full report are
 `/private/tmp/eitri-t016-4-samples-isolated.csv` and
 `/private/tmp/eitri-t016-4-bench-isolated.txt`. Comparisons with the earlier
 work-in-progress run are not controlled enough to claim a speed change.
+
+### T017-1 local struct values
+
+Struct declarations are indexed by interned name. Field lookup scans at most
+256 fields, so checking and lowering cost O(256 × source fields); wider
+structs are rejected before execution. Fields occupy adjacent scalar or string
+frame slots and copies use one move per field. The fixture checks source-order
+initializers, copies, writes, loops and branches, and forced collection on
+both interpreter and lowering modes. This is an initial subset: calls,
+nested fields, defaults, methods and enums are rejected.
+
+On aarch64 macOS 27.0.1 with Rust 1.101.0-nightly (2d20b42b8), LLVM 23.1.5,
+`cargo bench --offline --locked -p eitri --bench source_to_result -- 1001`
+measured reused `module` compile p50/p99 7,833/8,209 ns, execution 208/250 ns,
+and total 8,042/8,417 ns. The same pre-stage run measured compile
+7,875/9,666 ns and total 8,084/9,917 ns; these sequential samples do not
+establish a latency change. Reused allocations remained 48, while bytes per run
+increased 4,692 to 4,762 and retained context bytes increased 25,632 to
+28,619. The scalar workload does not measure struct operations. The CPU
+identity query was unavailable. Raw samples: `/private/tmp/eitri-t017-1-samples.csv`;
+full output: `/private/tmp/eitri-t017-1-bench.txt`.
+
+After replacing temporary parser vectors with budgeted reusable scratch and
+bounded checker arrays, the same command measured `module` compile p50/p99
+8,041/9,417 ns, first execution 209/292 ns and total 8,250/9,667 ns. Reused
+allocations and retained bytes remained 48 (4,762 B) and 28,619 B. Raw samples:
+`/private/tmp/eitri-t017-1-final-samples.csv`; report:
+`/private/tmp/eitri-t017-1-final-bench.txt`.
+
+### T017-2 nested struct layouts
+
+An iterative depth-first walk computes inline widths in O(declarations + fields)
+time and scratch, detects cycles, and rejects values exceeding 65,536 frame
+slots. Field lookup remains bounded to 256 declared fields. The nested fixture
+checks copies, nested writes and string roots under forced collection; a
+2,000-declaration chain and direct and mutual cycles exercise the layout walk.
+
+The same T011 command and environment as T017-1 measured reused `module`
+compile p50/p99 8,000/10,800 ns, first execution 250/334 ns, total
+8,250/11,200 ns, 48 allocations (4,762 B), and 28,619 retained bytes. The
+scalar fixture does not exercise nested values. Raw samples:
+`/private/tmp/eitri-t017-2-samples.csv`; report:
+`/private/tmp/eitri-t017-2-bench.txt`.
+
+### T017-3 aggregate script calls
+
+Script signatures flatten struct fields into contiguous argument and result
+slots. The existing precise root maps retain string fields across calls and
+returns. Host-initiated reentry rejects aggregate signatures instead of
+mistaking them for independent scalar arguments. The bytecode text format
+round-trips multi-slot results and the reentry restriction; tier-up skips these
+functions. Forced-GC and reentry tests run on both interpreters.
+
+The T011 command and environment above measured reused `module` compile
+p50/p99 8,250/11,000 ns, first execution 250/375 ns, total 8,459/11,300 ns,
+48 allocations (4,762 B) and 28,619 retained bytes. This scalar workload does
+not exercise aggregate calls. Samples: `/private/tmp/eitri-t017-3-samples.csv`;
+report: `/private/tmp/eitri-t017-3-bench.txt`.
+
+### T017-4 extension methods
+
+Methods use explicit `self`. Mutating methods return an internal copy of the
+receiver alongside their language result and write it back to the checked
+mutable local or nested field. Their string slots use the ordinary call and
+result root maps. Method lookup scans at most 256 methods per module; the cap
+is exercised by a rejection test. Bare receiver fields and static methods
+remain unsupported.
+
+The T011 command and environment above measured reused `module` compile
+p50/p99 8,000/8,417 ns, first execution 208/250 ns, total 8,208/8,666 ns,
+48 allocations (4,762 B) and 28,651 retained bytes. The scalar workload does
+not exercise methods. Samples: `/private/tmp/eitri-t017-4-samples.csv`;
+report: `/private/tmp/eitri-t017-4-bench.txt`.
+
+### T017-5 enum cases and matching
+
+Scalar/string payloads occupy per-case frame slots. Inactive string payload
+slots are nullable roots; the collector ignores absent references, and a
+checked unwrap faults on malformed null payloads. Constructors initialize all
+slots, and exhaustive case matching binds active payloads. The forced-GC
+fixture covers copies and calls on both interpreters; non-exhaustive matches
+are rejected. Aggregate payloads and richer patterns remain open.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,083/12,500 ns, execution 209/292 ns, total 8,292/12,700 ns,
+48 allocations (4,762 B) and 30,275 retained bytes. This scalar workload does
+not exercise enums. Samples: `/private/tmp/eitri-t017-5-samples.csv`; report:
+`/private/tmp/eitri-t017-5-bench.txt`.

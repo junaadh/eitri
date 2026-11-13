@@ -94,6 +94,131 @@ fn string_transformations_reject_wrong_arguments() {
 }
 
 #[test]
+fn local_struct_strings_survive_collection_and_copying() {
+    let source = include_str!("fixtures/managed/struct_local.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/struct_local.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn enum_payloads_survive_collection() {
+    let source = include_str!("fixtures/managed/enum_construct.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/enum_construct.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn struct_methods_survive_collection() {
+    let source = include_str!("fixtures/managed/struct_methods.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/struct_methods.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn struct_calls_survive_collection() {
+    let source = include_str!("fixtures/managed/struct_calls.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/struct_calls.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_struct_strings_survive_collection() {
+    let source = include_str!("fixtures/managed/struct_nested.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/struct_nested.expect")
+            );
+        }
+    }
+}
+
+#[test]
 fn string_iteration_survives_collection_at_every_safepoint() {
     let source = include_str!("fixtures/managed/for_strings.eit");
     for threaded in [false, true] {

@@ -249,6 +249,7 @@ struct Define<'a> {
     name: &'a str,
     name_span: Span,
     signature: Signature,
+    reentry_safe: bool,
     /// Parameter slots as written, with their spans.
     params: Vec<(u32, Span)>,
     frame: (u32, Span),
@@ -350,6 +351,7 @@ impl<'a> Parser<'_, 'a> {
             "f64" => Ok((Some(ValueType::F64), span)),
             "char" => Ok((Some(ValueType::Char), span)),
             "string" => Ok((Some(ValueType::String), span)),
+            "nullable_string" => Ok((Some(ValueType::NullableString), span)),
             "bool" => Ok((Some(ValueType::Bool), span)),
             "void" if void_ok => Ok((None, span)),
             _ => Err(syntax(span, format!("expected a type, found `{word}`"))),
@@ -361,6 +363,23 @@ impl<'a> Parser<'_, 'a> {
             (Some(ty), span) => Ok((ty, span)),
             (None, span) => Err(syntax(span, "expected `i64` or `bool`")),
         }
+    }
+
+    fn result_types(&mut self) -> Result<(Vec<ValueType>, Span)> {
+        let start = self.peek().span;
+        if !self.eat_punct(b'(') {
+            let (ty, span) = self.ty(true)?;
+            return Ok((ty.into_iter().collect(), span));
+        }
+        let mut types = Vec::new();
+        loop {
+            types.push(self.value_type()?.0);
+            if self.eat_punct(b')') {
+                break;
+            }
+            self.punct(b',')?;
+        }
+        Ok((types, start))
     }
 
     fn headers(&mut self) -> Result<Headers<'a>> {
@@ -406,7 +425,7 @@ impl<'a> Parser<'_, 'a> {
                 }
                 Tok::Word("define") => {
                     self.next();
-                    let (ret, _) = self.ty(true)?;
+                    let (ret, _) = self.result_types()?;
                     let (name, name_span) = self.global()?;
                     self.punct(b'(')?;
                     let mut types = Vec::new();
@@ -427,6 +446,12 @@ impl<'a> Parser<'_, 'a> {
                     let frame = u32::try_from(frame)
                         .map_err(|_| syntax(frame_span, "frame size out of range"))?;
                     self.punct(b')')?;
+                    let reentry_safe = if self.peek().tok == Tok::Word("no_reentry") {
+                        self.next();
+                        false
+                    } else {
+                        true
+                    };
                     self.punct(b'{')?;
                     let body = self.at;
                     // Skip the body; the second pass assembles it.
@@ -454,8 +479,9 @@ impl<'a> Parser<'_, 'a> {
                         name_span,
                         signature: Signature {
                             params: types,
-                            results: ret.into_iter().collect(),
+                            results: ret,
                         },
+                        reentry_safe,
                         params,
                         frame: (frame, frame_span),
                         body,
@@ -540,6 +566,7 @@ impl<'a> Body<'_, '_, 'a> {
             ir::assemble(&body, define.name, define.signature.clone(), asm)
                 .map_err(|error| mismatch(define.frame.1, format!("cannot assemble: {error:?}")))?;
         function.strings = strings.into_boxed_slice();
+        function.reentry_safe = define.reentry_safe;
         if function.frame_size != define.frame.0 {
             return Err(mismatch(
                 define.frame.1,
@@ -823,7 +850,7 @@ impl<'a> Body<'_, '_, 'a> {
     }
 
     fn call(&mut self, op: Op, dest: Option<u32>, start: u32, word_span: Span) -> Result<()> {
-        let (ret, ret_span) = self.parser.ty(true)?;
+        let (ret, ret_span) = self.parser.result_types()?;
         let (name, name_span) = self.parser.global()?;
         let (target, signature) = if op == Op::CallScript {
             let &id =
@@ -843,7 +870,7 @@ impl<'a> Body<'_, '_, 'a> {
                 &self.headers.hosts[index as usize].0.signature,
             )
         };
-        if ret != signature.results.first().copied() {
+        if ret != signature.results {
             return Err(mismatch(
                 ret_span,
                 format!("`@{name}` does not return this type"),
@@ -879,19 +906,19 @@ impl<'a> Body<'_, '_, 'a> {
                 return Err(mismatch(span, "call arguments must be consecutive slots"));
             }
         }
-        let result = match (ret, dest) {
-            (Some(_), Some(slot)) => SlotRange {
+        let result = match (ret.is_empty(), dest) {
+            (false, Some(slot)) => SlotRange {
                 first: slot,
-                count: 1,
+                count: ret.len() as u32,
             },
-            (None, None) => SlotRange { first: 0, count: 0 },
-            (Some(_), None) => {
+            (true, None) => SlotRange { first: 0, count: 0 },
+            (false, None) => {
                 return Err(mismatch(
                     word_span,
                     format!("`@{name}` returns a value: write `%rN = {}`", mnemonic(op)),
                 ));
             }
-            (None, Some(_)) => {
+            (true, Some(_)) => {
                 return Err(mismatch(word_span, format!("`@{name}` returns nothing")));
             }
         };

@@ -320,6 +320,18 @@ impl Parser<'_> {
                 self.bump();
                 self.item(items_seen)
             }
+            T::Struct if self.kind == ModuleKind::Script => {
+                self.struct_decl()?;
+                Ok(())
+            }
+            T::Extend if self.kind == ModuleKind::Script => {
+                self.extension()?;
+                Ok(())
+            }
+            T::Enum if self.kind == ModuleKind::Script => {
+                self.enum_decl()?;
+                Ok(())
+            }
             T::Struct | T::Class | T::Enum | T::Interface | T::Extend | T::Type => {
                 let keyword = self.kind();
                 let feature = format!("{} declarations", keyword.describe());
@@ -372,6 +384,161 @@ impl Parser<'_> {
         Ok(Import { name, path })
     }
 
+    fn match_expr(&mut self) -> Parsed<ExprId> {
+        let keyword = self.bump();
+        let subject = self.expr(true)?;
+        self.expect(T::LBrace, "`{`")?;
+        let mut arms = Vec::new();
+        self.skip_separators();
+        while !self.at(T::RBrace) && !self.at(T::Eof) {
+            let case = if self.eat(T::Wildcard).is_some() {
+                None
+            } else {
+                self.expect(T::Dot, "a case pattern")?;
+                Some(self.expect(T::Ident, "a case name")?)
+            };
+            let mut bindings = Vec::new();
+            if self.eat(T::LParen).is_some() {
+                while !self.at(T::RParen) {
+                    let name = if self.at(T::Wildcard) {
+                        self.bump()
+                    } else {
+                        self.expect(T::Ident, "a binding")?
+                    };
+                    bindings.push(name);
+                    if self.eat(T::Comma).is_none() {
+                        break;
+                    }
+                }
+                self.expect(T::RParen, "`)`")?;
+            }
+            let bindings = self.ast.match_bindings.push(&bindings);
+            self.expect(T::FatArrow, "`=>`")?;
+            let body = if self.at(T::LBrace) {
+                crate::ast::MatchBody::Block(self.block()?)
+            } else {
+                crate::ast::MatchBody::Expr(self.expr(false)?)
+            };
+            arms.push(crate::ast::MatchArm {
+                case,
+                bindings,
+                body,
+            });
+            if self.eat(T::Comma).is_none() && !self.at_statement_end() {
+                return Err(self.expected("a comma or line break"));
+            }
+            self.skip_separators();
+        }
+        let close = self.expect(T::RBrace, "`}`")?;
+        let arms = self.ast.match_arms.push(&arms);
+        let id = self
+            .ast
+            .matches
+            .push(crate::ast::MatchExpr { subject, arms });
+        Ok(self.ast.expr(
+            Expr::Match(id),
+            self.span_of(keyword).to(self.span_of(close)),
+        ))
+    }
+
+    fn enum_decl(&mut self) -> Parsed<()> {
+        self.bump();
+        let name = self.expect(T::Ident, "an enum name")?;
+        self.expect(T::LBrace, "`{`")?;
+        let mut cases = Vec::new();
+        self.skip_separators();
+        while !self.at(T::RBrace) && !self.at(T::Eof) {
+            let case = self.expect(T::Ident, "a case name")?;
+            let fields = if self.at(T::LParen) {
+                self.params()?
+            } else {
+                eitri_base::List::EMPTY
+            };
+            cases.push(crate::ast::EnumCase { name: case, fields });
+            if self.eat(T::Comma).is_none() && !self.at_statement_end() {
+                return Err(self.expected("a line break or `,`"));
+            }
+            self.skip_separators();
+        }
+        self.expect(T::RBrace, "`}`")?;
+        let cases = self.ast.enum_cases.push(&cases);
+        self.ast.enums.push(crate::ast::EnumDecl { name, cases });
+        Ok(())
+    }
+
+    fn extension(&mut self) -> Parsed<()> {
+        self.bump();
+        let receiver = self.expect(T::Ident, "a type name")?;
+        self.expect(T::LBrace, "`{`")?;
+        self.skip_separators();
+        while !self.at(T::RBrace) && !self.at(T::Eof) {
+            let mutating = self.eat(T::Mutating).is_some();
+            if !self.at(T::Fn) {
+                return Err(self.expected("a method"));
+            }
+            if let Some(mut method) = self.fn_decl()? {
+                method.receiver = Some(receiver);
+                method.mutating = mutating;
+                let id = self.ast.fns.push(method);
+                self.ast.items.push(Item::Fn(id));
+            }
+            if !self.at_statement_end() {
+                return Err(self.expected("a line break or `}`"));
+            }
+            self.skip_separators();
+        }
+        self.expect(T::RBrace, "`}`")?;
+        Ok(())
+    }
+
+    fn struct_decl(&mut self) -> Parsed<()> {
+        self.bump();
+        let name = self.expect(T::Ident, "a struct name")?;
+        self.expect(T::LBrace, "`{`")?;
+        let mut fields = Vec::new();
+        self.skip_separators();
+        while !self.at(T::RBrace) && !self.at(T::Eof) {
+            let field = self.expect(T::Ident, "a field name")?;
+            self.expect(T::Colon, "`:`")?;
+            let ty = self.type_expr()?;
+            fields.push(Param { name: field, ty });
+            if self.eat(T::Comma).is_none() && !self.at_statement_end() {
+                return Err(self.expected("a line break or `,`"));
+            }
+            self.skip_separators();
+        }
+        self.expect(T::RBrace, "`}`")?;
+        let fields = self.ast.params.push(&fields);
+        self.ast
+            .structs
+            .push(crate::ast::StructDecl { name, fields });
+        Ok(())
+    }
+
+    fn struct_literal(&mut self) -> Parsed<ExprId> {
+        let name = self.bump();
+        let span = self.span_of(name);
+        self.expect(T::LBrace, "`{`")?;
+        let mut fields = Vec::new();
+        self.skip_separators();
+        while !self.at(T::RBrace) && !self.at(T::Eof) {
+            let field = self.expect(T::Ident, "a field name")?;
+            self.expect(T::Colon, "`:`")?;
+            let value = self.expr(false)?;
+            fields.push(crate::ast::FieldInit { name: field, value });
+            if self.eat(T::Comma).is_none() && !self.at_statement_end() {
+                return Err(self.expected("a line break or `,`"));
+            }
+            self.skip_separators();
+        }
+        let end = self.expect(T::RBrace, "`}`")?;
+        let fields = self.ast.field_inits.push(&fields);
+        Ok(self.ast.expr(
+            Expr::StructLiteral { name, fields },
+            span.to(self.span_of(end)),
+        ))
+    }
+
     /// A function declaration. `None` when it is reported and dropped.
     fn fn_decl(&mut self) -> Parsed<Option<FnDecl>> {
         let keyword = self.bump();
@@ -410,6 +577,8 @@ impl Parser<'_> {
         }
         Ok(Some(FnDecl {
             name,
+            receiver: None,
+            mutating: false,
             params,
             ret,
             body,
@@ -649,17 +818,21 @@ impl Parser<'_> {
         let value = self.expr(false)?;
         let span = self.ast.span(target).to(self.ast.span(value));
         match self.ast.exprs[target] {
-            Expr::Name(token) => Ok(Some(self.ast.stmts.push(Stmt::Assign {
-                target: token,
+            Expr::Name(token) | Expr::SelfValue(token) => {
+                Ok(Some(self.ast.stmts.push(Stmt::Assign {
+                    target: token,
+                    op,
+                    value,
+                    span,
+                })))
+            }
+            Expr::Error => Ok(None),
+            Expr::Member { .. } => Ok(Some(self.ast.stmts.push(Stmt::AssignField {
+                target,
                 op,
                 value,
                 span,
             }))),
-            Expr::Error => Ok(None),
-            Expr::Member { .. } => {
-                self.unsupported(self.ast.span(target), "assignment to fields");
-                Ok(None)
-            }
             _ => {
                 self.report(
                     Code::AssignToImmutable,
@@ -979,7 +1152,28 @@ impl Parser<'_> {
         }
     }
 
+    fn named_call(&mut self, callee: ExprId) -> Parsed<ExprId> {
+        self.bump();
+        let mut args = Vec::new();
+        loop {
+            let name = self.expect(T::Ident, "an argument label")?;
+            self.expect(T::Colon, "`:`")?;
+            let value = self.expr(false)?;
+            args.push(crate::ast::FieldInit { name, value });
+            if self.eat(T::Comma).is_none() {
+                break;
+            }
+        }
+        let close = self.expect(T::RParen, "`)`")?;
+        let span = self.ast.span(callee).to(self.span_of(close));
+        let args = self.ast.field_inits.push(&args);
+        Ok(self.ast.expr(Expr::NamedCall { callee, args }, span))
+    }
+
     fn call(&mut self, callee: ExprId) -> Parsed<ExprId> {
+        if self.nth(1) == T::Ident && self.nth(2) == T::Colon {
+            return self.named_call(callee);
+        }
         let open = self.bump();
         let mark = self.exprs.len();
         let mut labeled = false;
@@ -1079,7 +1273,16 @@ impl Parser<'_> {
             T::Str => self.unsupported_primary("string literals"),
             T::Char => self.unsupported_primary("char literals"),
             T::Null => self.unsupported_primary("`null`"),
-            T::SelfLower => self.unsupported_primary("`self`"),
+            T::Dot => {
+                self.bump();
+                let case = self.expect(T::Ident, "an enum case")?;
+                self.ast
+                    .expr(Expr::EnumShorthand(case), span.to(self.span_of(case)))
+            }
+            T::SelfLower => {
+                self.bump();
+                self.ast.expr(Expr::SelfValue(token), span)
+            }
             T::LBracket => self.unsupported_primary("array literals"),
             // In a statement header, `{` where an operand belongs is a
             // missing operand (`if x > {` mid-edit), not a block expression;
@@ -1087,12 +1290,7 @@ impl Parser<'_> {
             T::LBrace if ns => return Err(self.expected("an expression")),
             T::LBrace => self.unsupported_primary("block expressions"),
             T::Ident if self.nth(1) == T::FatArrow => self.lambda(self.pos + 1)?,
-            T::Ident if !ns && self.nth(1) == T::LBrace => {
-                self.unsupported(span, "struct literals");
-                self.bump();
-                self.skip_one();
-                self.error(Span::new(span.start, self.last_end()))
-            }
+            T::Ident if !ns && self.nth(1) == T::LBrace => self.struct_literal()?,
             T::Ident => {
                 self.bump();
                 self.ast.expr(Expr::Name(token), span)
@@ -1114,23 +1312,7 @@ impl Parser<'_> {
                 self.skip_statement();
                 self.error(Span::new(span.start, self.last_end()))
             }
-            T::Match => {
-                self.unsupported(span, "`match`");
-                while !matches!(self.kind(), T::LBrace | T::Newline | T::Eof) {
-                    self.skip_one();
-                }
-                self.skip_one();
-                self.error(Span::new(span.start, self.last_end()))
-            }
-            T::Dot if self.nth(1) == T::Ident => {
-                self.unsupported(span, "enum case shorthand");
-                self.bump();
-                self.bump();
-                if self.at(T::LParen) {
-                    self.skip_one();
-                }
-                self.error(Span::new(span.start, self.last_end()))
-            }
+            T::Match => self.match_expr()?,
             T::If => self.if_expr()?,
             _ => return Err(self.expected("an expression")),
         })

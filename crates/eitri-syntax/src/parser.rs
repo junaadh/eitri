@@ -47,6 +47,10 @@ pub struct ParseScratch {
     exprs: Vec<ExprId>,
     stmts: Vec<StmtId>,
     params: Vec<Param>,
+    field_inits: Vec<crate::ast::FieldInit>,
+    enum_cases: Vec<crate::ast::EnumCase>,
+    match_arms: Vec<crate::ast::MatchArm>,
+    match_bindings: Vec<TokenId>,
     links: Vec<IfLink>,
 }
 
@@ -70,6 +74,10 @@ impl ParseScratch {
             + self.exprs.capacity() * size_of::<ExprId>()
             + self.stmts.capacity() * size_of::<StmtId>()
             + self.params.capacity() * size_of::<Param>()
+            + self.field_inits.capacity() * size_of::<crate::ast::FieldInit>()
+            + self.enum_cases.capacity() * size_of::<crate::ast::EnumCase>()
+            + self.match_arms.capacity() * size_of::<crate::ast::MatchArm>()
+            + self.match_bindings.capacity() * size_of::<TokenId>()
             + self.links.capacity() * size_of::<IfLink>()
     }
 
@@ -104,10 +112,18 @@ pub fn parse_budgeted<'s>(
     let exprs = count.saturating_sub(scratch.exprs.len());
     let stmts = count.saturating_sub(scratch.stmts.len());
     let params = count.saturating_sub(scratch.params.len());
+    let field_inits = count.saturating_sub(scratch.field_inits.len());
+    let enum_cases = count.saturating_sub(scratch.enum_cases.len());
+    let match_arms = count.saturating_sub(scratch.match_arms.len());
+    let match_bindings = count.saturating_sub(scratch.match_bindings.len());
     let links = count.saturating_sub(scratch.links.len());
     budget.reserve_vec(&mut scratch.exprs, exprs)?;
     budget.reserve_vec(&mut scratch.stmts, stmts)?;
     budget.reserve_vec(&mut scratch.params, params)?;
+    budget.reserve_vec(&mut scratch.field_inits, field_inits)?;
+    budget.reserve_vec(&mut scratch.enum_cases, enum_cases)?;
+    budget.reserve_vec(&mut scratch.match_arms, match_arms)?;
+    budget.reserve_vec(&mut scratch.match_bindings, match_bindings)?;
     budget.reserve_vec(&mut scratch.links, links)?;
     Ok(parse(text, source, tokens, kind, diagnostics, scratch))
 }
@@ -126,6 +142,10 @@ pub fn parse<'s>(
     scratch.exprs.clear();
     scratch.stmts.clear();
     scratch.params.clear();
+    scratch.field_inits.clear();
+    scratch.enum_cases.clear();
+    scratch.match_arms.clear();
+    scratch.match_bindings.clear();
     scratch.links.clear();
     let mut parser = Parser {
         text,
@@ -137,6 +157,10 @@ pub fn parse<'s>(
         exprs: &mut scratch.exprs,
         stmts: &mut scratch.stmts,
         params: &mut scratch.params,
+        field_inits: &mut scratch.field_inits,
+        enum_cases: &mut scratch.enum_cases,
+        match_arms: &mut scratch.match_arms,
+        match_bindings: &mut scratch.match_bindings,
         links: &mut scratch.links,
         pos: 0,
         limit: tokens.len() as u32 - 1,
@@ -209,6 +233,10 @@ struct Parser<'a> {
     exprs: &'a mut Vec<ExprId>,
     stmts: &'a mut Vec<StmtId>,
     params: &'a mut Vec<Param>,
+    field_inits: &'a mut Vec<crate::ast::FieldInit>,
+    enum_cases: &'a mut Vec<crate::ast::EnumCase>,
+    match_arms: &'a mut Vec<crate::ast::MatchArm>,
+    match_bindings: &'a mut Vec<TokenId>,
     links: &'a mut Vec<IfLink>,
     pos: u32,
     limit: u32,
@@ -453,6 +481,18 @@ impl Parser<'_> {
                 self.bump();
                 self.item(items_seen)
             }
+            T::Struct if self.kind == ModuleKind::Script => {
+                self.struct_decl()?;
+                Ok(())
+            }
+            T::Extend if self.kind == ModuleKind::Script => {
+                self.extension()?;
+                Ok(())
+            }
+            T::Enum if self.kind == ModuleKind::Script => {
+                self.enum_decl()?;
+                Ok(())
+            }
             T::Struct | T::Class | T::Enum | T::Interface | T::Extend | T::Type => {
                 let keyword = self.kind();
                 let feature = format!("{} declarations", keyword.describe());
@@ -505,6 +545,184 @@ impl Parser<'_> {
         Ok(Import { name, path })
     }
 
+    fn match_expr(&mut self) -> Parsed<ExprId> {
+        let arm_mark = self.match_arms.len();
+        let binding_mark = self.match_bindings.len();
+        let result = (|| {
+            let keyword = self.bump();
+            let subject = self.expr(true)?;
+            self.expect(T::LBrace, "`{`")?;
+            self.skip_separators();
+            while !self.at(T::RBrace) && !self.at(T::Eof) {
+                let case = if self.eat(T::Wildcard).is_some() {
+                    None
+                } else {
+                    self.expect(T::Dot, "a case pattern")?;
+                    Some(self.expect(T::Ident, "a case name")?)
+                };
+                let begin = self.match_bindings.len();
+                if self.eat(T::LParen).is_some() {
+                    while !self.at(T::RParen) {
+                        let name = if self.at(T::Wildcard) {
+                            self.bump()
+                        } else {
+                            self.expect(T::Ident, "a binding")?
+                        };
+                        self.match_bindings.push(name);
+                        if self.eat(T::Comma).is_none() {
+                            break;
+                        }
+                    }
+                    self.expect(T::RParen, "`)`")?;
+                }
+                let bindings = self
+                    .ast
+                    .match_bindings
+                    .push_drain(self.match_bindings, begin);
+                self.expect(T::FatArrow, "`=>`")?;
+                let body = if self.at(T::LBrace) {
+                    crate::ast::MatchBody::Block(self.block()?)
+                } else {
+                    crate::ast::MatchBody::Expr(self.expr(false)?)
+                };
+                self.match_arms.push(crate::ast::MatchArm {
+                    case,
+                    bindings,
+                    body,
+                });
+                if self.eat(T::Comma).is_none() && !self.at_statement_end() {
+                    return Err(self.expected("a comma or line break"));
+                }
+                self.skip_separators();
+            }
+            let close = self.expect(T::RBrace, "`}`")?;
+            let arms = self.ast.match_arms.push_drain(self.match_arms, arm_mark);
+            let id = self
+                .ast
+                .matches
+                .push(crate::ast::MatchExpr { subject, arms });
+            Ok(self.ast.expr(
+                Expr::Match(id),
+                self.span_of(keyword).to(self.span_of(close)),
+            ))
+        })();
+        self.match_arms.truncate(arm_mark);
+        self.match_bindings.truncate(binding_mark);
+        result
+    }
+
+    fn enum_decl(&mut self) -> Parsed<()> {
+        let mark = self.enum_cases.len();
+        let result = (|| {
+            self.bump();
+            let name = self.expect(T::Ident, "an enum name")?;
+            self.expect(T::LBrace, "`{`")?;
+            self.skip_separators();
+            while !self.at(T::RBrace) && !self.at(T::Eof) {
+                let case = self.expect(T::Ident, "a case name")?;
+                let fields = if self.at(T::LParen) {
+                    self.params()?
+                } else {
+                    eitri_base::List::EMPTY
+                };
+                self.enum_cases
+                    .push(crate::ast::EnumCase { name: case, fields });
+                if self.eat(T::Comma).is_none() && !self.at_statement_end() {
+                    return Err(self.expected("a line break or `,`"));
+                }
+                self.skip_separators();
+            }
+            self.expect(T::RBrace, "`}`")?;
+            let cases = self.ast.enum_cases.push_drain(self.enum_cases, mark);
+            self.ast.enums.push(crate::ast::EnumDecl { name, cases });
+            Ok(())
+        })();
+        self.enum_cases.truncate(mark);
+        result
+    }
+
+    fn extension(&mut self) -> Parsed<()> {
+        self.bump();
+        let receiver = self.expect(T::Ident, "a type name")?;
+        self.expect(T::LBrace, "`{`")?;
+        self.skip_separators();
+        while !self.at(T::RBrace) && !self.at(T::Eof) {
+            let mutating = self.eat(T::Mutating).is_some();
+            if !self.at(T::Fn) {
+                return Err(self.expected("a method"));
+            }
+            if let Some(mut method) = self.fn_decl()? {
+                method.receiver = Some(receiver);
+                method.mutating = mutating;
+                let id = self.ast.fns.push(method);
+                self.ast.items.push(Item::Fn(id));
+            }
+            if !self.at_statement_end() {
+                return Err(self.expected("a line break or `}`"));
+            }
+            self.skip_separators();
+        }
+        self.expect(T::RBrace, "`}`")?;
+        Ok(())
+    }
+
+    fn struct_decl(&mut self) -> Parsed<()> {
+        let mark = self.params.len();
+        let result = (|| {
+            self.bump();
+            let name = self.expect(T::Ident, "a struct name")?;
+            self.expect(T::LBrace, "`{`")?;
+            self.skip_separators();
+            while !self.at(T::RBrace) && !self.at(T::Eof) {
+                let field = self.expect(T::Ident, "a field name")?;
+                self.expect(T::Colon, "`:`")?;
+                let ty = self.type_expr()?;
+                self.params.push(Param { name: field, ty });
+                if self.eat(T::Comma).is_none() && !self.at_statement_end() {
+                    return Err(self.expected("a line break or `,`"));
+                }
+                self.skip_separators();
+            }
+            self.expect(T::RBrace, "`}`")?;
+            let fields = self.ast.params.push_drain(self.params, mark);
+            self.ast
+                .structs
+                .push(crate::ast::StructDecl { name, fields });
+            Ok(())
+        })();
+        self.params.truncate(mark);
+        result
+    }
+
+    fn struct_literal(&mut self) -> Parsed<ExprId> {
+        let mark = self.field_inits.len();
+        let result = (|| {
+            let name = self.bump();
+            let span = self.span_of(name);
+            self.expect(T::LBrace, "`{`")?;
+            self.skip_separators();
+            while !self.at(T::RBrace) && !self.at(T::Eof) {
+                let field = self.expect(T::Ident, "a field name")?;
+                self.expect(T::Colon, "`:`")?;
+                let value = self.expr(false)?;
+                self.field_inits
+                    .push(crate::ast::FieldInit { name: field, value });
+                if self.eat(T::Comma).is_none() && !self.at_statement_end() {
+                    return Err(self.expected("a line break or `,`"));
+                }
+                self.skip_separators();
+            }
+            let end = self.expect(T::RBrace, "`}`")?;
+            let fields = self.ast.field_inits.push_drain(self.field_inits, mark);
+            Ok(self.ast.expr(
+                Expr::StructLiteral { name, fields },
+                span.to(self.span_of(end)),
+            ))
+        })();
+        self.field_inits.truncate(mark);
+        result
+    }
+
     /// A function declaration. `None` when it is reported and dropped.
     fn fn_decl(&mut self) -> Parsed<Option<FnDecl>> {
         let keyword = self.bump();
@@ -543,6 +761,8 @@ impl Parser<'_> {
         }
         Ok(Some(FnDecl {
             name,
+            receiver: None,
+            mutating: false,
             params,
             ret,
             body,
@@ -778,17 +998,21 @@ impl Parser<'_> {
         let value = self.expr(false)?;
         let span = self.ast.span(target).to(self.ast.span(value));
         match self.ast.exprs[target] {
-            Expr::Name(token) => Ok(Some(self.ast.stmts.push(Stmt::Assign {
-                target: token,
+            Expr::Name(token) | Expr::SelfValue(token) => {
+                Ok(Some(self.ast.stmts.push(Stmt::Assign {
+                    target: token,
+                    op,
+                    value,
+                    span,
+                })))
+            }
+            Expr::Error => Ok(None),
+            Expr::Member { .. } => Ok(Some(self.ast.stmts.push(Stmt::AssignField {
+                target,
                 op,
                 value,
                 span,
             }))),
-            Expr::Error => Ok(None),
-            Expr::Member { .. } => {
-                self.unsupported(self.ast.span(target), "assignment to fields");
-                Ok(None)
-            }
             _ => {
                 self.report(
                     Code::AssignToImmutable,
@@ -1108,7 +1332,35 @@ impl Parser<'_> {
         }
     }
 
+    fn named_call(&mut self, callee: ExprId) -> Parsed<ExprId> {
+        let mark = self.field_inits.len();
+        let result = (|| {
+            self.bump();
+            loop {
+                let name = self.expect(T::Ident, "an argument label")?;
+                self.expect(T::Colon, "`:`")?;
+                let value = self.expr(false)?;
+                self.field_inits.push(crate::ast::FieldInit { name, value });
+                if self.eat(T::Comma).is_none() {
+                    break;
+                }
+            }
+            let close = self.expect(T::RParen, "`)`")?;
+            let span = self.ast.span(callee).to(self.span_of(close));
+            let args = self.ast.field_inits.push_drain(self.field_inits, mark);
+            Ok(self.ast.expr(Expr::NamedCall { callee, args }, span))
+        })();
+        self.field_inits.truncate(mark);
+        result
+    }
+
     fn call(&mut self, callee: ExprId) -> Parsed<ExprId> {
+        if self.nth(1) == T::Ident
+            && self.nth(2) == T::Colon
+            && !matches!(self.ast.exprs[callee], Expr::Name(token) if self.tokens.symbol(token).is_type_name())
+        {
+            return self.named_call(callee);
+        }
         let open = self.bump();
         let mark = self.exprs.len();
         if self.at(T::Ident)
@@ -1281,7 +1533,16 @@ impl Parser<'_> {
                 self.ast.expr(Expr::Char(token), span)
             }
             T::Null => self.unsupported_primary("`null`"),
-            T::SelfLower => self.unsupported_primary("`self`"),
+            T::Dot => {
+                self.bump();
+                let case = self.expect(T::Ident, "an enum case")?;
+                self.ast
+                    .expr(Expr::EnumShorthand(case), span.to(self.span_of(case)))
+            }
+            T::SelfLower => {
+                self.bump();
+                self.ast.expr(Expr::SelfValue(token), span)
+            }
             T::LBracket => self.unsupported_primary("array literals"),
             // In a statement header, `{` where an operand belongs is a
             // missing operand (`if x > {` mid-edit), not a block expression;
@@ -1289,12 +1550,7 @@ impl Parser<'_> {
             T::LBrace if ns => return Err(self.expected("an expression")),
             T::LBrace => self.unsupported_primary("block expressions"),
             T::Ident if self.nth(1) == T::FatArrow => self.lambda(self.pos + 1)?,
-            T::Ident if !ns && self.nth(1) == T::LBrace => {
-                self.unsupported(span, "struct literals");
-                self.bump();
-                self.skip_one();
-                self.error(Span::new(span.start, self.last_end()))
-            }
+            T::Ident if !ns && self.nth(1) == T::LBrace => self.struct_literal()?,
             T::Ident => {
                 self.bump();
                 self.ast.expr(Expr::Name(token), span)
@@ -1316,23 +1572,7 @@ impl Parser<'_> {
                 self.skip_statement();
                 self.error(Span::new(span.start, self.last_end()))
             }
-            T::Match => {
-                self.unsupported(span, "`match`");
-                while !matches!(self.kind(), T::LBrace | T::Newline | T::Eof) {
-                    self.skip_one();
-                }
-                self.skip_one();
-                self.error(Span::new(span.start, self.last_end()))
-            }
-            T::Dot if self.nth(1) == T::Ident => {
-                self.unsupported(span, "enum case shorthand");
-                self.bump();
-                self.bump();
-                if self.at(T::LParen) {
-                    self.skip_one();
-                }
-                self.error(Span::new(span.start, self.last_end()))
-            }
+            T::Match => self.match_expr()?,
             T::If => self.if_expr()?,
             _ => return Err(self.expected("an expression")),
         })

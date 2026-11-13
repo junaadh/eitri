@@ -369,6 +369,9 @@ pub enum Sem {
     StringSlice,
     StringTrim,
     StringCase,
+    NullableNull,
+    NullableWrap,
+    NullableUnwrap,
     StringNextChar,
     StringNextLine,
     StringReplace,
@@ -689,6 +692,9 @@ ops! {
     StrConcat = "STR.CONCAT", "STR", Abc, [Dst, Src, Src], Sem::StringConcat, FAULT, true, Managed;
     StrCompare = "STR.COMPARE", "STR", Abc, [Dst, Src, Src], Sem::StringCompare, NONE, true, None;
     StrJoin = "STR.JOIN", "STR", Abc, [Dst, Src, Src], Sem::StringJoin, FAULT, true, Managed;
+    NullableNull = "NULLABLE.NULL", "STR", Abc, [Dst, None, None], Sem::NullableNull, FAULT, true, Managed;
+    NullableWrap = "NULLABLE.WRAP", "STR", Abc, [Dst, Src, None], Sem::NullableWrap, NONE, true, None;
+    NullableUnwrap = "NULLABLE.UNWRAP", "STR", Abc, [Dst, Src, None], Sem::NullableUnwrap, FAULT, true, None;
     StrNextChar = "STR.NEXT.CHAR", "STR", Abc, [Dst, Src, SrcDst], Sem::StringNextChar, FAULT, true, None;
     StrNextLine = "STR.NEXT.LINE", "STR", Abc, [Dst, Src, SrcDst], Sem::StringNextLine, FAULT, true, Managed;
     StrUpper = "STR.UPPER", "STR", Abc, [Dst, Src, None], Sem::StringCase, FAULT, true, Managed;

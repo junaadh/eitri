@@ -260,35 +260,46 @@ fn observe(text: &str, reference: bool) -> Option<String> {
     if diagnostics.has_errors() {
         return None;
     }
-    // E2's frozen checker is an M0 regression baseline, not a T013 oracle.
-    if ast.exprs.iter().any(|e| {
-        matches!(
-            e,
-            eitri_syntax::ast::Expr::Float { .. }
-                | eitri_syntax::ast::Expr::Char(_)
-                | eitri_syntax::ast::Expr::String(_)
-                | eitri_syntax::ast::Expr::StringPart(_)
-                | eitri_syntax::ast::Expr::Interpolation(_)
-                | eitri_syntax::ast::Expr::Convert { .. }
-                | eitri_syntax::ast::Expr::Binary {
-                    op: eitri_syntax::ast::BinaryOp::BitAnd
-                        | eitri_syntax::ast::BinaryOp::BitOr
-                        | eitri_syntax::ast::BinaryOp::BitXor
-                        | eitri_syntax::ast::BinaryOp::Shl
-                        | eitri_syntax::ast::BinaryOp::Shr,
-                    ..
-                }
-                | eitri_syntax::ast::Expr::Unary {
-                    op: eitri_syntax::ast::UnaryOp::BitNot,
-                    ..
-                }
-        )
-    }) || ["i8", "u8", "u64", "f32", "f64", "char"]
-        .iter()
-        .any(|name| {
-            text.split(|c: char| !c.is_alphanumeric() && c != '_')
-                .any(|part| part == *name)
+    // E2's frozen checker is an M0 regression baseline, not a T013/T017 oracle.
+    if !ast.enums.is_empty()
+        || !ast.structs.is_empty()
+        || ast
+            .stmts
+            .iter()
+            .any(|s| matches!(s, eitri_syntax::ast::Stmt::AssignField { .. }))
+        || ast.exprs.iter().any(|e| {
+            matches!(
+                e,
+                eitri_syntax::ast::Expr::Match(_)
+                    | eitri_syntax::ast::Expr::EnumShorthand(_)
+                    | eitri_syntax::ast::Expr::NamedCall { .. }
+                    | eitri_syntax::ast::Expr::StructLiteral { .. }
+                    | eitri_syntax::ast::Expr::Float { .. }
+                    | eitri_syntax::ast::Expr::Char(_)
+                    | eitri_syntax::ast::Expr::String(_)
+                    | eitri_syntax::ast::Expr::StringPart(_)
+                    | eitri_syntax::ast::Expr::Interpolation(_)
+                    | eitri_syntax::ast::Expr::Convert { .. }
+                    | eitri_syntax::ast::Expr::Binary {
+                        op: eitri_syntax::ast::BinaryOp::BitAnd
+                            | eitri_syntax::ast::BinaryOp::BitOr
+                            | eitri_syntax::ast::BinaryOp::BitXor
+                            | eitri_syntax::ast::BinaryOp::Shl
+                            | eitri_syntax::ast::BinaryOp::Shr,
+                        ..
+                    }
+                    | eitri_syntax::ast::Expr::Unary {
+                        op: eitri_syntax::ast::UnaryOp::BitNot,
+                        ..
+                    }
+            )
         })
+        || ["i8", "u8", "u64", "f32", "f64", "char"]
+            .iter()
+            .any(|name| {
+                text.split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .any(|part| part == *name)
+            })
     {
         return None;
     }

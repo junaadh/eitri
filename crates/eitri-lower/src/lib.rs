@@ -169,7 +169,9 @@ pub fn value_type(ty: Ty) -> ValueType {
         Ty::Bool => ValueType::Bool,
         Ty::String => ValueType::String,
         Ty::FindOffset => ValueType::I64,
-        Ty::Void | Ty::Error => unreachable!("checked code has only value types here"),
+        Ty::Void | Ty::Error | Ty::Struct(_) | Ty::Enum(_) => {
+            unreachable!("checked code has only value types here")
+        }
     }
 }
 
@@ -254,6 +256,7 @@ fn lower_mode<const SIMPLE: bool>(
             stack: &mut scratch.stack,
             plans: Vec::new(),
             loops: &mut scratch.loops,
+            mutation_result: None,
             top: 0,
         };
         lower_with(lowerer)
@@ -266,6 +269,7 @@ fn lower_mode<const SIMPLE: bool>(
             stack: &mut scratch.stack,
             plans: Vec::new(),
             loops: &mut scratch.loops,
+            mutation_result: None,
             top: 0,
         };
         lower_with(lowerer)
@@ -322,13 +326,14 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
         }
     }
     if !lowerer.checked.strings.is_empty()
+        || !lowerer.checked.enum_case_types.is_empty()
         || !lowerer.plans.is_empty()
         || functions.iter().any(|f| {
             f.signature
                 .params
                 .iter()
                 .chain(&f.signature.results)
-                .any(|t| *t == ValueType::String)
+                .any(|t| t.is_managed())
         })
         || functions
             .iter()
@@ -537,6 +542,7 @@ struct Lowerer<'a, 'i, const R: bool, const SIMPLE: bool> {
     stack: &'a mut Vec<ExprId>,
     plans: Vec<String>,
     loops: &'a mut Vec<(Label, Label)>,
+    mutation_result: Option<(u32, u32, u32)>,
     /// The next free slot.
     top: u32,
 }
@@ -571,28 +577,76 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let decl = ast.fns[id];
         let types = checked.signatures[id];
         let parameter_types = &checked.param_types[types.params];
-        let mut params = self.asm.artifact_vec(parameter_types.len())?;
-        params.extend(parameter_types.iter().copied().map(value_type));
-        let mut results = self.asm.artifact_vec(usize::from(types.ret != Ty::Void))?;
+        let count: usize = parameter_types
+            .iter()
+            .map(|&ty| self.width(ty) as usize)
+            .sum();
+        let mut params = self.asm.artifact_vec(count)?;
+        for &ty in parameter_types {
+            self.flatten_type(ty, &mut params)?;
+        }
+        let return_width = if types.ret == Ty::Void {
+            0
+        } else {
+            self.width(types.ret)
+        };
+        let self_ty = parameter_types.first().copied().filter(|_| decl.mutating);
+        let self_width = self_ty.map_or(0, |ty| self.width(ty));
+        let mut results = self
+            .asm
+            .artifact_vec((return_width + self_width) as usize)?;
         if types.ret != Ty::Void {
-            results.push(value_type(types.ret));
+            self.flatten_type(types.ret, &mut results)?;
+        }
+        if let Some(ty) = self_ty {
+            self.flatten_type(ty, &mut results)?;
         }
         let signature = Signature { params, results };
-        let base = signature.param_base();
-        for (index, binding) in checked.params[id].iter().enumerate() {
-            self.slots[binding] = base + index as u32;
+        let mut base = signature.param_base();
+        for (binding, &ty) in checked.params[id].iter().zip(parameter_types) {
+            self.slots[binding] = base;
+            base += self.width(ty);
         }
-        self.top = base + signature.params.len() as u32;
+        self.top = base;
+        self.mutation_result = if decl.mutating {
+            let binding = checked.params[id].iter().next().expect("method receiver");
+            Some((return_width, self.slots[binding], self_width))
+        } else {
+            None
+        };
         let body = decl.body.expect("script functions have bodies");
         self.statements(body)?;
         if types.ret == Ty::Void {
+            self.write_mutation_result(body.span.shrink_to_end())?;
             self.asm.ret(body.span.shrink_to_end())?;
         }
+        self.mutation_result = None;
         let name = self
             .input
             .interner
             .resolve(self.input.tokens.symbol(decl.name));
-        self.asm.finish(name, signature)
+        let qualified = if let Some(receiver) = decl.receiver {
+            let owner = self
+                .input
+                .interner
+                .resolve(self.input.tokens.symbol(receiver));
+            let mut bytes = self.asm.temporary_vec(owner.len() + 1 + name.len())?;
+            bytes.extend_from_slice(owner.as_bytes());
+            bytes.push(b'.');
+            bytes.extend_from_slice(name.as_bytes());
+            Some(bytes)
+        } else {
+            None
+        };
+        let name = qualified.as_deref().map_or(name, |bytes| {
+            std::str::from_utf8(bytes).expect("identifier UTF-8")
+        });
+        let mut function = self.asm.finish(name, signature)?;
+        function.reentry_safe = !matches!(types.ret, Ty::Struct(_) | Ty::Enum(_))
+            && !parameter_types
+                .iter()
+                .any(|ty| matches!(ty, Ty::Struct(_) | Ty::Enum(_)));
+        Ok(function)
     }
 
     /// After a failure, empty the assembler so the next run starts clean.
@@ -603,10 +657,92 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         built
     }
 
+    fn write_mutation_result(&mut self, span: Span) -> Lowered<()> {
+        if let Some((out, source, width)) = self.mutation_result {
+            for offset in 0..width {
+                self.asm.emit(
+                    Op::Mov,
+                    Operands::abc((out + offset).into(), (source + offset).into(), 0),
+                    span,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn temp(&mut self) -> u32 {
         let slot = self.top;
         self.top += 1;
         slot
+    }
+
+    fn width(&self, ty: Ty) -> u32 {
+        match ty {
+            Ty::Struct(id) => self.checked.struct_widths[id],
+            Ty::Enum(id) => self.checked.enum_widths[id],
+            _ => 1,
+        }
+    }
+
+    fn flatten_type(&mut self, ty: Ty, output: &mut Vec<ValueType>) -> Lowered<()> {
+        if !matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+            output.push(value_type(ty));
+            return Ok(());
+        }
+        // The graph is acyclic. Pending nodes are bounded by leaves plus the
+        // declaration depth; the vector is charged to compiler memory.
+        let capacity = self.width(ty) as usize + self.input.ast.structs.len();
+        let mut pending = self.asm.temporary_vec(capacity)?;
+        pending.push(ty);
+        while let Some(next) = pending.pop() {
+            if let Ty::Struct(id) = next {
+                pending.extend(
+                    self.checked.param_types[self.checked.struct_fields[id]]
+                        .iter()
+                        .rev()
+                        .copied(),
+                );
+            } else if let Ty::Enum(id) = next {
+                output.push(ValueType::I64);
+                let start = self.checked.enum_starts[id] as usize;
+                let count = self.input.ast.enum_cases[self.input.ast.enums[id].cases].len();
+                for &list in &self.checked.enum_case_types[start..start + count] {
+                    for &ty in &self.checked.param_types[list] {
+                        output.push(if ty == Ty::String {
+                            ValueType::NullableString
+                        } else {
+                            value_type(ty)
+                        });
+                    }
+                }
+            } else {
+                output.push(value_type(next));
+            }
+        }
+        Ok(())
+    }
+
+    fn field_offset(&self, id: eitri_syntax::ast::StructId, index: u32) -> u32 {
+        self.checked.param_types[self.checked.struct_fields[id]][..index as usize]
+            .iter()
+            .map(|&ty| self.width(ty))
+            .sum()
+    }
+
+    fn field_address(&self, target: ExprId, binding: BindingId) -> u32 {
+        let mut node = target;
+        let mut offset = 0;
+        while let Expr::Member { base, .. } = self.input.ast.exprs[node] {
+            let Res::Field(index) = self.checked.resolutions[node] else {
+                unreachable!()
+            };
+            let Ty::Struct(id) = self.checked.types[base] else {
+                unreachable!()
+            };
+            offset += self.field_offset(id, index);
+            node = base;
+        }
+        self.slots[binding] + offset
     }
 
     fn dst(&mut self, dst: Option<u32>) -> u32 {
@@ -688,8 +824,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 // `let x = x + 1` reads the old `x` while writing the new.
                 let slot = self.temp();
                 self.slots[binding] = slot;
+                let width = self.width(checked.bindings[binding].ty);
+                self.top = slot + width;
                 self.expr(init, Some(slot))?;
-                self.top = slot + 1;
+                self.top = slot + width;
                 return Ok(());
             }
             Stmt::Assign {
@@ -699,7 +837,24 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let slot = self.slots[binding];
                 match op {
                     AssignOp::Set => {
-                        self.expr(value, Some(slot))?;
+                        if matches!(checked.bindings[binding].ty, Ty::Struct(_) | Ty::Enum(_)) {
+                            let source = self.expr(value, None)?;
+                            if source != slot {
+                                for offset in 0..self.width(checked.bindings[binding].ty) {
+                                    self.asm.emit(
+                                        Op::Mov,
+                                        Operands::abc(
+                                            (slot + offset).into(),
+                                            (source + offset).into(),
+                                            0,
+                                        ),
+                                        span,
+                                    )?;
+                                }
+                            }
+                        } else {
+                            self.expr(value, Some(slot))?;
+                        }
                     }
                     AssignOp::Compound(op) => {
                         // A fault here points at the whole statement.
@@ -721,6 +876,56 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             Stmt::Expr(e) => self.discard(e)?,
+            Stmt::AssignField {
+                target,
+                op,
+                value,
+                span,
+            } => {
+                let binding = checked.stmt_bindings[id].expect("checked field target");
+                let slot = self.field_address(target, binding);
+                match op {
+                    AssignOp::Set => {
+                        if matches!(checked.types[target], Ty::Struct(_)) {
+                            let source = self.expr(value, None)?;
+                            if source != slot {
+                                let width = self.width(checked.types[target]);
+                                // A nested source and target may overlap; evaluate into a distinct window.
+                                let temporary = self.top;
+                                self.top += width;
+                                for offset in 0..width {
+                                    self.asm.emit(
+                                        Op::Mov,
+                                        Operands::abc(
+                                            (temporary + offset).into(),
+                                            (source + offset).into(),
+                                            0,
+                                        ),
+                                        span,
+                                    )?;
+                                }
+                                for offset in 0..width {
+                                    self.asm.emit(
+                                        Op::Mov,
+                                        Operands::abc(
+                                            (slot + offset).into(),
+                                            (temporary + offset).into(),
+                                            0,
+                                        ),
+                                        span,
+                                    )?;
+                                }
+                            }
+                        } else {
+                            self.expr(value, Some(slot))?;
+                        }
+                    }
+                    AssignOp::Compound(op) => {
+                        let rhs = self.expr(value, None)?;
+                        self.operate(op, checked.types[target], slot, slot, rhs, span)?;
+                    }
+                }
+            }
             Stmt::Break(keyword) | Stmt::Continue(keyword) => {
                 let &(continue_to, break_to) = self.loops.last().expect("checked loop control");
                 let target = if matches!(ast.stmts[id], Stmt::Break(_)) {
@@ -878,6 +1083,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 if let Some(value) = value {
                     self.expr(value, Some(0))?;
                 }
+                self.write_mutation_result(self.input.tokens.span(keyword))?;
                 self.asm.ret(self.input.tokens.span(keyword))?;
             }
         }
@@ -1044,6 +1250,66 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     fn expr(&mut self, e: ExprId, dst: Option<u32>) -> Lowered<u32> {
         let (ast, checked) = (self.input.ast, self.checked);
         let span = ast.span(e);
+        if let Res::EnumCase(id, case) = checked.resolutions[e] {
+            let width = self.width(Ty::Enum(id));
+            let slot = match dst {
+                Some(slot) => slot,
+                None => {
+                    let slot = self.top;
+                    self.top += width;
+                    slot
+                }
+            };
+            let end = self.top;
+            self.asm.load(slot, case as u64, ValueType::I64, span)?;
+            let start = checked.enum_starts[id] as usize;
+            let cases = &ast.enum_cases[ast.enums[id].cases];
+            let mut offset = 1u32;
+            for case_index in 0..cases.len() {
+                let types = checked.enum_case_types[start + case_index];
+                for &ty in &checked.param_types[types] {
+                    if ty == Ty::String {
+                        self.asm.emit(
+                            Op::NullableNull,
+                            Operands::abc((slot + offset).into(), 0, 0),
+                            span,
+                        )?;
+                    } else {
+                        self.asm.load(slot + offset, 0, value_type(ty), span)?;
+                    }
+                    offset += 1;
+                }
+            }
+            if let Expr::NamedCall { args, .. } = ast.exprs[e] {
+                let fields = ast.params(cases[case as usize].fields);
+                let base = 1
+                    + (0..case as usize)
+                        .map(|i| ast.params(cases[i].fields).len() as u32)
+                        .sum::<u32>();
+                for arg in &ast.field_inits[args] {
+                    let index = fields
+                        .iter()
+                        .position(|f| {
+                            self.input.tokens.symbol(f.name) == self.input.tokens.symbol(arg.name)
+                        })
+                        .expect("checked payload");
+                    let ty =
+                        checked.param_types[checked.enum_case_types[start + case as usize]][index];
+                    if ty == Ty::String {
+                        let value = self.expr(arg.value, None)?;
+                        self.asm.emit(
+                            Op::NullableWrap,
+                            Operands::abc((slot + base + index as u32).into(), value.into(), 0),
+                            span,
+                        )?;
+                    } else {
+                        self.expr(arg.value, Some(slot + base + index as u32))?;
+                    }
+                    self.top = end;
+                }
+            }
+            return Ok(slot);
+        }
         match ast.exprs[e] {
             Expr::Int { .. } | Expr::Float { .. } | Expr::Char(_) => {
                 let slot = self.dst(dst);
@@ -1071,11 +1337,108 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     .load(slot, u64::from(value), ValueType::Bool, span)?;
                 Ok(slot)
             }
-            Expr::Name(_) => {
+            Expr::StructLiteral { fields, .. } => {
+                let Res::Struct(id) = checked.resolutions[e] else {
+                    unreachable!()
+                };
+                let width = self.width(Ty::Struct(id));
+                let slot = if let Some(dst) = dst {
+                    dst
+                } else {
+                    let first = self.top;
+                    self.top += width;
+                    first
+                };
+                let end = self.top;
+                let declared = ast.params(ast.structs[id].fields);
+                for field in &ast.field_inits[fields] {
+                    let symbol = self.input.tokens.symbol(field.name);
+                    let index = declared
+                        .iter()
+                        .position(|item| self.input.tokens.symbol(item.name) == symbol)
+                        .expect("checked field");
+                    self.expr(
+                        field.value,
+                        Some(slot + self.field_offset(id, index as u32)),
+                    )?;
+                    self.top = end;
+                }
+                Ok(slot)
+            }
+            Expr::Member { base, .. } if matches!(checked.resolutions[e], Res::Field(_)) => {
+                let Res::Field(index) = checked.resolutions[e] else {
+                    unreachable!()
+                };
+                let Ty::Struct(id) = checked.types[base] else {
+                    unreachable!()
+                };
+                let source = self.expr(base, None)? + self.field_offset(id, index);
+                if matches!(checked.types[e], Ty::Struct(_) | Ty::Enum(_)) {
+                    let width = self.width(checked.types[e]);
+                    let target = match dst {
+                        Some(d) => d,
+                        None if SIMPLE => {
+                            let d = self.top;
+                            self.top += width;
+                            d
+                        }
+                        None => source,
+                    };
+                    if target != source {
+                        for offset in 0..width {
+                            self.asm.emit(
+                                Op::Mov,
+                                Operands::abc(
+                                    (target + offset).into(),
+                                    (source + offset).into(),
+                                    0,
+                                ),
+                                span,
+                            )?;
+                        }
+                    }
+                    Ok(target)
+                } else {
+                    match dst {
+                        Some(target) if target != source => {
+                            self.asm.emit(
+                                Op::Mov,
+                                Operands::abc(target.into(), source.into(), 0),
+                                span,
+                            )?;
+                            Ok(target)
+                        }
+                        _ => Ok(source),
+                    }
+                }
+            }
+            Expr::SelfValue(_) | Expr::Name(_) => {
                 let Res::Binding(binding) = checked.resolutions[e] else {
                     unreachable!("checked value names are bindings");
                 };
                 let slot = self.slots[binding];
+                if matches!(checked.types[e], Ty::Struct(_) | Ty::Enum(_)) {
+                    let width = self.width(checked.types[e]);
+                    let target = match dst {
+                        Some(d) => d,
+                        None if SIMPLE => {
+                            let first = self.top;
+                            self.top += width;
+                            first
+                        }
+                        None => slot,
+                    };
+                    if target != slot {
+                        for offset in 0..width {
+                            self.asm.emit(
+                                Op::Mov,
+                                Operands::abc((target + offset).into(), (slot + offset).into(), 0),
+                                span,
+                            )?;
+                        }
+                    }
+                    return Ok(target);
+                }
                 match dst {
                     Some(d) if d != slot => {
                         self.asm
@@ -1300,8 +1663,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             Expr::Call { .. } => self.call(e, dst),
-            Expr::If(id) => self.if_value(id, dst, span),
-            Expr::Member { .. } | Expr::Error => {
+            Expr::If(id) => self.if_value(id, dst, span, checked.types[e]),
+            Expr::Match(id) => self.match_value(id, dst, span, checked.types[e]),
+            Expr::EnumShorthand(_) | Expr::NamedCall { .. } | Expr::Member { .. } | Expr::Error => {
                 unreachable!("checked code has no bare members or errors")
             }
         }
@@ -1816,11 +2180,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     /// host's argument and result windows never overlap.
     fn call(&mut self, e: ExprId, dst: Option<u32>) -> Lowered<u32> {
         let (ast, checked) = (self.input.ast, self.checked);
-        let Expr::Call { args, .. } = ast.exprs[e] else {
+        let Expr::Call { callee, args } = ast.exprs[e] else {
             unreachable!("called on a call");
         };
         let (target, returns) = match checked.resolutions[e] {
-            Res::Function(f) => (
+            Res::Function(f) | Res::Method(f) | Res::MutMethod(f, _) => (
                 CallTarget::Script(FunctionId::from_u32(f.as_u32() + 1)),
                 checked.signatures[f].ret != Ty::Void,
             ),
@@ -1832,16 +2196,64 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         };
         let args = ast.args(args);
         let first = self.top;
-        self.top += args.len() as u32;
-        for (index, &arg) in args.iter().enumerate() {
+        let receiver = if matches!(
+            checked.resolutions[e],
+            Res::Method(_) | Res::MutMethod(_, _)
+        ) {
+            let Expr::Member { base, .. } = ast.exprs[callee] else {
+                unreachable!()
+            };
+            Some(base)
+        } else {
+            None
+        };
+        let receiver_width = receiver.map_or(0, |base| self.width(checked.types[base]));
+        let argument_slots: u32 = receiver_width
+            + args
+                .iter()
+                .map(|&arg| self.width(checked.types[arg]))
+                .sum::<u32>();
+        self.top += argument_slots;
+        if let Some(receiver) = receiver {
             let save = self.top;
-            self.expr(arg, Some(first + index as u32))?;
+            self.expr(receiver, Some(first))?;
             self.top = save;
         }
-        let result = if returns {
+        let mut offset = receiver_width;
+        for &arg in args {
+            let save = self.top;
+            self.expr(arg, Some(first + offset))?;
+            self.top = save;
+            offset += self.width(checked.types[arg]);
+        }
+        let return_width = if returns {
+            self.width(checked.types[e])
+        } else {
+            0
+        };
+        let mutation = match checked.resolutions[e] {
+            Res::MutMethod(_, binding) => Some(binding),
+            _ => None,
+        };
+        let result = if mutation.is_some() {
+            let first = self.top;
+            self.top += return_width + receiver_width;
             SlotRange {
-                first: self.dst(dst),
-                count: 1,
+                first,
+                count: return_width + receiver_width,
+            }
+        } else if returns {
+            let slot = match dst {
+                Some(slot) => slot,
+                None => {
+                    let slot = self.top;
+                    self.top += return_width;
+                    slot
+                }
+            };
+            SlotRange {
+                first: slot,
+                count: return_width,
             }
         } else {
             SlotRange { first: 0, count: 0 }
@@ -1850,19 +2262,143 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             target,
             args: SlotRange {
                 first,
-                count: args.len() as u32,
+                count: argument_slots,
             },
             result,
         };
         self.asm.call(site, ast.span(e))?;
+        if let Some(binding) = mutation {
+            let receiver = receiver.expect("mutating receiver");
+            let destination = self.field_address(receiver, binding);
+            for offset in 0..receiver_width {
+                self.asm.emit(
+                    Op::Mov,
+                    Operands::abc(
+                        (destination + offset).into(),
+                        (result.first + return_width + offset).into(),
+                        0,
+                    ),
+                    ast.span(e),
+                )?;
+            }
+            if returns && let Some(destination) = dst {
+                for offset in 0..return_width {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(
+                            (destination + offset).into(),
+                            (result.first + offset).into(),
+                            0,
+                        ),
+                        ast.span(e),
+                    )?;
+                }
+                return Ok(destination);
+            }
+        }
         Ok(result.first)
+    }
+
+    fn match_value(
+        &mut self,
+        id: eitri_syntax::ast::MatchId,
+        dst: Option<u32>,
+        span: Span,
+        ty: Ty,
+    ) -> Lowered<u32> {
+        let ast = self.input.ast;
+        let node = ast.matches[id];
+        let result = if ty == Ty::Void {
+            0
+        } else {
+            match dst {
+                Some(slot) => slot,
+                None => {
+                    let slot = self.top;
+                    self.top += self.width(ty);
+                    slot
+                }
+            }
+        };
+        let subject = self.expr(node.subject, None)?;
+        let Ty::Enum(enum_id) = self.checked.types[node.subject] else {
+            unreachable!()
+        };
+        let cases = &ast.enum_cases[ast.enums[enum_id].cases];
+        let end = self.asm.label();
+        let arms = &ast.match_arms[node.arms];
+        for (arm_index, arm) in arms.iter().enumerate() {
+            let next = self.asm.label();
+            let mark = self.top;
+            if let Some(case_name) = arm.case {
+                let index = cases
+                    .iter()
+                    .position(|case| {
+                        self.input.tokens.symbol(case.name) == self.input.tokens.symbol(case_name)
+                    })
+                    .expect("checked case");
+                if arm_index + 1 != arms.len() {
+                    let tag = self.temp();
+                    self.asm.load(tag, index as u64, ValueType::I64, span)?;
+                    self.asm.branch_if(Cond::Ne, subject, tag, next, span)?;
+                }
+                let base = 1
+                    + (0..index)
+                        .map(|i| ast.params(cases[i].fields).len() as u32)
+                        .sum::<u32>();
+                let types = self.checked.enum_case_types
+                    [self.checked.enum_starts[enum_id] as usize + index];
+                for (offset, &token) in ast.match_bindings[arm.bindings].iter().enumerate() {
+                    if let Some(binding) = self.checked.pattern_bindings[token] {
+                        let target = self.temp();
+                        self.slots[binding] = target;
+                        let source = subject + base + offset as u32;
+                        let op = if self.checked.param_types[types][offset] == Ty::String {
+                            Op::NullableUnwrap
+                        } else {
+                            Op::Mov
+                        };
+                        self.asm
+                            .emit(op, Operands::abc(target.into(), source.into(), 0), span)?;
+                    }
+                }
+            }
+            match arm.body {
+                eitri_syntax::ast::MatchBody::Expr(body) => {
+                    if ty == Ty::Void {
+                        self.discard(body)?;
+                    } else {
+                        self.expr(body, Some(result))?;
+                    }
+                }
+                eitri_syntax::ast::MatchBody::Block(body) => {
+                    if ty == Ty::Void {
+                        self.statements(body)?;
+                    } else {
+                        self.block_value(body, result)?;
+                    }
+                }
+            }
+            self.asm.jump(end, span);
+            self.asm.bind(next)?;
+            self.top = mark;
+        }
+        self.asm.bind(end)?;
+        Ok(result)
     }
 
     /// An `if` used as a value: every branch writes its final expression
     /// into the same slot. Iterates along the `else if` chain.
-    fn if_value(&mut self, id: IfId, dst: Option<u32>, span: Span) -> Lowered<u32> {
+    fn if_value(&mut self, id: IfId, dst: Option<u32>, span: Span, ty: Ty) -> Lowered<u32> {
         let ast = self.input.ast;
-        let slot = self.dst(dst);
+        let slot = match dst {
+            Some(slot) => slot,
+            None => {
+                let slot = self.top;
+                self.top += self.width(ty);
+                slot
+            }
+        };
         let end = self.asm.label();
         let mut current = id;
         loop {

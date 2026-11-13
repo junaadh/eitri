@@ -724,6 +724,7 @@ impl<const RECORD: bool> Assembler<RECORD> {
         Ok(Function {
             name: function_name.into_boxed_str(),
             signature,
+            reentry_safe: true,
             frame_size,
             code: code.into_boxed_slice(),
             // Copied at their exact size, so the assembler keeps its

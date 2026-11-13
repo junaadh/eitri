@@ -44,6 +44,7 @@ fn type_name(ty: Option<ValueType>) -> &'static str {
         Some(ValueType::F64) => "f64",
         Some(ValueType::Char) => "char",
         Some(ValueType::String) => "string",
+        Some(ValueType::NullableString) => "nullable_string",
         Some(ValueType::Bool) => "bool",
         None => "void",
     }

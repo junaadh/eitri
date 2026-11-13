@@ -1,0 +1,4 @@
+struct Point { x: i64 }
+extend Point { mutating fn bump() -> void { self.x += 1 } }
+let p = Point { x: 1 }
+p.bump()

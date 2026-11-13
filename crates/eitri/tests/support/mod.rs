@@ -186,12 +186,18 @@ impl oracle::Host for TestHost {
             return Ok(());
         }
         if index == self.retained_text {
-            *string_result = self.oracle_retained.clone();
+            *string_result = Some(
+                self.oracle_retained
+                    .clone()
+                    .ok_or_else(|| oracle::HostError::Message("no retained string".into()))?,
+            );
             self.effects += "effect: test.retained_text()\n";
             return Ok(());
         }
         if index == self.release_text {
-            self.oracle_retained.take();
+            self.oracle_retained
+                .take()
+                .ok_or_else(|| oracle::HostError::Message("no retained string".into()))?;
             self.effects += "effect: test.release_text()\n";
             return Ok(());
         }

@@ -1,0 +1,49 @@
+//! host: test
+import test from "test"
+struct Point { x: i64, label: string }
+extend Point {
+    fn score(extra: i64) -> i64 {
+        return self.x + extra
+    }
+    fn name() -> string {
+        return self.label + "!"
+    }
+    fn duplicate() -> Point {
+        return self
+    }
+}
+let value = Point { x: 5, label: "p" }
+test.emit(value.score(3))
+test.check(value.name() == "p!")
+let copy = value.duplicate()
+test.emit(copy.x)
+extend Point {
+    mutating fn add(n: i64) -> i64 {
+        self.x += n
+        self.label = self.label + "!"
+        return self.x
+    }
+    mutating fn reset() -> void {
+        self = Point { x: 0, label: "zero" }
+    }
+    mutating fn twice() -> void {
+        self.add(1)
+        self.add(1)
+    }
+}
+var moving = value
+test.emit(moving.add(2))
+test.emit(moving.x)
+test.check(moving.label == "p!")
+test.emit(value.x)
+moving.reset()
+test.emit(moving.x)
+test.check(moving.label == "zero")
+struct Holder { point: Point, other: i64 }
+var holder = Holder { point: value, other: 9 }
+test.emit(holder.point.add(3))
+test.emit(holder.point.x)
+test.emit(holder.other)
+moving.twice()
+test.emit(moving.x)
+test.check(moving.label == "zero!!")

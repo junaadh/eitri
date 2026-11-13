@@ -187,19 +187,24 @@ pub fn verify_budgeted(
     root_structure(function, memory)?;
     required_roots(function, &insns)?;
     types(function, callees, &insns, memory)?;
-    let managed = !function.strings.is_empty()
+    let managed = insns.iter().any(|insn| {
+        matches!(
+            insn.decoded.op,
+            Op::NullableNull | Op::NullableWrap | Op::NullableUnwrap
+        )
+    }) || !function.strings.is_empty()
         || function
             .signature
             .params
             .iter()
             .chain(&function.signature.results)
-            .any(|t| *t == ValueType::String)
+            .any(|t| t.is_managed())
         || function.sites.iter().any(|site| {
             callee(callees, site.target).is_some_and(|sig| {
                 sig.params
                     .iter()
                     .chain(&sig.results)
-                    .any(|t| *t == ValueType::String)
+                    .any(|t| t.is_managed())
             })
         });
     if managed {
@@ -448,7 +453,7 @@ fn scalar_root_state(
         while bits != 0 {
             let slot = (word_index * 64 + bits.trailing_zeros() as usize) as u32;
             match slots[slot as usize] {
-                Slot::Ty(ValueType::String) => {}
+                Slot::Ty(ValueType::String | ValueType::NullableString) => {}
                 Slot::Ty(_) => return Err(ErrorKind::RootWrongShape(slot)),
                 _ => return Err(ErrorKind::RootNotInitialized(slot)),
             }
@@ -587,14 +592,13 @@ fn intern_live_state(
     live: &[bool],
     memory: &mut Option<eitri_base::MemoryBudget>,
 ) -> Result<crate::RootState, VerifyError> {
-    let last = state
-        .iter()
-        .zip(live)
-        .rposition(|(&ty, &live)| live && ty == Slot::Ty(ValueType::String));
+    let last = state.iter().zip(live).rposition(|(&ty, &live)| {
+        live && matches!(ty, Slot::Ty(ValueType::String | ValueType::NullableString))
+    });
     let words = last.map_or(0, |slot| slot / 64 + 1);
     let mut ordinary = filled_memory(words, 0u64, memory)?;
     for (slot, (&ty, &live)) in state.iter().zip(live).enumerate() {
-        if live && ty == Slot::Ty(ValueType::String) {
+        if live && matches!(ty, Slot::Ty(ValueType::String | ValueType::NullableString)) {
             ordinary[slot / 64] |= 1 << (slot % 64);
         }
     }
@@ -1182,6 +1186,15 @@ fn transfer(
     let [a, b, c] = columns(d);
     let write = |state: &mut [Slot], slot: i64, ty| state[slot as usize] = Slot::Ty(ty);
     match d.op.info().sem {
+        Sem::NullableNull => write(state, a, ValueType::NullableString),
+        Sem::NullableWrap => {
+            read(state, pc, b, Some(ValueType::String))?;
+            write(state, a, ValueType::NullableString);
+        }
+        Sem::NullableUnwrap => {
+            read(state, pc, b, Some(ValueType::NullableString))?;
+            write(state, a, ValueType::String);
+        }
         Sem::StringAlloc => write(state, a, ValueType::String),
         Sem::StringLen => {
             read(state, pc, b, Some(ValueType::String))?;

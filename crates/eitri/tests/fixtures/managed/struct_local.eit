@@ -1,0 +1,35 @@
+//! host: test
+import test from "test"
+struct Point {
+    x: i64
+    label: string
+    y: i64
+}
+let p = Point { y: test.id(4), label: "abc", x: test.id(2) }
+test.emit(p.x + p.y)
+test.check(p.label == "abc")
+let q = p
+test.emit(q.y)
+var r = q
+r = p
+test.check(r.label == "abc")
+r.x = 11
+r.label = "changed"
+test.emit(r.x)
+test.emit(p.x)
+test.check(p.label == "abc")
+r.y += 3
+test.emit(r.y)
+r = Point { x: r.y, y: r.x, label: r.label }
+test.emit(r.x)
+test.emit(r.y)
+var t = Point { x: 0, y: 1, label: "v" }
+for i in 0..3 {
+    t.x += 1
+    if i == 1 { t.label = t.label + "!" }
+}
+test.emit(t.x)
+test.check(t.label == "v!")
+let selected = if true { p } else { r }
+test.emit(selected.x)
+test.check(selected.label == "abc")

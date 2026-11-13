@@ -4,14 +4,14 @@
         code: Some(
             Unsupported,
         ),
-        message: "not supported yet: `struct` declarations",
+        message: "not supported yet: empty structs",
         labels: [
             Label {
                 style: Primary,
                 source: SourceId(0),
                 span: Span {
-                    start: 0,
-                    end: 6,
+                    start: 7,
+                    end: 8,
                 },
                 message: "",
             },
@@ -20,8 +20,8 @@
     },
 ]
 
-error[E0001]: not supported yet: `struct` declarations
-  ╭─ unsupported/struct.eit:1:1
+error[E0001]: not supported yet: empty structs
+  ╭─ unsupported/struct.eit:1:8
   │
 1 │ struct P {
-  │ ^^^^^^
+  │        ^

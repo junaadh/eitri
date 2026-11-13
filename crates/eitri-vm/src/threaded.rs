@@ -341,6 +341,23 @@ fn managed_op(
 ) -> Result<Option<u64>, FaultKind> {
     let end = st.base + st.function.frame_size as usize;
     match op {
+        Op::NullableNull => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let length = st.m.references.len().max(end);
+            resize_vm(st.m.references, length, None, st.m.memory)?;
+            st.m.references[st.base + a] = None;
+            Ok(None)
+        }
+        Op::NullableWrap | Op::NullableUnwrap => {
+            let value = st.m.references[st.base + b];
+            if op == Op::NullableUnwrap && value.is_none() {
+                return Err(FaultKind::InvalidEnumPayload);
+            }
+            st.m.references[st.base + a] = value;
+            Ok(None)
+        }
         Op::Mov => {
             if !st.m.references.is_empty() {
                 let length = st.m.references.len().max(end);
@@ -688,6 +705,9 @@ managed_handler!(str_len, Op::StrLen);
 managed_handler!(str_concat, Op::StrConcat);
 managed_handler!(str_compare, Op::StrCompare);
 managed_handler!(str_join, Op::StrJoin);
+managed_handler!(nullable_null, Op::NullableNull);
+managed_handler!(nullable_wrap, Op::NullableWrap);
+managed_handler!(nullable_unwrap, Op::NullableUnwrap);
 managed_handler!(str_next_char, Op::StrNextChar);
 managed_handler!(str_next_line, Op::StrNextLine);
 managed_handler!(str_upper, Op::StrUpper);
@@ -835,6 +855,9 @@ extern "rust-preserve-none" fn wide(
                 | Op::StrConcat
                 | Op::StrCompare
                 | Op::StrJoin
+                | Op::NullableNull
+                | Op::NullableWrap
+                | Op::NullableUnwrap
                 | Op::StrNextChar
                 | Op::StrNextLine
                 | Op::StrUpper
@@ -985,11 +1008,7 @@ extern "rust-preserve-none" fn call_script(
             set(callee_s, size, params + i, value);
         }
     }
-    if callee_fn
-        .signature
-        .params
-        .contains(&eitri_bytecode::ValueType::String)
-    {
+    if callee_fn.signature.params.iter().any(|ty| ty.is_managed()) {
         let length = st.m.references.len().max(base + size);
         if let Err(kind) = resize_vm(st.m.references, length, None, st.m.memory) {
             fail!(code, pc, word, s, len, st, kind)
@@ -1090,7 +1109,8 @@ extern "rust-preserve-none" fn ret(
         .function
         .signature
         .results
-        .contains(&eitri_bytecode::ValueType::String)
+        .iter()
+        .any(|ty| ty.is_managed())
     {
         st.m.references.copy_within(
             st.base..st.base + results,
@@ -1262,6 +1282,9 @@ static TABLE: [Handler; 256] = {
     table[Op::StrConcat as usize] = str_concat;
     table[Op::StrCompare as usize] = str_compare;
     table[Op::StrJoin as usize] = str_join;
+    table[Op::NullableNull as usize] = nullable_null;
+    table[Op::NullableWrap as usize] = nullable_wrap;
+    table[Op::NullableUnwrap as usize] = nullable_unwrap;
     table[Op::StrNextChar as usize] = str_next_char;
     table[Op::StrNextLine as usize] = str_next_line;
     table[Op::StrUpper as usize] = str_upper;

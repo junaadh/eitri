@@ -172,3 +172,35 @@ fn nesting_limit() {
     let expected = reentries(64) + "fault: call depth exceeded\n";
     assert!(over.starts_with(&expected), "{over}");
 }
+
+#[test]
+fn struct_field_limit_rejects_before_execution() {
+    let mut source = String::from("struct Wide {\n");
+    for index in 0..257 {
+        writeln!(source, "f{index}: i64").unwrap();
+    }
+    source += "}\nlet value: Wide = Wide {}\nvalue.f0\n";
+    assert!(run(&source).starts_with("error[E0002]"));
+}
+
+#[test]
+fn deep_struct_layout_and_cycles_are_bounded() {
+    let mut source = String::new();
+    for index in 0..2000 {
+        writeln!(source, "struct S{index} {{ value: S{} }}", index + 1).unwrap();
+    }
+    source += "struct S2000 { value: i64 }\n";
+    assert_eq!(run(&source), "ok\n");
+    let recursive = "struct A { b: B }\nstruct B { a: A }\n";
+    assert!(run(recursive).starts_with("error[E0301]"));
+}
+
+#[test]
+fn method_count_limit_rejects_before_execution() {
+    let mut source = String::from("struct T { x: i64 }\nextend T {\n");
+    for index in 0..257 {
+        writeln!(source, "fn m{index}() -> void {{}}").unwrap();
+    }
+    source += "}\n";
+    assert!(run(&source).starts_with("error[E0002]"));
+}

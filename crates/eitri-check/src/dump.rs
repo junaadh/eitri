@@ -169,6 +169,8 @@ impl Dumper<'_> {
             Ty::F64 => "'f64'",
             Ty::Char => "'char'",
             Ty::String => "'string'",
+            Ty::Struct(_) => "'struct'",
+            Ty::Enum(_) => "'enum'",
             Ty::FindOffset => "'?i64'",
             Ty::I64 => "'i64'",
             Ty::Bool => "'bool'",
@@ -187,6 +189,8 @@ impl Dumper<'_> {
             Ty::F64 => "f64",
             Ty::Char => "char",
             Ty::String => "string",
+            Ty::Struct(_) => "struct",
+            Ty::Enum(_) => "enum",
             Ty::FindOffset => "?i64",
             Ty::I64 => "i64",
             Ty::Bool => "bool",
@@ -404,6 +408,15 @@ impl Dumper<'_> {
                 let line = format!("{} {range} {ty} '{op}'", self.paint(STMT, kind));
                 (line, vec![Node::Ref(target, binding), Node::Expr(value)])
             }
+            Stmt::AssignField {
+                target,
+                value,
+                span,
+                ..
+            } => (
+                format!("{} {}", self.paint(STMT, "FieldAssign"), self.range(span)),
+                vec![Node::Expr(target), Node::Expr(value)],
+            ),
             Stmt::Expr(e) => self.expr(e, None),
             Stmt::For(for_id) => {
                 let eitri_syntax::ast::ForStmt {
@@ -505,7 +518,48 @@ impl Dumper<'_> {
                 );
                 (line, Vec::new())
             }
-            Expr::Name(token) => {
+            Expr::Match(id) => {
+                let node = ast.matches[id];
+                let mut children = vec![Node::Expr(node.subject)];
+                for arm in &ast.match_arms[node.arms] {
+                    match arm.body {
+                        eitri_syntax::ast::MatchBody::Expr(body) => children.push(Node::Expr(body)),
+                        eitri_syntax::ast::MatchBody::Block(body) => {
+                            children.push(Node::Block(body))
+                        }
+                    }
+                }
+                (
+                    format!("{} {range} {ty}", self.paint(STMT, "MatchExpr")),
+                    children,
+                )
+            }
+            Expr::EnumShorthand(name) => (
+                format!(
+                    "{} {range} {ty} {}",
+                    self.paint(STMT, "EnumCase"),
+                    self.token(name)
+                ),
+                vec![],
+            ),
+            Expr::NamedCall { callee, args } => (
+                format!("{} {range} {ty}", self.paint(STMT, "NamedCall")),
+                std::iter::once(Node::Expr(callee))
+                    .chain(ast.field_inits[args].iter().map(|a| Node::Expr(a.value)))
+                    .collect(),
+            ),
+            Expr::StructLiteral { name, fields } => (
+                format!(
+                    "{} {range} {ty} {}",
+                    self.paint(STMT, "StructLiteral"),
+                    self.token(name)
+                ),
+                ast.field_inits[fields]
+                    .iter()
+                    .map(|field| Node::Expr(field.value))
+                    .collect(),
+            ),
+            Expr::SelfValue(token) | Expr::Name(token) => {
                 let name = self.paint(NAME, &format!("'{}'", self.token(token)));
                 let (ty, kind) = match (checked.resolutions[e], call_target) {
                     (Res::Binding(b), _) => (ty, self.binding_kind(b)),

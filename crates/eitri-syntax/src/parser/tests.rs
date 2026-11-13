@@ -171,6 +171,9 @@ impl Printer<'_> {
                 };
                 format!("({op} {} {})", self.token(target), self.expr(value))
             }
+            Stmt::AssignField { target, value, .. } => {
+                format!("(assign-field {} {})", self.expr(target), self.expr(value))
+            }
             Stmt::Expr(e) => self.expr(e),
             Stmt::For(for_id) => {
                 let crate::ast::ForStmt {
@@ -215,7 +218,27 @@ impl Printer<'_> {
                 format!("(truncating {} {})", self.expr(callee), self.expr(value))
             }
             Expr::Bool(b) => b.to_string(),
-            Expr::Name(token) => self.token(token).to_owned(),
+            Expr::StructLiteral { name, fields } => format!(
+                "(struct {} {})",
+                self.token(name),
+                self.ast.field_inits[fields]
+                    .iter()
+                    .map(|f| format!("{}:{}", self.token(f.name), self.expr(f.value)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            Expr::Match(id) => format!("(match {})", self.expr(self.ast.matches[id].subject)),
+            Expr::EnumShorthand(token) => format!(".{}", self.token(token)),
+            Expr::NamedCall { callee, args } => format!(
+                "(named {} {})",
+                self.expr(callee),
+                self.ast.field_inits[args]
+                    .iter()
+                    .map(|a| format!("{}:{}", self.token(a.name), self.expr(a.value)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            Expr::SelfValue(token) | Expr::Name(token) => self.token(token).to_owned(),
             Expr::Member { base, name } => format!("{}.{}", self.expr(base), self.token(name)),
             Expr::Unary { op, operand } => format!("({op:?} {})", self.expr(operand)),
             Expr::Binary { op, lhs, rhs } => {
@@ -371,14 +394,6 @@ fn unsupported_features_are_reported_once_and_dropped() {
             "E0001 8..9 not supported yet: result types",
         ),
         (
-            "struct P {\n}",
-            "E0001 0..6 not supported yet: `struct` declarations",
-        ),
-        (
-            "enum E { A }",
-            "E0001 0..4 not supported yet: `enum` declarations",
-        ),
-        (
             "pub fn f() -> void {\n}",
             "E0001 0..3 not supported yet: `pub`",
         ),
@@ -411,10 +426,6 @@ fn unsupported_features_are_reported_once_and_dropped() {
             "fn f(n: i64 = 1) -> void {\n}",
             "E0001 14..15 not supported yet: default arguments",
         ),
-        (
-            "fn f(n: i64) -> void {\n}\nf(n: 1)",
-            "E0001 27..28 not supported yet: labeled arguments",
-        ),
         ("return", "E0001 0..6 not supported yet: top-level `return`"),
         (
             "let { x } = p",
@@ -427,16 +438,8 @@ fn unsupported_features_are_reported_once_and_dropped() {
             "E0001 9..11 not supported yet: optional chaining",
         ),
         (
-            "let p = P { x: 1 }",
-            "E0001 8..9 not supported yet: struct literals",
-        ),
-        (
             "let a = [1, 2]",
             "E0001 8..9 not supported yet: array literals",
-        ),
-        (
-            "let x = match y { _ => 1 }",
-            "E0001 8..13 not supported yet: `match`",
         ),
         (
             "let x = f() else e => 0",
