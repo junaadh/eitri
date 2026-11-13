@@ -1,0 +1,2 @@
+struct Item { value: i64 }
+extend Item { static fn bad() -> i64 { return self } }

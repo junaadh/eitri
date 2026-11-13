@@ -472,13 +472,18 @@ impl Parser<'_> {
         self.expect(T::LBrace, "`{`")?;
         self.skip_separators();
         while !self.at(T::RBrace) && !self.at(T::Eof) {
+            let is_static = self.eat(T::Static).is_some();
             let mutating = self.eat(T::Mutating).is_some();
+            if is_static && mutating {
+                self.unsupported(self.current_span(), "static mutating methods");
+            }
             if !self.at(T::Fn) {
                 return Err(self.expected("a method"));
             }
             if let Some(mut method) = self.fn_decl()? {
                 method.receiver = Some(receiver);
                 method.mutating = mutating;
+                method.is_static = is_static;
                 let id = self.ast.fns.push(method);
                 self.ast.items.push(Item::Fn(id));
             }
@@ -590,6 +595,7 @@ impl Parser<'_> {
             name,
             receiver: None,
             mutating: false,
+            is_static: false,
             params,
             ret,
             body,

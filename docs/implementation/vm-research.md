@@ -2032,3 +2032,15 @@ p50/p99 8,667/18,800 ns, execution 250/542 ns, total 8,875/19,400 ns.
 This scalar workload does not exercise field defaults; the noisy p99 is retained.
 Samples: `/private/tmp/eitri-t017-14-samples.csv`; report:
 `/private/tmp/eitri-t017-14-bench.txt`.
+
+### T017-15 static extension functions
+
+Static extension functions on structs and enums resolve through type names and
+use the ordinary script-call convention without a receiver. `self` remains
+invalid inside them. Managed results survive forced collection in both modes.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,875/14,100 ns, execution 250/333 ns, total 10,100/14,400 ns.
+This scalar workload does not exercise static functions. Samples:
+`/private/tmp/eitri-t017-15-samples.csv`; report:
+`/private/tmp/eitri-t017-15-bench.txt`.

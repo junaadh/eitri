@@ -262,6 +262,7 @@ pub struct FnDecl {
     pub name: TokenId,
     pub receiver: Option<TokenId>,
     pub mutating: bool,
+    pub is_static: bool,
     pub params: List<Param>,
     pub ret: TypeExpr,
     /// `None` for a bodiless (host) declaration.

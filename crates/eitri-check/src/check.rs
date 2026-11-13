@@ -834,7 +834,9 @@ impl<'i> Checker<'_, 'i> {
                         self.token_span(decl.name),
                     );
                 }
-                params.push(ty);
+                if !decl.is_static {
+                    params.push(ty);
+                }
                 let earlier = self
                     .methods
                     .iter()
@@ -1090,8 +1092,8 @@ impl<'i> Checker<'_, 'i> {
         });
         let mark = self.mark();
         let first = self.out.bindings.next_index();
-        let offset = usize::from(decl.receiver.is_some());
-        if let Some(receiver) = decl.receiver {
+        let offset = usize::from(decl.receiver.is_some() && !decl.is_static);
+        if let Some(receiver) = decl.receiver.filter(|_| !decl.is_static) {
             let binding = self.out.bindings.push(Binding {
                 name: receiver,
                 mutable: decl.mutating,
@@ -2150,6 +2152,33 @@ impl<'i> Checker<'_, 'i> {
             return self.conversion(expr, callee, ast.args(args), true);
         }
         if let Expr::Member { base, name } = ast.exprs[callee]
+            && let Expr::Name(owner) = ast.exprs[base]
+            && self.lookup(self.symbol(owner)).is_none()
+            && let Some(method) = self.methods.iter().copied().find(|&id| {
+                let decl = ast.fns[id];
+                decl.is_static
+                    && decl
+                        .receiver
+                        .is_some_and(|receiver| self.symbol(receiver) == self.symbol(owner))
+                    && self.symbol(decl.name) == self.symbol(name)
+            })
+        {
+            let signature = self.out.signatures[method];
+            let params = signature.params;
+            if ast.args(args).len() != params.len() {
+                self.report(
+                    Code::ArgumentCount,
+                    format!("static function takes {} arguments", params.len()),
+                    self.span(expr),
+                );
+            }
+            for (index, &arg) in ast.args(args).iter().enumerate() {
+                self.value(arg, self.out.param_types[params].get(index).copied());
+            }
+            self.out.resolutions[expr] = Res::Function(method);
+            return signature.ret;
+        }
+        if let Expr::Member { base, name } = ast.exprs[callee]
             && self
                 .methods
                 .iter()
@@ -2165,6 +2194,7 @@ impl<'i> Checker<'_, 'i> {
                     .map(|id| (id, &ast.fns[id]))
                     .find(|(id, method)| {
                         method.receiver.is_some()
+                            && !method.is_static
                             && self.symbol(method.name) == self.symbol(name)
                             && self.out.param_types[self.out.signatures[*id].params].first()
                                 == Some(&receiver)
