@@ -1097,7 +1097,16 @@ impl<'i> Checker<'_, 'i> {
         let ast = self.input.ast;
         ast.block(block).iter().any(|&stmt| match ast.stmts[stmt] {
             Stmt::Return { .. } => true,
-            Stmt::Expr(expr) => self.if_returns(expr),
+            Stmt::Expr(expr) => match ast.exprs[expr] {
+                Expr::Match(id) => {
+                    let arms = &ast.match_arms[ast.matches[id].arms];
+                    !arms.is_empty() && arms.iter().all(|arm| match arm.body {
+                        eitri_syntax::ast::MatchBody::Block(block) => self.returns(block),
+                        eitri_syntax::ast::MatchBody::Expr(_) => false,
+                    })
+                }
+                _ => self.if_returns(expr),
+            },
             _ => false,
         })
     }
@@ -2017,7 +2026,11 @@ impl<'i> Checker<'_, 'i> {
                 (self.out.types[base], self.out.resolutions[expr])
                 && self.input.ast.params(self.input.ast.structs[id].fields)[index as usize].readonly
             {
-                self.report(Code::AssignToImmutable, "cannot assign through a read-only field", self.token_span(name));
+                self.report(
+                    Code::AssignToImmutable,
+                    "cannot assign through a read-only field",
+                    self.token_span(name),
+                );
                 return;
             }
             expr = base;

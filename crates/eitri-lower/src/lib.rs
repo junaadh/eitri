@@ -849,6 +849,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             Stmt::Return { .. } | Stmt::Break(_) | Stmt::Continue(_) => true,
             Stmt::Expr(e) => match ast.exprs[e] {
                 Expr::If(id) => self.checked.types[e] == Ty::Void && self.if_ends(id),
+                Expr::Match(id) => {
+                    let arms = &ast.match_arms[ast.matches[id].arms];
+                    !arms.is_empty() && arms.iter().all(|arm| match arm.body {
+                        eitri_syntax::ast::MatchBody::Block(block) => self.ends(block),
+                        eitri_syntax::ast::MatchBody::Expr(_) => false,
+                    })
+                }
                 _ => false,
             },
             _ => false,

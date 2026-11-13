@@ -1971,3 +1971,15 @@ p50/p99 8,250/10,400 ns, execution 208/292 ns, total 8,459/10,700 ns.
 This scalar workload does not exercise empty structs. Samples:
 `/private/tmp/eitri-t017-9-samples.csv`; report:
 `/private/tmp/eitri-t017-9-bench.txt`.
+
+### T017-10 read-only fields
+
+Struct `let` fields may be initialized but reject direct or nested writes and
+mutating method calls through the field. Field-path checking is bounded by
+the existing expression nesting limit. Both parsers accept the declaration.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,625/9,084 ns, execution 209/291 ns, total 8,875/9,334 ns.
+This scalar workload does not exercise read-only fields. Samples:
+`/private/tmp/eitri-t017-10-samples.csv`; report:
+`/private/tmp/eitri-t017-10-bench.txt`.

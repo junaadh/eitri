@@ -828,6 +828,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   methods are rejected. Managed payloads survive method calls and collection.
 - T017-9: empty structs can be copied, compared, nested and passed through
   script calls, including inside enum payloads.
+- T017-10: `let` fields are initialized at construction and reject later
+  writes, including nested writes and mutating method receivers.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

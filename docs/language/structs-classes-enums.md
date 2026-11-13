@@ -2,7 +2,7 @@
 
 The current implementation accepts structs with up to 256 fields,
 including scalar, string and nested struct fields, literals that initialize
-every field, field reads and writes through `var`, and copies in local bindings
+every field, field reads and writes through `var` subject to `let` fields, and copies in local bindings
 and control flow. Fields occupy frame slots, so strings remain collector roots.
 Recursive inline layouts are rejected. Structs can pass and return through
 script calls; host-initiated calls reject aggregate signatures for now. Methods

@@ -1,0 +1,11 @@
+//! host: test
+import test from "test"
+enum Maybe { None, Some(value: string) }
+fn length(value: Maybe) -> i64 {
+    match value {
+        .None => { return 0 },
+        .Some(text) => { if text == "ok" { return 2 } else { return 1 } },
+    }
+}
+test.emit(length(Maybe.None))
+test.emit(length(Maybe.Some(value: "ok")))

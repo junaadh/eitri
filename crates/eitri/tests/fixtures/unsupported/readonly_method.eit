@@ -1,0 +1,5 @@
+struct Inner { x: i64 }
+extend Inner { mutating fn bump() -> void { self.x += 1 } }
+struct Outer { let inner: Inner }
+var value = Outer { inner: Inner { x: 1 } }
+value.inner.bump()
