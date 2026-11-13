@@ -10,7 +10,7 @@ pub struct SafepointPc(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FaultPc(pub u32);
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct RootMap {
     /// Bit i describes ordinary frame slot i. Trailing zero words are allowed.
     pub ordinary: Vec<u64>,

@@ -711,3 +711,146 @@ fn synthetic_root_facts_check_coverage_and_shape() {
         Err(ErrorKind::RootMissing(2))
     );
 }
+
+#[test]
+fn synthetic_root_builder_tracks_reuse_and_branches() {
+    let mut builder = RootBuilder::new(4).unwrap();
+    let one = SlotRange { first: 1, count: 1 };
+    let pair = SlotRange { first: 1, count: 2 };
+    let reference = RootLayout {
+        ordinary: vec![0],
+        dynamic: vec![],
+    };
+    let dynamic = RootLayout {
+        ordinary: vec![],
+        dynamic: vec![(0, 1)],
+    };
+    builder.note_definition(one, &reference).unwrap();
+    builder.at_entry().unwrap();
+    builder.at_poll(10).unwrap();
+    let branch = builder.checkpoint();
+    builder.at_call(0).unwrap();
+    builder.suspend_call(0).unwrap();
+    // A result overwrites the used temporary only after the suspended state.
+    builder
+        .note_definition(one, &RootLayout::default())
+        .unwrap();
+    builder.finish_call(0).unwrap();
+    builder.at_poll(20).unwrap();
+    builder.restore(&branch).unwrap();
+    builder.end_lifetime(one).unwrap();
+    builder.note_definition(pair, &dynamic).unwrap();
+    assert_eq!(
+        builder.end_lifetime(one),
+        Err(RootBuildError::PartialDynamicLifetime)
+    );
+    builder.at_poll(30).unwrap();
+    builder.end_lifetime(pair).unwrap();
+    builder.note_definition(one, &reference).unwrap();
+    builder.at_poll(40).unwrap();
+    let roots = builder
+        .finish(&[
+            (10, vec![SafepointPc(5)]),
+            (20, vec![SafepointPc(8)]),
+            (30, vec![SafepointPc(12)]),
+            (40, vec![SafepointPc(16)]),
+        ])
+        .unwrap();
+    let states: Vec<_> = roots
+        .safepoints
+        .iter()
+        .map(|(_, state)| state.map)
+        .collect();
+    assert_eq!(roots.entry, states[0]);
+    assert_eq!(states[0], states[3]); // maps interned despite separate lifetimes
+    assert_eq!(roots.calls[0].pre.map, states[0]);
+    assert_eq!(roots.calls[0].suspended.map, states[0]);
+    assert_eq!(roots.calls[0].post.map, states[1]);
+    assert!(roots.maps[states[1].0 as usize].ordinary.is_empty());
+    assert_eq!(roots.maps[states[2].0 as usize].dynamic, vec![(1, 2)]);
+    let fact = |shape, initialized, live| RootFact {
+        shape,
+        initialized,
+        live,
+    };
+    let facts = [
+        fact(RootShape::Scalar, false, false),
+        fact(RootShape::DynamicType { payload: 2 }, true, true),
+        fact(RootShape::DynamicPayload { type_slot: 1 }, true, true),
+        fact(RootShape::Scalar, false, false),
+    ];
+    assert_eq!(
+        verify_root_state(&facts, &roots.maps[states[2].0 as usize]),
+        Ok(())
+    );
+}
+
+#[test]
+fn synthetic_root_builder_resolves_wide_far_poll_and_limits() {
+    let mut asm = Assembler::recording();
+    asm.load(300, 1, I64, S).unwrap();
+    let start = asm.label();
+    asm.bind(start).unwrap();
+    for _ in 0..200 {
+        asm.emit(Op::Mov, Operands::abc(300, 300, 0), S).unwrap();
+    }
+    asm.branch_if(Cond::Eq, 300, 300, start, S).unwrap();
+    asm.ret(S).unwrap();
+    let f = asm.finish("far", sig(&[], &[])).unwrap();
+    let body = asm.take_recorded().unwrap();
+    let (logical, item) = body
+        .items
+        .iter()
+        .enumerate()
+        .find(|(_, item)| matches!(item.insn, crate::ir::Insn::Branch { .. }))
+        .unwrap();
+    assert!(item.words > 2);
+    assert!(decode(&f.code, item.pc as usize).unwrap().wide);
+    let poll_pc = SafepointPc(item.pc + item.words - 2);
+    assert_eq!(decode(&f.code, poll_pc.0 as usize).unwrap().op, Op::JX);
+    assert!(f.roots.safepoints.iter().any(|(pc, _)| *pc == poll_pc));
+    let mut builder = RootBuilder::new(301).unwrap();
+    builder
+        .note_definition(
+            SlotRange {
+                first: 300,
+                count: 1,
+            },
+            &RootLayout {
+                ordinary: vec![0],
+                dynamic: vec![],
+            },
+        )
+        .unwrap();
+    builder.at_poll(logical as u32).unwrap();
+    let roots = builder.finish(&[(logical as u32, vec![poll_pc])]).unwrap();
+    assert_eq!(roots.safepoints[0].0, poll_pc);
+    assert_eq!(
+        roots.maps[roots.safepoints[0].1.map.0 as usize].ordinary[4],
+        1 << 44
+    );
+    assert!(matches!(
+        RootBuilder::new(65_537),
+        Err(RootBuildError::Limit)
+    ));
+    let mut builder = RootBuilder::new(2).unwrap();
+    assert_eq!(
+        builder.note_definition(
+            SlotRange { first: 0, count: 2 },
+            &RootLayout {
+                ordinary: vec![0],
+                dynamic: vec![(0, 1)]
+            }
+        ),
+        Err(RootBuildError::OverlappingLayout)
+    );
+    assert_eq!(
+        builder.suspend_call(0),
+        Err(RootBuildError::InvalidCallPhase)
+    );
+    builder.at_poll(1).unwrap();
+    assert!(matches!(
+        builder.finish(&[]),
+        Err(RootBuildError::MissingPc)
+    ));
+}

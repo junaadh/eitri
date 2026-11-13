@@ -485,7 +485,7 @@ impl<const RECORD: bool> Assembler<RECORD> {
         let frame_size = self
             .frame
             .max(signature.param_base() + signature.params.len() as u32);
-        let mut roots = crate::FunctionRoots::scalar(self.sites.len());
+        let mut roots = crate::RootBuilder::scalar(self.sites.len());
         let mut pc = 0usize;
         while pc < code.len() {
             let decoded = crate::decode(&code, pc).expect("assembler emitted valid code");

@@ -9,6 +9,7 @@ mod function;
 pub mod ir;
 pub mod opt;
 pub mod oracle;
+mod root_builder;
 mod roots;
 pub mod scalar;
 pub mod spec;
@@ -19,6 +20,7 @@ pub use asm::{AsmError, Assembler, Label, imm_complement};
 pub use disasm::disassemble;
 pub use encoding::{DecodeError, Decoded, EncodeError, MAX_SLOT, Operands, decode, encode};
 pub use function::{CallSite, CallTarget, Function, FunctionId, Signature, SlotRange, ValueType};
+pub use root_builder::{RootBuildError, RootBuilder, RootCheckpoint, RootLayout};
 pub use roots::{
     CallRoots, FaultPc, FunctionRoots, RootFact, RootMap, RootMapId, RootShape, RootState,
     SafepointPc,
