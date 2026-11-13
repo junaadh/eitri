@@ -147,6 +147,44 @@ impl LayoutStore {
         self.layouts.get(id.0 as usize)?.as_ref()
     }
 
+    /// Retained heap allocation, excluding the inline `LayoutStore` itself.
+    /// This counts capacities, including unreachable entries in the backing
+    /// table, and all nested descriptor and transfer-plan vectors. Work is
+    /// O(layouts), independent of fixed-array element counts.
+    pub fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        self.layouts.capacity() * size_of::<Option<Layout>>()
+            + self
+                .layouts
+                .iter()
+                .flatten()
+                .map(|layout| {
+                    let trace = match &layout.trace {
+                        TraceDesc::Product(fields) => fields.capacity() * size_of::<FieldLayout>(),
+                        TraceDesc::Guarded { cases, .. } => {
+                            cases.capacity() * size_of::<Option<CaseDynamicRoots>>()
+                        }
+                        _ => 0,
+                    };
+                    let copy = match &layout.copy.kind {
+                        CopyKind::Product(transfers) => {
+                            transfers.capacity() * size_of::<crate::Transfer>()
+                        }
+                        CopyKind::Split { cases, .. } => {
+                            cases.capacity() * size_of::<Option<LayoutId>>()
+                        }
+                        _ => 0,
+                    };
+                    layout.fields.capacity() * size_of::<FieldLayout>()
+                        + layout.union.as_ref().map_or(0, |union| {
+                            union.cases.capacity() * size_of::<crate::CaseLayout>()
+                        })
+                        + trace
+                        + copy
+                })
+                .sum::<usize>()
+    }
+
     pub(crate) fn build<'a>(
         count: usize,
         root: usize,

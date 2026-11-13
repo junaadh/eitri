@@ -1,4 +1,5 @@
 use super::*;
+use crate::{CaseLayout, Transfer};
 use ScalarKind::{F32, I8, I64};
 use StorageDomain::{ExternC, Frame, Heap};
 
@@ -47,6 +48,61 @@ fn references(store: &LayoutStore) -> Vec<usize> {
     }
     result.sort_unstable();
     result
+}
+
+#[test]
+fn retained_layout_bytes_include_nested_vectors_and_not_array_elements() {
+    use std::mem::size_of;
+
+    let scalar = build(&[Shape::Scalar(I64)], 0, Frame).unwrap();
+    assert_eq!(scalar.heap_bytes(), size_of::<Option<Layout>>());
+
+    let fields = [1, 1, 1];
+    let product = build(
+        &[
+            Shape::Scalar(I64),
+            Shape::ManagedReference(0),
+            Shape::Product(&fields),
+        ],
+        2,
+        Frame,
+    )
+    .unwrap();
+    let layout = product.get(product.root()).unwrap();
+    let TraceDesc::Product(trace) = &layout.trace else {
+        panic!("product trace")
+    };
+    let CopyKind::Product(copy) = &layout.copy.kind else {
+        panic!("product copy")
+    };
+    assert_eq!(
+        product.heap_bytes(),
+        3 * size_of::<Option<Layout>>()
+            + layout.fields.capacity() * size_of::<FieldLayout>()
+            + trace.capacity() * size_of::<FieldLayout>()
+            + copy.capacity() * size_of::<Transfer>()
+    );
+
+    let small = build(&[Shape::Scalar(I64), Shape::Array(1, 0)], 1, Frame).unwrap();
+    let large = build(&[Shape::Scalar(I64), Shape::Array(1_000_000, 0)], 1, Frame).unwrap();
+    assert_eq!(small.heap_bytes(), large.heap_bytes());
+
+    let union = build(&[Shape::Dynamic, Shape::Optional(0)], 1, Frame).unwrap();
+    let layout = union.get(union.root()).unwrap();
+    let TraceDesc::Guarded { cases: trace, .. } = &layout.trace else {
+        panic!("union trace")
+    };
+    let CopyKind::Split { cases: copy, .. } = &layout.copy.kind else {
+        panic!("union copy")
+    };
+    assert_eq!(
+        union.heap_bytes(),
+        2 * size_of::<Option<Layout>>()
+            + layout.fields.capacity() * size_of::<FieldLayout>()
+            + layout.union.as_ref().unwrap().cases.capacity() * size_of::<CaseLayout>()
+            + trace.capacity() * size_of::<Option<CaseDynamicRoots>>()
+            + copy.capacity() * size_of::<Option<LayoutId>>()
+    );
 }
 
 #[test]
