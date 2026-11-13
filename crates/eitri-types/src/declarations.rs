@@ -18,6 +18,7 @@ pub enum FieldType {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeclError {
     DuplicateKey(DeclKey),
+    SameKeyDifferentShape { key: DeclKey },
     UnknownDecl(DeclId),
     UnknownType(TypeId),
     AlreadyDefined(DeclId),
@@ -157,6 +158,72 @@ impl Declarations {
     }
 }
 
+/// Compare reachable named products coinductively across independent stores.
+/// An explicit stack and set of assumed-equal pairs terminate reference cycles.
+/// At most A*B pairs are examined (normally only reachable pairs), for A and B
+/// declaration counts. Time is proportional to their fields, names and portable
+/// type-encoding bytes, with expected constant-time set operations; hash
+/// collisions can increase this. Space is O(A*B + queued field edges).
+/// Invalid or undefined reachable IDs return their corresponding errors.
+pub fn same_type(
+    a: (&Declarations, &TypeStore, DeclId),
+    b: (&Declarations, &TypeStore, DeclId),
+) -> Result<bool, DeclError> {
+    let mut stack = vec![(a.2, b.2, None::<DeclKey>)];
+    let mut assumed = eitri_base::FxHashSet::default();
+    while let Some((left, right, parent)) = stack.pop() {
+        let l =
+            a.0.declarations
+                .get(left.0 as usize)
+                .ok_or(DeclError::UnknownDecl(left))?;
+        let r =
+            b.0.declarations
+                .get(right.0 as usize)
+                .ok_or(DeclError::UnknownDecl(right))?;
+        if l.key != r.key {
+            return match parent {
+                Some(key) => Err(DeclError::SameKeyDifferentShape { key }),
+                None => Ok(false),
+            };
+        }
+        if !assumed.insert((left, right)) {
+            continue;
+        }
+        let lf = l.fields.as_ref().ok_or(DeclError::Undefined(left))?;
+        let rf = r.fields.as_ref().ok_or(DeclError::Undefined(right))?;
+        let mismatch = || DeclError::SameKeyDifferentShape { key: l.key.clone() };
+        if lf.len() != rf.len() {
+            return Err(mismatch());
+        }
+        for ((ln, lt), (rn, rt)) in lf.iter().zip(rf) {
+            if ln != rn {
+                return Err(mismatch());
+            }
+            match (*lt, *rt) {
+                (FieldType::Type(x), FieldType::Type(y)) => {
+                    let x =
+                        a.1.nodes
+                            .get(x.0 as usize)
+                            .ok_or(DeclError::UnknownType(x))?;
+                    let y =
+                        b.1.nodes
+                            .get(y.0 as usize)
+                            .ok_or(DeclError::UnknownType(y))?;
+                    if x.1 != y.1 {
+                        return Err(mismatch());
+                    }
+                }
+                (FieldType::Named(x), FieldType::Named(y))
+                | (FieldType::Reference(x), FieldType::Reference(y)) => {
+                    stack.push((x, y, Some(l.key.clone())));
+                }
+                _ => return Err(mismatch()),
+            }
+        }
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +236,139 @@ mod tests {
     }
     fn field(n: &str, t: FieldType) -> (String, FieldType) {
         (n.into(), t)
+    }
+    #[test]
+    fn cross_store_identity_and_shape_errors() {
+        let mut ta = TypeStore::default();
+        let ai = ta.intern(TypeDesc::Scalar(ScalarKind::I64)).unwrap();
+        let mut tb = TypeStore::default();
+        let bb = tb.intern(TypeDesc::Scalar(ScalarKind::Bool)).unwrap();
+        let bi = tb.intern(TypeDesc::Scalar(ScalarKind::I64)).unwrap();
+        let mut a = Declarations::default();
+        let aa = a.declare(key("A")).unwrap();
+        a.define(
+            aa,
+            vec![
+                field("x", FieldType::Type(ai)),
+                field("y", FieldType::Type(ai)),
+            ],
+        )
+        .unwrap();
+        let mut b = Declarations::default();
+        let other = b.declare(key("Other")).unwrap();
+        let ba = b.declare(key("A")).unwrap();
+        b.define(
+            other,
+            vec![
+                field("x", FieldType::Type(bi)),
+                field("y", FieldType::Type(bi)),
+            ],
+        )
+        .unwrap();
+        b.define(
+            ba,
+            vec![
+                field("x", FieldType::Type(bi)),
+                field("y", FieldType::Type(bi)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(same_type((&a, &ta, aa), (&b, &tb, ba)), Ok(true));
+        assert_eq!(same_type((&a, &ta, aa), (&b, &tb, other)), Ok(false));
+        for fields in [
+            vec![
+                field("y", FieldType::Type(bi)),
+                field("x", FieldType::Type(bi)),
+            ],
+            vec![
+                field("x", FieldType::Type(bb)),
+                field("y", FieldType::Type(bi)),
+            ],
+        ] {
+            let mut c = Declarations::default();
+            let ca = c.declare(key("A")).unwrap();
+            c.define(ca, fields).unwrap();
+            assert_eq!(
+                same_type((&a, &ta, aa), (&c, &tb, ca)),
+                Err(DeclError::SameKeyDifferentShape { key: key("A") })
+            );
+        }
+    }
+
+    #[test]
+    fn recursive_identity_and_deep_difference() {
+        let types = TypeStore::default();
+        let mut a = Declarations::default();
+        let aa = a.declare(key("A")).unwrap();
+        let ab = a.declare(key("B")).unwrap();
+        a.define(
+            aa,
+            vec![
+                field("self", FieldType::Reference(aa)),
+                field("b", FieldType::Reference(ab)),
+            ],
+        )
+        .unwrap();
+        a.define(ab, vec![field("a", FieldType::Reference(aa))])
+            .unwrap();
+        let mut b = Declarations::default();
+        let bb = b.declare(key("B")).unwrap();
+        let ba = b.declare(key("A")).unwrap();
+        b.define(
+            ba,
+            vec![
+                field("self", FieldType::Reference(ba)),
+                field("b", FieldType::Reference(bb)),
+            ],
+        )
+        .unwrap();
+        b.define(bb, vec![field("a", FieldType::Reference(ba))])
+            .unwrap();
+        assert_eq!(same_type((&a, &types, aa), (&b, &types, ba)), Ok(true));
+        let mut c = Declarations::default();
+        let ca = c.declare(key("A")).unwrap();
+        let cb = c.declare(key("B")).unwrap();
+        c.define(
+            ca,
+            vec![
+                field("self", FieldType::Reference(ca)),
+                field("b", FieldType::Reference(cb)),
+            ],
+        )
+        .unwrap();
+        c.define(cb, vec![field("different", FieldType::Reference(ca))])
+            .unwrap();
+        assert_eq!(
+            same_type((&a, &types, aa), (&c, &types, ca)),
+            Err(DeclError::SameKeyDifferentShape { key: key("B") })
+        );
+    }
+
+    #[test]
+    fn compare_thousand_declaration_chain() {
+        let types = TypeStore::default();
+        let mut a = Declarations::default();
+        let mut b = Declarations::default();
+        let left: Vec<_> = (0..1000)
+            .map(|i| a.declare(key(&i.to_string())).unwrap())
+            .collect();
+        let mut right: Vec<_> = (0..1000)
+            .rev()
+            .map(|i| b.declare(key(&i.to_string())).unwrap())
+            .collect();
+        right.reverse();
+        for (l, r) in left.windows(2).zip(right.windows(2)) {
+            a.define(l[0], vec![field("next", FieldType::Named(l[1]))])
+                .unwrap();
+            b.define(r[0], vec![field("next", FieldType::Named(r[1]))])
+                .unwrap();
+        }
+        a.define(left[999], vec![]).unwrap();
+        b.define(right[999], vec![]).unwrap();
+        assert_eq!(
+            same_type((&a, &types, left[0]), (&b, &types, right[0])),
+            Ok(true)
+        );
     }
     #[test]
     fn declaration_errors_and_inline_cycles() {

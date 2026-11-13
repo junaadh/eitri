@@ -2,7 +2,7 @@
 use eitri_base::FxHashMap;
 
 mod declarations;
-pub use declarations::{DeclError, DeclId, DeclKey, Declarations, FieldType};
+pub use declarations::{DeclError, DeclId, DeclKey, Declarations, FieldType, same_type};
 mod split;
 pub use split::{
     ByteRange, CaseLayout, CopyKind, CopyPlan, DynamicRoot, InitPlan, Transfer, UnionLayout,
