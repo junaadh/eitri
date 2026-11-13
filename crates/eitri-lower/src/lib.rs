@@ -97,7 +97,8 @@ pub fn value_type(ty: Ty) -> ValueType {
         Ty::F64 => ValueType::F64,
         Ty::Char => ValueType::Char,
         Ty::Bool => ValueType::Bool,
-        Ty::String | Ty::Void | Ty::Error => unreachable!("checked code has only value types here"),
+        Ty::String => ValueType::String,
+        Ty::Void | Ty::Error => unreachable!("checked code has only value types here"),
     }
 }
 
@@ -214,7 +215,15 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
             );
         }
     }
-    if !lowerer.checked.strings.is_empty() {
+    if !lowerer.checked.strings.is_empty()
+        || functions.iter().any(|f| {
+            f.signature
+                .params
+                .iter()
+                .chain(&f.signature.results)
+                .any(|t| *t == ValueType::String)
+        })
+    {
         let signatures = Program::signatures_of(&functions);
         let hosts = host_signatures(input.hosts);
         let callees = eitri_bytecode::Callees {
@@ -237,6 +246,8 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
                     .iter()
                     .map(|s| s.as_str().into())
                     .collect();
+            }
+            {
                 function.roots =
                     eitri_bytecode::string_roots(function, &callees).map_err(|_| {
                         Diagnostic::error(

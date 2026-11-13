@@ -84,3 +84,122 @@ test.emit(total)
         assert_eq!(host.effects, "effect: test.emit(20)\n");
     }
 }
+
+#[test]
+fn calls_and_loop_roots_survive_forced_collection() {
+    let source = include_str!("fixtures/managed/string_control_calls.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(host.effects, "effect: test.emit(6)\n");
+        }
+    }
+}
+
+#[test]
+fn loop_reclaims_dead_strings_before_next_allocation() {
+    let source = r#"
+import test from "test"
+fn count() -> i64 {
+    let live = "persistent"
+    var i = 0
+    while i < 100 {
+        let s = "iteration"
+        i = i + s.len() - 8
+    }
+    return live.len() + i
+}
+test.emit(count())
+"#;
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.set_heap_limit(256);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(host.effects, "effect: test.emit(110)\n");
+            assert_eq!(context.managed_heap_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+fn host_reentry_rejects_string_results_before_running_callback() {
+    struct Reenter;
+    impl eitri::Host for Reenter {
+        fn call(&mut self, cx: &mut eitri::Call<'_, '_>, _: u32) -> Result<(), eitri::HostError> {
+            let callback = cx.function("callback").unwrap();
+            let error = cx.call(self, callback, &[], &mut [0]).unwrap_err();
+            assert!(
+                error
+                    .kind
+                    .message()
+                    .contains("does not match its signature")
+            );
+            Ok(())
+        }
+    }
+    let source =
+        "import test from \"test\"\nfn callback() -> string { return \"no\"; }\ntest.emit(1)";
+    for threaded in [false, true] {
+        let mut context = Context::new();
+        context.set_threaded(threaded);
+        context.register_host_module("test", TEST_MODULE).unwrap();
+        let compiled = context.compile(source).unwrap();
+        context.execute(&compiled, &mut Reenter).unwrap();
+    }
+}
+
+#[test]
+fn suspended_caller_keeps_live_string_through_callee_allocations() {
+    let source = r#"
+import test from "test"
+fn choose(flag: bool, value: string) -> string {
+    let unused = "callee garbage"
+    if flag { return value; }; return "alternative"
+}
+fn main() -> i64 {
+    let held = "caller alive"
+    let value = choose(true, "argument")
+    return held.len() + value.len()
+}
+test.emit(main())
+"#;
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(host.effects, "effect: test.emit(20)\n");
+        }
+    }
+}

@@ -1,10 +1,10 @@
 # Strings and formatting
 
-The current T015-1 implementation supports inferred local single-line and raw
-single-line literals and `.len()` in straight-line functions. Other string
-operations, interpolation, multiline literals, string signatures, and string
-values in functions with branches or calls remain unsupported. See the
-[implemented slice](../implementation/first-slice.md#managed-strings-t015-1).
+The current T015-2 implementation supports single-line and raw single-line
+literals, local bindings, script function parameters and returns, and `.len()`
+across control flow and calls. Other string operations, interpolation, multiline
+literals, and string values at the host boundary remain unsupported. See the
+[implemented slice](../implementation/first-slice.md#managed-strings-t015-1-and-t015-2).
 The rest of this chapter is the language contract for subsequent tasks.
 
 ## Interpolation

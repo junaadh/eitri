@@ -1673,3 +1673,20 @@ and `/tmp/orchestra/eitri-t015-1-bench{,-after}.txt`. Forced-GC behavior is
 covered by correctness tests, not timed here; no Lua or managed-workload
 comparison is claimed. Hash-based string lookup and marking have expected
 linear collection work but quadratic collision worst cases.
+
+
+### T015-2 managed control flow
+
+On 2026-11-13, `cargo bench --locked -p eitri --bench source_to_result --
+20001` measured 20,001 individual samples per cell with the same release
+profile, threaded interpreter, OS and compiler as T015-1 (CPU model unavailable).
+The reused scalar 1,236-byte module measured compile p50/p99 6.584/10.0 µs,
+execute 0.167/0.250 µs, total 6.791/10.3 µs, 48 allocations / 4,668 B,
+344 code bytes and 2,978 metadata bytes. Context creation, file I/O and host
+work are excluded. The few-microsecond target remains missed. Raw samples and
+report: `/tmp/orchestra/eitri-t015-2-samples.csv` and
+`/tmp/orchestra/eitri-t015-2-bench.txt`. The run was not interleaved with the
+T015-1 baseline and does not measure managed workloads; it supports no causal
+latency claim. Managed analysis costs and its unbounded compiler-memory risk are
+recorded in [VM garbage collection](vm.md#garbage-collection). No conservative
+scanning experiment or Lua comparison was performed.

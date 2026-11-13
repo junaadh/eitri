@@ -349,6 +349,7 @@ impl<'a> Parser<'_, 'a> {
             "f32" => Ok((Some(ValueType::F32), span)),
             "f64" => Ok((Some(ValueType::F64), span)),
             "char" => Ok((Some(ValueType::Char), span)),
+            "string" => Ok((Some(ValueType::String), span)),
             "bool" => Ok((Some(ValueType::Bool), span)),
             "void" if void_ok => Ok((None, span)),
             _ => Err(syntax(span, format!("expected a type, found `{word}`"))),

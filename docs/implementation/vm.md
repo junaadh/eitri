@@ -46,13 +46,18 @@ slot, dispatch, and tiering choices remain experiments until implemented.
 T015-1 adds non-moving string objects with headers and mark-sweep collection.
 Pointer-preserving references occupy a sidecar to the scalar `u64` stack;
 verified ordinary root maps select references at allocations, calls, and taken
-backward branches. Root construction for managed functions currently supports
-only straight-line code; dynamic roots, aggregates, handles, and managed
-signatures remain later work. Forced-collection tests run both interpreters.
+backward branches. Managed root construction follows control-flow liveness and publishes distinct
+call states; script calls copy reference arguments and results between frames.
+Dynamic roots, aggregates, handles, and host string values remain later work.
+Forced-collection tests run both interpreters.
 The managed-object byte limit counts object structures and string payloads;
 allocator overhead, collection scratch, compiler storage and code are not yet
 covered. Collection is expected O(objects + roots), with hash-collision
-worst cases quadratic; reference lookup is expected O(1).
+worst cases quadratic; reference lookup is expected O(1). Managed root
+analysis currently holds per-instruction slot facts and liveness: O(I × F)
+scratch for I instructions and F frame slots. Its fixpoints can take
+O(I² × F²) work in the worst case, plus map deduplication up to O(S² × F/64)
+for S safepoints; there is no compiler-memory quota yet.
 
 Classes, growable arrays, maps, and strings may be heap allocated and
 garbage collected.

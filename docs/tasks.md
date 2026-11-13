@@ -745,10 +745,15 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 
 - T015-1: single-line managed string literals and `.len()` run on both
   interpreters, including forced collection and reclamation tests. Root maps
-  are built for straight-line managed code; managed control flow, signatures,
-  host roots, retained handles, and full-runtime memory accounting remain.
+  were initially built for straight-line managed code.
   The task stays open. Measurements are in the
   [T015-1 ledger](implementation/vm-research.md#t015-1-managed-string-slice).
+- T015-2: string parameters and results cross script calls, branches and loops;
+  liveness-derived root maps cover joins and call states. Forced-GC tests on
+  both interpreters include bounded-heap iteration reclamation. Host string
+  roots, retained handles, and full-runtime accounting remain; T015 stays open.
+  The measurement and algorithm bounds are in the
+  [T015-2 ledger](implementation/vm-research.md#t015-2-managed-control-flow).
 
 ### T016 — Implement strings, bytes, and characters
 

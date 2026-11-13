@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+fn pick(flag: bool, a: string, b: string) -> string { if flag { return a; }; return b; }
+fn main() -> i64 {
+    var total = 0
+    var i = 0
+    while i < 3 {
+        let s = pick(i == 1, "long", "x")
+        total = total + s.len()
+        i = i + 1
+    }
+    return total
+}
+test.emit(main())

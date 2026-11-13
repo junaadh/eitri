@@ -271,7 +271,15 @@ impl Context {
         let bodies = compiled.program.bodies.take().expect("checked above");
         let mut kept = IndexVec::with_capacity(bodies.len());
         for (function, body) in functions.as_mut_slice().iter_mut().zip(bodies.iter()) {
-            if !function.strings.is_empty() || !function.roots.can_regenerate_scalar() {
+            if !function.strings.is_empty()
+                || function
+                    .signature
+                    .params
+                    .iter()
+                    .chain(&function.signature.results)
+                    .any(|t| *t == eitri_bytecode::ValueType::String)
+                || !function.roots.can_regenerate_scalar()
+            {
                 report.skipped += 1;
                 kept.push(body.clone());
                 continue;
@@ -563,8 +571,16 @@ impl Context {
             functions: &signatures,
             hosts: &registered,
         };
+        let managed = functions.iter().any(|f| {
+            !f.strings.is_empty()
+                || f.signature
+                    .params
+                    .iter()
+                    .chain(&f.signature.results)
+                    .any(|t| *t == eitri_bytecode::ValueType::String)
+        });
         for (index, function) in functions.as_mut_slice().iter_mut().enumerate() {
-            if !function.strings.is_empty() {
+            if managed {
                 function.roots =
                     eitri_bytecode::string_roots(function, &callees).map_err(|error| {
                         mismatch(
@@ -917,6 +933,30 @@ mod root_optimizer_tests {
         ));
         assert!(compiled.program.bodies.is_some());
         assert!(!compiled.optimized);
+    }
+
+    #[test]
+    fn verifier_rejects_missing_live_call_roots() {
+        let source =
+            "fn id(s: string) -> string { return s; }\nlet s = \"hello\"\nlet t = id(s)\nt.len()";
+        let mut context = Context::new();
+        let mut compiled = context.compile(source).unwrap();
+        let signatures = compiled.program.signatures();
+        let hosts = eitri_lower::host_signatures(&context.hosts);
+        let callees = Callees {
+            functions: &signatures,
+            hosts: &hosts,
+        };
+        let function = &mut compiled.program.functions.as_mut_slice()[0];
+        assert!(eitri_bytecode::verify(function, &callees).is_ok());
+        function.roots.calls[0].pre.map = RootMapId(0);
+        assert!(matches!(
+            eitri_bytecode::verify(function, &callees),
+            Err(eitri_bytecode::VerifyError {
+                kind: eitri_bytecode::ErrorKind::RootMissing(_),
+                ..
+            })
+        ));
     }
 
     #[test]

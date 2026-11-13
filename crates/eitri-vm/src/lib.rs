@@ -298,6 +298,9 @@ impl<'c> Call<'c, '_> {
         let signature = &callee.signature;
         let mismatch = args.len() != signature.params.len()
             || results.len() != signature.results.len()
+            || signature
+                .results
+                .contains(&eitri_bytecode::ValueType::String)
             || args
                 .iter()
                 .zip(&signature.params)
@@ -868,6 +871,15 @@ fn execute(
                                     callee_base + callee_fn.signature.param_base() as usize;
                                 let from = base + site.args.first as usize;
                                 copy_slots(m.slots, from, params, site.args.count as usize);
+                                if callee_fn
+                                    .signature
+                                    .params
+                                    .contains(&eitri_bytecode::ValueType::String)
+                                {
+                                    m.references.resize(m.references.len().max(end), None);
+                                    m.references
+                                        .copy_within(from..from + site.args.count as usize, params);
+                                }
                                 m.frames.push(Frame {
                                     function: id,
                                     base,
@@ -894,6 +906,13 @@ fn execute(
                         let caller_fn = &functions[caller.function];
                         let to = caller.base + caller.result as usize;
                         copy_slots(m.slots, base, to, count);
+                        if function
+                            .signature
+                            .results
+                            .contains(&eitri_bytecode::ValueType::String)
+                        {
+                            m.references.copy_within(base..base + count, to);
+                        }
                         id = caller.function;
                         function = caller_fn;
                         base = caller.base;

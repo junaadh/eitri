@@ -175,7 +175,56 @@ pub fn verify(function: &Function, callees: &Callees<'_>) -> Result<(), VerifyEr
     let insns = structure(function, callees)?;
     root_structure(function)?;
     required_roots(function, &insns)?;
-    types(function, callees, &insns)
+    types(function, callees, &insns)?;
+    let managed = !function.strings.is_empty()
+        || function
+            .signature
+            .params
+            .iter()
+            .chain(&function.signature.results)
+            .any(|t| *t == ValueType::String)
+        || function.sites.iter().any(|site| {
+            callee(callees, site.target).is_some_and(|sig| {
+                sig.params
+                    .iter()
+                    .chain(&sig.results)
+                    .any(|t| *t == ValueType::String)
+            })
+        });
+    if managed {
+        let expected = string_roots(function, callees)?;
+        let check = |actual: crate::RootMapId,
+                     needed: crate::RootMapId,
+                     pc|
+         -> Result<(), VerifyError> {
+            let a = &function.roots.maps[actual.0 as usize].ordinary;
+            for (i, &word) in expected.maps[needed.0 as usize].ordinary.iter().enumerate() {
+                let missing = word & !a.get(i).copied().unwrap_or(0);
+                if missing != 0 {
+                    return Err(error(
+                        pc,
+                        ErrorKind::RootMissing((i * 64 + missing.trailing_zeros() as usize) as u32),
+                    ));
+                }
+            }
+            Ok(())
+        };
+        check(function.roots.entry, expected.entry, 0)?;
+        for (pc, needed) in &expected.safepoints {
+            let i = function
+                .roots
+                .safepoints
+                .binary_search_by_key(pc, |(pc, _)| *pc)
+                .map_err(|_| error(pc.0, ErrorKind::MissingSafepoint))?;
+            check(function.roots.safepoints[i].1.map, needed.map, pc.0)?;
+        }
+        for (actual, needed) in function.roots.calls.iter().zip(&expected.calls) {
+            check(actual.pre.map, needed.pre.map, 0)?;
+            check(actual.suspended.map, needed.suspended.map, 0)?;
+            check(actual.post.map, needed.post.map, 0)?;
+        }
+    }
+    Ok(())
 }
 
 /// Structural metadata checks are O(bitmap words + dynamic slots + states +
@@ -358,7 +407,7 @@ fn scalar_root_state(
     slots: &[Slot],
     map: &crate::RootMap,
     spans: &[crate::SlotRange],
-    managed: bool,
+    _managed: bool,
 ) -> Result<(), ErrorKind> {
     if !map.guarded.is_empty() {
         return Err(ErrorKind::UnsupportedGuardedRoots);
@@ -380,20 +429,6 @@ fn scalar_root_state(
                 _ => return Err(ErrorKind::RootNotInitialized(slot)),
             }
             bits &= bits - 1;
-        }
-    }
-    // Scalar-only functions retain the sparse path. Managed functions have
-    // their initialized reference slots covered even when conservatively live.
-    if managed {
-        for (slot, fact) in slots.iter().enumerate() {
-            if *fact == Slot::Ty(ValueType::String)
-                && map
-                    .ordinary
-                    .get(slot / 64)
-                    .is_none_or(|word| word & (1 << (slot % 64)) == 0)
-            {
-                return Err(ErrorKind::RootMissing(slot as u32));
-            }
         }
     }
     if let Some(&(ty, payload)) = map.dynamic.first() {
@@ -468,83 +503,182 @@ fn branch_target(insn: &Insn) -> Option<i64> {
     Some(end + disp)
 }
 
-/// Build conservative roots for the current straight-line string slice.
-/// Code containing control-flow or calls is deliberately rejected until the
-/// full managed CFG liveness pass is connected. Work is O(I * F) and root
-/// snapshots are bounded by RootBuilder's metadata budget.
+/// Compute backwards slot liveness and forward type facts over the CFG.
+/// Scratch is O(instructions * frame); fixpoint work is bounded by the
+/// finite slot sets and CFG edges. Unreachable instructions have empty maps.
 pub fn string_roots(
     function: &Function,
     callees: &Callees<'_>,
 ) -> Result<crate::FunctionRoots, VerifyError> {
     let insns = structure(function, callees)?;
-    if insns.iter().any(|i| {
-        i.decoded.op.info().effects.contains(BRANCH)
-            || matches!(i.decoded.op.info().sem, Sem::Call(_))
-    }) {
-        return Err(error(
-            0,
-            ErrorKind::InvalidScalar("managed control flow is not supported yet"),
-        ));
+    let n = insns.len();
+    let frame = function.frame_size as usize;
+    let mut index = vec![0; function.code.len()];
+    for (i, insn) in insns.iter().enumerate() {
+        index[insn.pc as usize] = i;
     }
-    let fail = |_| error(0, ErrorKind::InvalidScalar("managed root metadata limit"));
-    let mut builder = crate::RootBuilder::new(function.frame_size).map_err(fail)?;
-    let mut slots = vec![Slot::Uninit; function.frame_size as usize];
+    let successors = |i: usize| {
+        let insn = &insns[i];
+        let fall = (!insn.decoded.op.info().effects.contains(END)).then_some(i + 1);
+        [fall, branch_target(insn).map(|pc| index[pc as usize])]
+    };
+    let mut states: Vec<Option<Vec<Slot>>> = vec![None; n];
+    let mut entry = vec![Slot::Uninit; frame];
     for (i, &ty) in function.signature.params.iter().enumerate() {
-        slots[function.signature.param_base() as usize + i] = Slot::Ty(ty);
+        entry[function.signature.param_base() as usize + i] = Slot::Ty(ty);
     }
-    let mut pc_map = Vec::new();
-    builder.at_entry().map_err(fail)?;
-    for insn in &insns {
-        if needs_safepoint(insn.pc, &insn.decoded) {
-            builder
-                .end_lifetime(crate::SlotRange {
-                    first: 0,
-                    count: function.frame_size,
-                })
-                .map_err(fail)?;
-            for (i, slot) in slots.iter().enumerate() {
-                if let Slot::Ty(ty) = slot {
-                    let layout = crate::RootLayout {
-                        ordinary: if *ty == ValueType::String {
-                            vec![0]
-                        } else {
-                            Vec::new()
-                        },
-                        dynamic: Vec::new(),
-                    };
-                    builder
-                        .note_definition(
-                            crate::SlotRange {
-                                first: i as u32,
-                                count: 1,
-                            },
-                            &layout,
-                        )
-                        .map_err(fail)?;
+    states[0] = Some(entry);
+    let mut work = vec![0];
+    while let Some(i) = work.pop() {
+        let mut state = states[i].clone().expect("reachable");
+        transfer(function, callees, &insns[i], &mut state)?;
+        for j in successors(i).into_iter().flatten() {
+            let changed = if let Some(old) = &mut states[j] {
+                let mut changed = false;
+                for (a, &b) in old.iter_mut().zip(&state) {
+                    let joined = a.join(b);
+                    changed |= *a != joined;
+                    *a = joined;
+                }
+                changed
+            } else {
+                states[j] = Some(state.clone());
+                true
+            };
+            if changed {
+                work.push(j);
+            }
+        }
+    }
+    let mut uses = vec![vec![false; frame]; n];
+    let mut defs = vec![vec![false; frame]; n];
+    for (i, insn) in insns.iter().enumerate() {
+        for (role, value) in insn
+            .decoded
+            .op
+            .info()
+            .roles
+            .iter()
+            .zip(columns(&insn.decoded))
+        {
+            match role {
+                Role::Src => uses[i][value as usize] = true,
+                Role::Dst => defs[i][value as usize] = true,
+                Role::SrcDst => {
+                    uses[i][value as usize] = true;
+                    defs[i][value as usize] = true;
+                }
+                _ => {}
+            }
+        }
+        match insn.decoded.op.info().sem {
+            Sem::Call(_) => {
+                let site = function.sites[insn.decoded.operands.b as usize];
+                for slot in site.args.slots() {
+                    uses[i][slot as usize] = true;
+                }
+                for slot in site.result.slots() {
+                    defs[i][slot as usize] = true;
                 }
             }
-            builder.at_poll(insn.pc).map_err(fail)?;
-            pc_map.push((insn.pc, vec![crate::SafepointPc(insn.pc)]));
+            Sem::Return => {
+                uses[i][..function.signature.results.len()].fill(true);
+            }
+            _ => {}
         }
-        transfer(function, callees, insn, &mut slots)?;
     }
-    builder.finish(&pc_map).map_err(fail)
+    let mut live_in = vec![vec![false; frame]; n];
+    let mut live_out = live_in.clone();
+    loop {
+        let mut changed = false;
+        for i in (0..n).rev() {
+            if states[i].is_none() {
+                continue;
+            }
+            for slot in 0..frame {
+                let out = successors(i)
+                    .into_iter()
+                    .flatten()
+                    .any(|j| live_in[j][slot]);
+                let input = uses[i][slot] || (out && !defs[i][slot]);
+                changed |= live_out[i][slot] != out || live_in[i][slot] != input;
+                live_out[i][slot] = out;
+                live_in[i][slot] = input;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut roots = crate::FunctionRoots::scalar(function.sites.len());
+    let mut make_state = |state: &[Slot], live: &[bool]| {
+        let mut map = crate::RootMap::default();
+        for (slot, (&ty, &live)) in state.iter().zip(live).enumerate() {
+            if live && ty == Slot::Ty(ValueType::String) {
+                map.ordinary.resize(slot / 64 + 1, 0);
+                map.ordinary[slot / 64] |= 1 << (slot % 64);
+            }
+        }
+        let id = roots
+            .maps
+            .iter()
+            .position(|old| *old == map)
+            .unwrap_or_else(|| {
+                roots.maps.push(map);
+                roots.maps.len() - 1
+            });
+        crate::RootState {
+            map: crate::RootMapId(id as u32),
+            initialized: Vec::new(),
+        }
+    };
+    let entry_map = make_state(states[0].as_ref().unwrap(), &live_in[0]).map;
+    let mut points = Vec::new();
+    let mut calls = crate::FunctionRoots::scalar(function.sites.len()).calls;
+    for (i, insn) in insns.iter().enumerate() {
+        let Some(state) = &states[i] else { continue };
+        if needs_safepoint(insn.pc, &insn.decoded) {
+            points.push((crate::SafepointPc(insn.pc), make_state(state, &live_in[i])));
+        }
+        if matches!(insn.decoded.op.info().sem, Sem::Call(_)) {
+            let mut suspended = live_out[i].clone();
+            for slot in 0..frame {
+                suspended[slot] &= !defs[i][slot];
+            }
+            let mut after = state.clone();
+            transfer(function, callees, insn, &mut after)?;
+            calls[insn.decoded.operands.b as usize] = crate::CallRoots {
+                pre: make_state(state, &live_in[i]),
+                suspended: make_state(state, &suspended),
+                post: make_state(&after, &live_out[i]),
+            };
+        }
+    }
+    // Include unreachable safepoints, which still need structural metadata.
+    let mut points_iter = points.into_iter().peekable();
+    let mut all_points = Vec::new();
+    for insn in &insns {
+        if needs_safepoint(insn.pc, &insn.decoded) {
+            let state = if points_iter.peek().is_some_and(|(pc, _)| pc.0 == insn.pc) {
+                points_iter.next().unwrap().1
+            } else {
+                crate::RootState {
+                    map: crate::RootMapId(0),
+                    initialized: Vec::new(),
+                }
+            };
+            all_points.push((crate::SafepointPc(insn.pc), state));
+        }
+    }
+    roots.entry = entry_map;
+    roots.safepoints = all_points;
+    roots.calls = calls;
+    Ok(roots)
 }
 
 fn structure(function: &Function, callees: &Callees<'_>) -> Result<Vec<Insn>, VerifyError> {
     let code = &function.code;
     let signature = &function.signature;
-    if signature
-        .params
-        .iter()
-        .chain(&signature.results)
-        .any(|ty| *ty == ValueType::String)
-    {
-        return Err(error(
-            0,
-            ErrorKind::InvalidScalar("managed function signatures are not supported yet"),
-        ));
-    }
     if (function.frame_size as usize) < signature.results.len() + signature.params.len() {
         return Err(error(0, ErrorKind::FrameTooSmall));
     }

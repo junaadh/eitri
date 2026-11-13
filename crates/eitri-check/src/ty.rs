@@ -99,6 +99,8 @@ pub(crate) fn type_name(symbol: Symbol) -> TypeName {
         TypeName::Supported(Ty::Char)
     } else if symbol == sym::I64 {
         TypeName::Supported(Ty::I64)
+    } else if symbol == sym::STRING {
+        TypeName::Supported(Ty::String)
     } else if symbol == sym::BOOL {
         TypeName::Supported(Ty::Bool)
     } else if symbol == sym::VOID {

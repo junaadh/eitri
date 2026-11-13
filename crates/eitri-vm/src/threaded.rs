@@ -673,6 +673,17 @@ extern "rust-preserve-none" fn call_script(
             set(callee_s, size, params + i, value);
         }
     }
+    if callee_fn
+        .signature
+        .params
+        .contains(&eitri_bytecode::ValueType::String)
+    {
+        st.m.references
+            .resize(st.m.references.len().max(base + size), None);
+        let from = st.base + args.first as usize;
+        st.m.references
+            .copy_within(from..from + args.count as usize, base + params);
+    }
     let pushed = st.m.frames.push_within_capacity(Frame {
         function: st.id,
         base: st.base,
@@ -752,6 +763,17 @@ extern "rust-preserve-none" fn ret(
             let value = get(s, len, i);
             set(caller_s, caller_len, caller.result as usize + i, value);
         }
+    }
+    if st
+        .function
+        .signature
+        .results
+        .contains(&eitri_bytecode::ValueType::String)
+    {
+        st.m.references.copy_within(
+            st.base..st.base + results,
+            caller.base + caller.result as usize,
+        );
     }
     st.id = caller.function;
     st.function = caller_fn;
