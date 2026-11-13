@@ -1,0 +1,11 @@
+//! host: test
+import test from "test"
+struct Inner { text: string }
+struct Item { count: i64, inner: Inner, let id: i64 }
+extend Item {
+    mutating fn change() -> void { count += 2; inner = Inner { text: "new" } }
+    fn get() -> i64 { return count }
+}
+var item = Item { count: 3, inner: Inner { text: "old" }, id: 9 }
+item.change()
+test.check(item.get() == 5 && item.inner.text == "new" && item.id == 9)

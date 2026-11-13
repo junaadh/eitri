@@ -1,0 +1,2 @@
+struct Item { let id: i64 }
+extend Item { mutating fn change() -> void { id = 2 } }

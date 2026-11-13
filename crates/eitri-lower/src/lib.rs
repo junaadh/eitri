@@ -914,13 +914,23 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 op, value, span, ..
             } => {
                 let binding = checked.stmt_bindings[id].expect("a checked assignment has a target");
-                let slot = self.slots[binding];
+                let (slot, ty) = if let Some(index) = checked.stmt_fields[id] {
+                    let Ty::Struct(owner) = checked.bindings[binding].ty else {
+                        unreachable!()
+                    };
+                    (
+                        self.slots[binding] + self.field_offset(owner, index),
+                        checked.param_types[checked.struct_fields[owner]][index as usize],
+                    )
+                } else {
+                    (self.slots[binding], checked.bindings[binding].ty)
+                };
                 match op {
                     AssignOp::Set => {
-                        if matches!(checked.bindings[binding].ty, Ty::Struct(_) | Ty::Enum(_)) {
+                        if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
                             let source = self.expr(value, None)?;
                             if source != slot {
-                                for offset in 0..self.width(checked.bindings[binding].ty) {
+                                for offset in 0..self.width(ty) {
                                     self.asm.emit(
                                         Op::Mov,
                                         Operands::abc(
@@ -938,11 +948,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                     AssignOp::Compound(op) => {
                         // A fault here points at the whole statement.
-                        if let (Some(k), Some(imm_op)) = (
-                            self.imm8(value)
-                                .filter(|_| checked.bindings[binding].ty == Ty::I64),
-                            imm_op(op),
-                        ) {
+                        if let (Some(k), Some(imm_op)) =
+                            (self.imm8(value).filter(|_| ty == Ty::I64), imm_op(op))
+                        {
                             self.asm.emit(
                                 imm_op,
                                 Operands::abc(slot.into(), slot.into(), k),
@@ -950,7 +958,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             )?;
                         } else {
                             let rhs = self.expr(value, None)?;
-                            self.operate(op, checked.bindings[binding].ty, slot, slot, rhs, span)?;
+                            self.operate(op, ty, slot, slot, rhs, span)?;
                         }
                     }
                 }

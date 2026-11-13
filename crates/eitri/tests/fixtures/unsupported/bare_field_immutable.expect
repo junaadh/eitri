@@ -1,0 +1,1 @@
+error[E0303] 63..68: cannot assign to `value`: it is not a `var` binding

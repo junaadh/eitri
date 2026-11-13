@@ -2069,3 +2069,17 @@ p50/p99 9,209/12,700 ns, execution 250/292 ns, total 9,458/13,000 ns.
 This scalar workload does not exercise aggregate methods. Samples:
 `/private/tmp/eitri-t017-17-samples.csv`; report:
 `/private/tmp/eitri-t017-17-bench.txt`.
+
+### T017-18 bare receiver field writes
+
+Direct bare field assignments in mutating methods use an explicit per-statement
+field index. Read-only fields and non-mutating receivers reject writes. Both
+interpreters and lowerers cover managed field replacement under forced GC.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,166/10,300 ns, execution 208/292 ns, total 8,375/10,600 ns.
+Retained context memory was 30,683 B versus 30,435 B in T017-17, reflecting
+the added statement-index scratch; fresh creation used 197 allocations versus
+196. The scalar workload does not exercise these writes. Samples:
+`/private/tmp/eitri-t017-18-samples.csv`; report:
+`/private/tmp/eitri-t017-18-bench.txt`.

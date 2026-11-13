@@ -1,0 +1,2 @@
+struct Item { value: i64 }
+extend Item { fn change() -> void { value = 2 } }

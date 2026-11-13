@@ -397,14 +397,30 @@ impl Eval<'_> {
             } => {
                 let binding = self.checked.stmt_bindings[id].expect("checked assignment");
                 let rhs = self.expr(host, value)?;
-                let new = match op {
-                    AssignOp::Set => rhs,
-                    AssignOp::Compound(op) => {
-                        let lhs = self.read(binding);
-                        self.binary_values(op, lhs, rhs, span)?
-                    }
-                };
-                self.locals[binding.index()] = Some(new);
+                if let Some(field) = self.checked.stmt_fields[id] {
+                    let Value::Struct(ty, index) = self.read(binding) else {
+                        unreachable!()
+                    };
+                    let mut fields = self.structs[index as usize].clone();
+                    fields[field as usize] = match op {
+                        AssignOp::Set => rhs,
+                        AssignOp::Compound(op) => {
+                            self.binary_values(op, fields[field as usize], rhs, span)?
+                        }
+                    };
+                    let index = self.structs.len() as u32;
+                    self.structs.push(fields);
+                    self.locals[binding.index()] = Some(Value::Struct(ty, index));
+                } else {
+                    let new = match op {
+                        AssignOp::Set => rhs,
+                        AssignOp::Compound(op) => {
+                            let lhs = self.read(binding);
+                            self.binary_values(op, lhs, rhs, span)?
+                        }
+                    };
+                    self.locals[binding.index()] = Some(new);
+                }
             }
             Stmt::AssignField {
                 target,

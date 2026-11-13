@@ -94,6 +94,8 @@ pub struct Checked {
     pub resolutions: IndexVec<ExprId, Res>,
     /// For `let`: the declared binding; for assignment: the target.
     pub stmt_bindings: IndexVec<StmtId, Option<BindingId>>,
+    /// Field index for a bare receiver-field assignment.
+    pub stmt_fields: IndexVec<StmtId, Option<u32>>,
     pub signatures: IndexVec<FnId, Signature>,
     pub struct_fields: IndexVec<eitri_syntax::ast::StructId, List<Ty>>,
     pub struct_widths: IndexVec<eitri_syntax::ast::StructId, u32>,
@@ -127,6 +129,7 @@ impl Checked {
         self.types.clear();
         self.resolutions.clear();
         self.stmt_bindings.clear();
+        self.stmt_fields.clear();
         self.signatures.clear();
         self.struct_fields.clear();
         self.struct_widths.clear();
@@ -218,6 +221,7 @@ impl CheckScratch {
             + c.types.capacity() * size_of::<Ty>()
             + c.resolutions.capacity() * size_of::<Res>()
             + c.stmt_bindings.capacity() * size_of::<Option<BindingId>>()
+            + c.stmt_fields.capacity() * size_of::<Option<u32>>()
             + c.signatures.capacity() * size_of::<Signature>()
             + c.struct_fields.capacity() * size_of::<List<Ty>>()
             + c.struct_widths.capacity() * size_of::<u32>()
@@ -271,6 +275,8 @@ impl CheckScratch {
             .reserve_budgeted(count.saturating_sub(c.resolutions.len()), budget)?;
         c.stmt_bindings
             .reserve_budgeted(count.saturating_sub(c.stmt_bindings.len()), budget)?;
+        c.stmt_fields
+            .reserve_budgeted(count.saturating_sub(c.stmt_fields.len()), budget)?;
         c.signatures
             .reserve_budgeted(count.saturating_sub(c.signatures.len()), budget)?;
         c.struct_fields
@@ -353,6 +359,7 @@ pub fn check<'s>(
         .resolutions
         .resize(ast.exprs.len(), Res::None);
     scratch.checked.stmt_bindings.resize(ast.stmts.len(), None);
+    scratch.checked.stmt_fields.resize(ast.stmts.len(), None);
     scratch
         .checked
         .pattern_bindings
@@ -1384,7 +1391,10 @@ impl<'i> Checker<'_, 'i> {
     }
 
     fn assign(&mut self, stmt: StmtId, target: TokenId, op: AssignOp, value: ExprId) {
-        let resolved = if self.input.tokens.kind(target) == eitri_syntax::TokenKind::SelfLower {
+        let field = self.receiver_field(target);
+        let resolved = if let Some((binding, _, _)) = field {
+            Some(Name::Binding(binding))
+        } else if self.input.tokens.kind(target) == eitri_syntax::TokenKind::SelfLower {
             self.current.and_then(|f| f.self_binding).map(Name::Binding)
         } else {
             self.resolve(target)
@@ -1406,12 +1416,36 @@ impl<'i> Checker<'_, 'i> {
                 self.token_span(target),
             );
         }
-        let ty = binding.map_or(Ty::Error, |b| self.out.bindings[b].ty);
+        if let Some((binding, index, _)) = field {
+            let Ty::Struct(owner) = self.out.bindings[binding].ty else {
+                unreachable!()
+            };
+            if self.input.ast.params(self.input.ast.structs[owner].fields)[index as usize].readonly
+            {
+                self.report(
+                    Code::AssignToImmutable,
+                    "cannot assign through a read-only field",
+                    self.token_span(target),
+                );
+            }
+            self.out.stmt_fields[stmt] = Some(index);
+        }
+        let ty = field.map_or_else(
+            || binding.map_or(Ty::Error, |b| self.out.bindings[b].ty),
+            |(_, _, ty)| ty,
+        );
         let shifts = matches!(op, AssignOp::Compound(BinaryOp::Shl | BinaryOp::Shr));
         if let AssignOp::Compound(binary) = op
             && !valid_operand(binary, ty)
         {
             self.mismatch(ty, Ty::I64, self.token_span(target));
+        }
+        if field.is_some() && matches!(op, AssignOp::Compound(_)) && ty == Ty::String {
+            self.report(
+                Code::Unsupported,
+                "not supported yet: compound assignment to string fields",
+                self.token_span(target),
+            );
         }
         let operand_ty = if let AssignOp::Compound(binary) = op {
             if !valid_operand(binary, ty) || ty == Ty::Error {

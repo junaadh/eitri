@@ -844,6 +844,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   of their own type, subject to local shadowing.
 - T017-17: bare receiver field reads resolve inside methods, including nested
   aggregate fields and string values, with local and parameter shadowing.
+- T017-18: mutating methods can assign bare receiver fields, with immutable
+  methods and read-only fields rejecting writes.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 
