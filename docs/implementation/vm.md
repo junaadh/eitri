@@ -49,12 +49,15 @@ verified ordinary root maps select references at allocations, calls, and taken
 backward branches. Managed root construction follows control-flow liveness and publishes distinct
 call states; script calls copy reference arguments and results between frames.
 A host string result is copied into the heap and rooted until the host call
-returns; host string arguments remain live across reentry. Dynamic roots,
-aggregates, retained handles, and string values in host-initiated script calls
-remain later work. Forced-collection tests run both interpreters.
+returns; host string arguments remain live across reentry. Retained string
+handles are roots across runs and carry a context-specific identity plus a slot
+generation; released or foreign tokens are rejected. Retained slot scanning
+adds O(H) work for H allocated handle slots to each collection. Dynamic roots,
+aggregates, other retained handle types, and string values in host-initiated
+script calls remain later work. Forced-collection tests run both interpreters.
 The managed-object byte limit counts object structures and string payloads;
-allocator overhead, collection scratch, compiler storage and code are not yet
-covered. Collection is expected O(objects + roots), with hash-collision
+allocator overhead, handle tokens and tables, collection scratch, compiler
+storage and code are not yet covered. Collection is expected O(objects + roots), with hash-collision
 worst cases quadratic; reference lookup is expected O(1). Managed root
 analysis currently holds per-instruction slot facts and liveness: O(I × F)
 scratch for I instructions and F frame slots. Its fixpoints can take

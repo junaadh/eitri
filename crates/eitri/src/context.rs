@@ -185,6 +185,12 @@ impl Context {
         self.scratch.vm.set_heap_limit(bytes);
     }
 
+    /// Release a retained string. Returns false for a stale token or one
+    /// belonging to another context; reclamation occurs at the next collection.
+    pub fn release_retained_string(&mut self, handle: &eitri_vm::RetainedString) -> bool {
+        self.scratch.vm.release_retained_string(handle)
+    }
+
     /// Current managed-object bytes.
     pub fn managed_heap_bytes(&self) -> usize {
         self.scratch.vm.managed_heap_bytes()

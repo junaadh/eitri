@@ -185,6 +185,7 @@ pub fn bytecode(
     }
     let entry = FunctionId::from_u32(0);
     let mut scratch = VmScratch::new();
+    scratch.set_host_signatures(hosts.to_vec());
     let portable = eitri_vm::run(functions, entry, &[], &mut Echo, LIMITS, &mut scratch);
     let threaded = eitri_vm::run_threaded(functions, entry, &[], &mut Echo, LIMITS, &mut scratch);
     assert_eq!(

@@ -1,0 +1,5 @@
+effect: test.retain_text()
+effect: test.retained_text()
+effect: test.release_text()
+effect: test.emit(8)
+ok

@@ -1,0 +1,8 @@
+//! host: test
+import test from "test"
+test.retain_text("retained")
+var i = 0
+while i < 3 { "temporary".len(); i = i + 1; }
+let value = test.retained_text()
+test.release_text()
+test.emit(value.len())

@@ -1,11 +1,11 @@
 # Strings and formatting
 
-The current T015-3 implementation supports single-line and raw single-line
+The current T015-4 implementation supports single-line and raw single-line
 literals, local bindings, script function parameters and returns, and `.len()`
 across control flow and calls, including host function arguments and results.
 Other string operations, interpolation, multiline literals, and string values
 in host-initiated script calls remain unsupported. See the
-[implemented slice](../implementation/first-slice.md#managed-strings-t015-1-through-t015-3).
+[implemented slice](../implementation/first-slice.md#managed-strings-t015-1-through-t015-4).
 The rest of this chapter is the language contract for subsequent tasks.
 
 ## Interpolation

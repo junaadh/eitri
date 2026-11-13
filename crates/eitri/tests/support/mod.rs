@@ -23,6 +23,11 @@ pub struct TestHost {
     reenter: u32,
     decorate: u32,
     text_len: u32,
+    retain_text: u32,
+    retained_text: u32,
+    release_text: u32,
+    retained: Option<eitri::RetainedString>,
+    oracle_retained: Option<String>,
     pub effects: String,
 }
 
@@ -50,6 +55,11 @@ impl TestHost {
             reenter: index("reenter"),
             decorate: index("decorate"),
             text_len: index("text_len"),
+            retain_text: index("retain_text"),
+            retained_text: index("retained_text"),
+            release_text: index("release_text"),
+            retained: None,
+            oracle_retained: None,
             effects: String::new(),
         }
     }
@@ -86,6 +96,24 @@ impl TestHost {
 
 impl eitri::Host for TestHost {
     fn call(&mut self, cx: &mut eitri::Call<'_, '_>, index: u32) -> Result<(), eitri::HostError> {
+        if index == self.retain_text {
+            self.retained = Some(cx.retain_string_arg(0).ok_or("missing string argument")?);
+            self.effects += "effect: test.retain_text()\n";
+            return Ok(());
+        }
+        if index == self.retained_text {
+            cx.set_result_retained_string(0, self.retained.as_ref().ok_or("no retained string")?)?;
+            self.effects += "effect: test.retained_text()\n";
+            return Ok(());
+        }
+        if index == self.release_text {
+            let retained = self.retained.take().ok_or("no retained string")?;
+            if !cx.release_retained_string(&retained) {
+                return Err("invalid retained string".into());
+            }
+            self.effects += "effect: test.release_text()\n";
+            return Ok(());
+        }
         if index == self.decorate {
             let result = format!("[{}]", cx.string_arg(0).ok_or("missing string argument")?);
             self.effects += &format!("effect: test.decorate({result})\n");
@@ -125,6 +153,21 @@ impl oracle::Host for TestHost {
         string_args: &[Option<String>],
         string_result: &mut Option<String>,
     ) -> Result<(), oracle::HostError> {
+        if index == self.retain_text {
+            self.oracle_retained = string_args[0].clone();
+            self.effects += "effect: test.retain_text()\n";
+            return Ok(());
+        }
+        if index == self.retained_text {
+            *string_result = self.oracle_retained.clone();
+            self.effects += "effect: test.retained_text()\n";
+            return Ok(());
+        }
+        if index == self.release_text {
+            self.oracle_retained.take();
+            self.effects += "effect: test.release_text()\n";
+            return Ok(());
+        }
         if index == self.decorate {
             let value = format!("[{}]", string_args[0].as_deref().unwrap());
             self.effects += &format!("effect: test.decorate({value})\n");

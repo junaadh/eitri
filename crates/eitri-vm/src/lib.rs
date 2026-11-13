@@ -45,6 +45,7 @@ use eitri_base::IndexVec;
 use eitri_bytecode::{CallTarget, Function, FunctionId, Op, SlotRange};
 
 mod heap;
+pub use heap::RetainedString;
 mod threaded;
 
 pub use threaded::run_threaded;
@@ -349,6 +350,55 @@ impl<'c> Call<'c, '_> {
         Ok(())
     }
 
+    /// Keep a string argument alive across this call and future executions.
+    /// Release the returned token through this context when finished.
+    pub fn retain_string_arg(&mut self, index: usize) -> Option<RetainedString> {
+        let m = &mut *self.machine;
+        if m.host_signatures
+            .get(self.host_index as usize)?
+            .params
+            .get(index)
+            != Some(&eitri_bytecode::ValueType::String)
+        {
+            return None;
+        }
+        let reference = (*m.references.get(self.args.first as usize + index)?)?;
+        Some(m.heap.retain_string(reference))
+    }
+
+    /// Return a previously retained string without copying its contents.
+    pub fn set_result_retained_string(
+        &mut self,
+        index: usize,
+        handle: &RetainedString,
+    ) -> Result<(), HostError> {
+        let m = &mut *self.machine;
+        if m.host_signatures
+            .get(self.host_index as usize)
+            .and_then(|s| s.results.get(index))
+            != Some(&eitri_bytecode::ValueType::String)
+        {
+            return Err(HostError::from(
+                "host string result does not match its signature",
+            ));
+        }
+        let reference = m
+            .heap
+            .retained_string(handle)
+            .ok_or("invalid retained string")?;
+        // Keep the result alive even if the host releases the token before return.
+        m.host_roots.push(reference);
+        m.references
+            .resize(m.references.len().max(self.results.end() as usize), None);
+        m.references[self.results.first as usize + index] = Some(reference);
+        Ok(())
+    }
+
+    /// Release a token during a host call.
+    pub fn release_retained_string(&mut self, handle: &RetainedString) -> bool {
+        self.machine.heap.release_string(handle)
+    }
+
     fn finish_host(&self) -> Result<(), HostError> {
         if let Some(signature) = self.machine.host_signatures.get(self.host_index as usize) {
             for (i, ty) in signature.results.iter().enumerate() {
@@ -533,7 +583,15 @@ impl VmScratch {
         Self::default()
     }
 
+    /// Release a retained string issued by this context. Returns false for
+    /// a stale token or one belonging to another context.
+    pub fn release_retained_string(&mut self, handle: &RetainedString) -> bool {
+        self.heap.release_string(handle)
+    }
+
     /// Install the registered host signatures used to validate string access.
+    /// Call this before running bytecode that calls a host function with a
+    /// string parameter or result. `eitri::Context` installs them on registration.
     pub fn set_host_signatures(&mut self, signatures: Vec<eitri_bytecode::Signature>) {
         self.host_signatures = signatures;
     }
@@ -569,6 +627,7 @@ impl VmScratch {
                 })
                 .sum::<usize>()
             + self.heap.bytes()
+            + self.heap.retained_metadata_bytes()
     }
 }
 

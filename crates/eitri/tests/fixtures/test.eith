@@ -5,3 +5,6 @@ pub fn fail() -> void
 pub fn reenter(value: i64) -> i64
 pub fn decorate(value: string) -> string
 pub fn text_len(value: string) -> i64
+pub fn retain_text(value: string) -> void
+pub fn retained_text() -> string
+pub fn release_text() -> void

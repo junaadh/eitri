@@ -29,6 +29,23 @@ struct Object {
     text: Box<str>,
 }
 
+/// A host-owned root token. Release it through the context that issued it.
+/// The private allocation gives live tokens distinct identities without global
+/// state; neither the collector nor the context dereferences that identity.
+#[derive(Debug)]
+pub struct RetainedString {
+    token: Box<u8>,
+    index: usize,
+    generation: u64,
+}
+
+#[derive(Debug)]
+struct RetainedSlot {
+    identity: Option<NonNull<u8>>,
+    reference: Option<HeapRef>,
+    generation: u64,
+}
+
 /// A heap-local limit was exceeded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeapLimit;
@@ -51,6 +68,8 @@ pub struct Heap {
     #[allow(clippy::vec_box)]
     objects: Vec<Box<Object>>,
     index: FxHashMap<HeapRef, usize>,
+    retained: Vec<RetainedSlot>,
+    free_retained: Vec<usize>,
     bytes: usize,
 }
 
@@ -90,6 +109,57 @@ impl Heap {
         (object.header.kind == ObjectKind::String).then_some(object.text.as_ref())
     }
 
+    /// Add a host-owned collector root; slots are generation-checked and
+    /// recycled. A live token's unique allocation also identifies its context.
+    pub fn retain_string(&mut self, reference: HeapRef) -> RetainedString {
+        debug_assert!(self.string(reference).is_some());
+        let token = Box::new(0u8);
+        let identity = NonNull::from(token.as_ref());
+        let index = self.free_retained.pop().unwrap_or_else(|| {
+            self.retained.push(RetainedSlot {
+                identity: None,
+                reference: None,
+                generation: 0,
+            });
+            self.retained.len() - 1
+        });
+        let slot = &mut self.retained[index];
+        slot.identity = Some(identity);
+        slot.reference = Some(reference);
+        RetainedString {
+            token,
+            index,
+            generation: slot.generation,
+        }
+    }
+
+    pub fn retained_string(&self, handle: &RetainedString) -> Option<HeapRef> {
+        let slot = self.retained.get(handle.index)?;
+        (slot.generation == handle.generation
+            && slot.identity == Some(NonNull::from(handle.token.as_ref())))
+        .then_some(slot.reference)
+        .flatten()
+    }
+
+    pub fn release_string(&mut self, handle: &RetainedString) -> bool {
+        if self.retained_string(handle).is_none() {
+            return false;
+        }
+        let slot = &mut self.retained[handle.index];
+        slot.identity = None;
+        slot.reference = None;
+        if let Some(next) = slot.generation.checked_add(1) {
+            slot.generation = next;
+            self.free_retained.push(handle.index);
+        }
+        true
+    }
+
+    pub fn retained_metadata_bytes(&self) -> usize {
+        self.retained.capacity() * std::mem::size_of::<RetainedSlot>()
+            + self.free_retained.capacity() * std::mem::size_of::<usize>()
+    }
+
     /// Collect from ordinary root-map bits for each published frame. Invalid
     /// metadata is rejected before collection, leaving the heap untouched.
     /// Dynamic and guarded values are not executable in this stage.
@@ -125,7 +195,8 @@ impl Heap {
 
     /// Marks and sweeps objects not present in `roots`.
     pub fn collect(&mut self, roots: impl IntoIterator<Item = HeapRef>) {
-        let roots: FxHashSet<_> = roots.into_iter().collect();
+        let mut roots: FxHashSet<_> = roots.into_iter().collect();
+        roots.extend(self.retained.iter().filter_map(|slot| slot.reference));
         for object in &mut self.objects {
             object.header.marked = roots.contains(&HeapRef(NonNull::from(object.as_mut())));
         }
@@ -141,6 +212,22 @@ impl Heap {
         for (index, object) in self.objects.iter().enumerate() {
             self.index
                 .insert(HeapRef(NonNull::from(object.as_ref())), index);
+        }
+    }
+}
+
+impl Drop for Heap {
+    fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        {
+            let leaked = self
+                .retained
+                .iter()
+                .filter(|slot| slot.reference.is_some())
+                .count();
+            if leaked > 0 {
+                eprintln!("eitri: {leaked} retained string handle(s) were not released");
+            }
         }
     }
 }

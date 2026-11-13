@@ -154,7 +154,14 @@ T015-3 implements UTF-8 string arguments and results for script-to-host calls.
 Rust hosts borrow an argument with `Call::string_arg` and return an owned copy
 with `Call::set_result_string`; the latter accounts against the managed heap
 limit. The runtime roots arguments and pending results across host reentry.
-Host-initiated script calls still accept and return scalar values only.
+Host-initiated script calls still accept and return scalar values only. T015-4 also
+allows a host to retain a string argument with `Call::retain_string_arg`,
+return it with `Call::set_result_retained_string`, and release it through
+`Call` or `Context`. Retained tokens are context-specific and checked against
+slot generations; release makes the token stale, with reclamation at the next
+collection. A token owns its identity allocation, so dropping it without
+release leaks the root until the context is destroyed; debug builds report
+such roots at destruction.
 
 | Eitri type | Host sees | Notes |
 |---|---|---|

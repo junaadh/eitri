@@ -1707,3 +1707,21 @@ measure string calls. Context creation, I/O and host work are excluded from
 the reused run. The few-microsecond target remains missed. Report and raw
 samples: `/tmp/orchestra/eitri-t015-3-bench.txt` and
 `/tmp/orchestra/eitri-t015-3-samples.csv`. No Lua comparison was run.
+
+
+### T015-4 retained strings
+
+On 2026-11-13, `cargo bench --locked -p eitri --bench source_to_result --
+20001` measured 20,001 individual samples per cell, release profile, threaded
+interpreter, macOS 27.0.1 AArch64 and Rust 1.101.0-nightly with LLVM 23.1.5;
+the CPU model was unavailable. The reused scalar module measured compile
+p50/p99 7.750/13.0 µs, execution 0.209/0.375 µs, total 7.959/13.4 µs,
+48 allocations / 4,668 B, 344 code bytes and 2,978 metadata bytes. Reused
+host-call execution measured 9.750/14.2 µs. Context creation, file I/O and
+host work are excluded from these operations. The few-microsecond target
+remains missed. The prior run was not interleaved and neither run measures
+retained strings, so no causal performance comparison is claimed. The
+retained-token allocation belongs to the host; the root table is accounted in
+VM retained scratch, but neither is included in the managed-object limit.
+Report and raw samples: `/tmp/orchestra/eitri-t015-4-bench.txt` and
+`/tmp/orchestra/eitri-t015-4-samples.csv`; no Lua comparison was run.
