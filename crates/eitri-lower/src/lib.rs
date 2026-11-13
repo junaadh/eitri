@@ -2572,6 +2572,20 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                 }
             }
+            if let Some(token) = arm.catch_binding {
+                let binding = self.checked.pattern_bindings[token].expect("checked catch binding");
+                let width = self.width(Ty::Enum(enum_id));
+                let target = self.top;
+                self.top += width;
+                self.slots[binding] = target;
+                for offset in 0..width {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc((target + offset).into(), (subject + offset).into(), 0),
+                        span,
+                    )?;
+                }
+            }
             match arm.body {
                 eitri_syntax::ast::MatchBody::Expr(body) => {
                     if ty == Ty::Void {

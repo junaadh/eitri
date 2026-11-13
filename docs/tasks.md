@@ -852,6 +852,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   preserving receiver updates and mutability checks.
 - T017-21: parenthesized enum case patterns enforce payload arity, including
   the distinction between `.Case` and `.Case()`.
+- T017-22: catch-all binding patterns capture the entire enum value and
+  preserve nested managed payloads.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

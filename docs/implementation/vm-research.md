@@ -2121,3 +2121,15 @@ p50/p99 9,375/10,500 ns, execution 250/334 ns, total 9,625/10,800 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 patterns. Samples: `/private/tmp/eitri-t017-21-samples.csv`; report:
 `/private/tmp/eitri-t017-21-bench.txt`.
+
+### T017-22 enum catch-all bindings
+
+A catch-all binding copies the entire enum into a scoped local. Active managed
+payloads remain roots; nested matching is covered under forced collection on
+both interpreters and lowerers.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 15,200/24,900 ns, execution 375/667 ns, total 15,500/25,700 ns;
+retained context memory was 30,683 B. This noisy scalar workload does not
+exercise matches. Samples: `/private/tmp/eitri-t017-22-samples.csv`; report:
+`/private/tmp/eitri-t017-22-bench.txt`.

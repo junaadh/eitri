@@ -1941,6 +1941,10 @@ impl<'i> Checker<'_, 'i> {
                         self.span(expr),
                     );
                 }
+                if let Some(token) = arm.catch_binding {
+                    let binding = self.new_binding(token, false, subject);
+                    self.out.pattern_bindings[token] = Some(binding);
+                }
                 fallback = true;
             }
             let ty = match arm.body {

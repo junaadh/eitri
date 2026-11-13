@@ -391,11 +391,13 @@ impl Parser<'_> {
         let mut arms = Vec::new();
         self.skip_separators();
         while !self.at(T::RBrace) && !self.at(T::Eof) {
-            let case = if self.eat(T::Wildcard).is_some() {
-                None
+            let (case, catch_binding) = if self.eat(T::Wildcard).is_some() {
+                (None, None)
+            } else if self.at(T::Ident) {
+                (None, Some(self.bump()))
             } else {
                 self.expect(T::Dot, "a case pattern")?;
-                Some(self.expect(T::Ident, "a case name")?)
+                (Some(self.expect(T::Ident, "a case name")?), None)
             };
             let mut bindings = Vec::new();
             let parenthesized = self.eat(T::LParen).is_some();
@@ -422,6 +424,7 @@ impl Parser<'_> {
             };
             arms.push(crate::ast::MatchArm {
                 case,
+                catch_binding,
                 parenthesized,
                 bindings,
                 body,

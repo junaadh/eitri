@@ -1,0 +1,11 @@
+//! host: test
+import test from "test"
+enum Choice { Empty, Full(value: string) }
+fn text(choice: Choice) -> string {
+    return match choice {
+        .Empty => "empty",
+        captured => match captured { .Empty => "wrong", .Full(value) => value },
+    }
+}
+test.check(text(Choice.Full(value: "alive")) == "alive")
+test.check(text(Choice.Empty) == "empty")

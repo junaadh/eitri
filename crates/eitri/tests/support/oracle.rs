@@ -1058,6 +1058,11 @@ impl Eval<'_> {
                     })
                     .copied()
                     .expect("exhaustive match");
+                if let Some(token) = arm.catch_binding {
+                    let binding =
+                        self.checked.pattern_bindings[token].expect("checked catch binding");
+                    self.locals[binding.index()] = Some(Value::Enum(enum_id, case, payload));
+                }
                 for (index, &token) in self.ast.match_bindings[arm.bindings].iter().enumerate() {
                     if let Some(binding) = self.checked.pattern_bindings[token] {
                         self.locals[binding.index()] = Some(self.structs[payload as usize][index]);
