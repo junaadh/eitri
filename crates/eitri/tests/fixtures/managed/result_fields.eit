@@ -1,0 +1,20 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+struct Data { text: string }
+struct Holder { value: Problem!Data }
+class Boxed { value: Problem!Data }
+enum Container { Wrapped(value: Problem!Data) }
+fn choose(ok: bool) -> Problem!Data {
+    if ok { return Data { text: "yes" } }
+    return .Err(Problem.Bad("no"))
+}
+let holder = Holder { value: choose(true) }
+test.check(match holder.value { .Ok(data) => data.text == "yes", .Err => false })
+let boxed = Boxed { value: choose(false) }
+test.check(match boxed.value { .Ok => false, .Err(problem) => match problem { .Bad(text) => text == "no" } })
+let wrapped = Container.Wrapped(choose(true))
+test.check(match wrapped { .Wrapped(value) => match value { .Ok(data) => data.text == "yes", .Err => false } })
+boxed.value = choose(true)
+test.check(match boxed.value { .Ok(data) => data.text == "yes", .Err => false })
+test.check(boxed.value == holder.value)

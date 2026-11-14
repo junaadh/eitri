@@ -807,9 +807,11 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-71: result fields work in structs, classes and enum payloads with
+  forced collection; recursive inline result layouts are rejected.
 - T017-70: basic named results support success and error construction, script
   calls, exhaustive matches, equality, void success and managed payloads;
-  result fields, compound type syntax and nested result patterns remain open.
+  compound type syntax and nested result patterns remain open.
 - T017-69: string interpolation runs in field defaults, including aggregate
   field expressions and forced collection.
 - T017-68: conditional field defaults evaluate the selected branch, including

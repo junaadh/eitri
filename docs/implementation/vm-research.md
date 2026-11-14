@@ -2779,3 +2779,10 @@ Results use an inline tag and nullable managed payload slots. The 1001-sample
 release harness measured fresh module compile p50/p99 13.4/19.9 µs and
 source-to-result 13.7/20.3 µs on the general workload. Raw samples:
 `/private/tmp/eitri-t017-70-main-samples.csv`.
+
+### T017-71 result fields
+
+The aggregate layout traversal follows both result branches and rejects inline
+cycles. The 1001-sample release harness in the isolated workspace measured fresh
+module compile p50/p99 15.6/23.9 µs and source-to-result 15.9/24.5 µs on the
+general workload. Raw samples: `/private/tmp/eitri-t017-71-samples.csv`.

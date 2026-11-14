@@ -878,13 +878,6 @@ impl<'i> Checker<'_, 'i> {
                             self.token_span(field.name),
                         );
                     }
-                    if matches!(ty, Ty::Result(_)) {
-                        self.report(
-                            Code::Unsupported,
-                            "not supported yet: result fields",
-                            self.token_span(field.name),
-                        );
-                    }
                     types[index] = ty;
                 }
                 width = width.saturating_add(fields.len() as u32);
@@ -930,13 +923,6 @@ impl<'i> Checker<'_, 'i> {
                         self.token_span(field.name),
                     );
                 }
-                if matches!(ty, Ty::Result(_)) {
-                    self.report(
-                        Code::Unsupported,
-                        "not supported yet: result fields",
-                        self.token_span(field.name),
-                    );
-                }
                 fields[field_count] = ty;
                 field_count += 1;
             }
@@ -963,6 +949,17 @@ impl<'i> Checker<'_, 'i> {
                             }
                             Ty::FixedEnum(size, id) => {
                                 u32::from(size).saturating_mul(self.out.enum_widths[id])
+                            }
+                            Ty::Result(id) => {
+                                let (error, success) = self.out.result_types[id as usize];
+                                let width = |ty| match ty {
+                                    Ty::Struct(id) => self.out.struct_widths[id],
+                                    Ty::Enum(id) => self.out.enum_widths[id],
+                                    Ty::Void => 0,
+                                    _ => 1,
+                                };
+                                1u32.saturating_add(width(error))
+                                    .saturating_add(width(success))
                             }
                             Ty::Struct(id) => self.out.struct_widths[id],
                             Ty::Enum(id) => self.out.enum_widths[id],
@@ -1339,7 +1336,24 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 }
                 let child = fields[field];
-                let child_node = child.fixed_inner().map_or(child, |(_, inner)| inner);
+                let child_node = if let Ty::Result(id) = child {
+                    let (error, success) = self.out.result_types[id as usize];
+                    [error, success]
+                        .into_iter()
+                        .filter_map(|ty| {
+                            let index = match ty {
+                                Ty::Struct(id) => id.index(),
+                                Ty::Enum(id) => structs + id.index(),
+                                _ => return None,
+                            };
+                            (self.struct_states[index] != 2)
+                                .then_some((ty, self.struct_states[index]))
+                        })
+                        .min_by_key(|(_, state)| if *state == 1 { 0 } else { 1 })
+                        .map_or(Ty::Error, |(ty, _)| ty)
+                } else {
+                    child.fixed_inner().map_or(child, |(_, inner)| inner)
+                };
                 let child_node = child_node
                     .tagged_optional_inner()
                     .filter(|ty| matches!(ty, Ty::Struct(_) | Ty::Enum(_)))
@@ -1381,6 +1395,17 @@ impl<'i> Checker<'_, 'i> {
                         }
                         Ty::FixedEnum(size, id) => {
                             u32::from(size).saturating_mul(self.out.enum_widths[id])
+                        }
+                        Ty::Result(id) => {
+                            let (error, success) = self.out.result_types[id as usize];
+                            let width = |ty| match ty {
+                                Ty::Struct(id) => self.out.struct_widths[id],
+                                Ty::Enum(id) => self.out.enum_widths[id],
+                                Ty::Void => 0,
+                                _ => 1,
+                            };
+                            1u32.saturating_add(width(error))
+                                .saturating_add(width(success))
                         }
                         Ty::Struct(id) => self.out.struct_widths[id],
                         Ty::Enum(id) => self.out.enum_widths[id],

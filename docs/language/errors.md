@@ -2,7 +2,8 @@
 
 The current implementation supports named `E!T` results in script functions
 and locals, implicit and explicit success, explicit errors, matching, equality,
-and `void` success. Result fields, compound result type syntax, nested result
+and `void` success, including fields of structs, classes, and enums. Compound
+result type syntax, nested result
 patterns, `try`, and host result signatures remain future work.
 
 Eitri separates two kinds of failure:
