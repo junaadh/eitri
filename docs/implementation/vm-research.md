@@ -2855,3 +2855,10 @@ success and error. The 1001-sample release harness in the isolated workspace
 measured fresh module compile p50/p99 13.0/15.8 µs and source-to-result
 13.2/16.1 µs on the general workload. Raw samples:
 `/private/tmp/eitri-t017-80-samples.csv`.
+
+### T017-81 optional results with optional success
+
+`?<E!?T>` preserves the four representable states using the existing nested
+inline tags. The 1001-sample release harness in the isolated workspace measured
+fresh module compile p50/p99 13.3/28.8 µs and source-to-result 13.7/29.6 µs on
+the general workload. Raw samples: `/private/tmp/eitri-t017-81-samples.csv`.

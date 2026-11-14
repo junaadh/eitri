@@ -592,8 +592,16 @@ impl<'i> Checker<'_, 'i> {
     /// A written type; `void` only where `allow_void`.
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
         match ty {
-            TypeExpr::OptionalResultNamed(error, success) => {
-                let inner = self.ty(TypeExpr::ResultNamed(error, success), false);
+            TypeExpr::OptionalResultNamed(error, success)
+            | TypeExpr::OptionalResultOptional(error, success) => {
+                let inner = self.ty(
+                    if matches!(ty, TypeExpr::OptionalResultOptional(_, _)) {
+                        TypeExpr::ResultOptional(error, success)
+                    } else {
+                        TypeExpr::ResultNamed(error, success)
+                    },
+                    false,
+                );
                 return inner.optional_of().unwrap_or(Ty::Error);
             }
             TypeExpr::ResultNamed(error, success) | TypeExpr::ResultOptional(error, success) => {

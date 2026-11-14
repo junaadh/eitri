@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+enum Problem { Bad }
+let absent: ?<Problem!?string> = null
+let empty: ?<Problem!?string> = .Ok(null)
+let value: ?<Problem!?string> = .Ok("yes")
+let error: ?<Problem!?string> = .Err(Problem.Bad)
+test.check(match absent { null => true, .Ok => false, .Err => false })
+test.check(match empty { null => false, .Ok(null) => true, .Ok(text) => false, .Err => false })
+test.check(match value { null => false, .Ok(null) => false, .Ok(text) => text == "yes", .Err => false })
+test.check(match error { null => false, .Ok => false, .Err => true })
+struct Holder { value: ?<Problem!?string>, marker: i64 }
+let holder = Holder { value: value, marker: 8 }
+test.check(holder.marker == 8 && match holder.value { null => false, .Ok(null) => false, .Ok(text) => text == "yes", .Err => false })

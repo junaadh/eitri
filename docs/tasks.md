@@ -807,6 +807,10 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-82: grouped optional types `?<?T>` collapse; the `??` token is
+  rejected as a type prefix in accordance with the lexical contract.
+- T017-81: `?<E!?T>` preserves outer null, error, successful null and value
+  through construction, matching and aggregate fields.
 - T017-80: optional results `?<E!T>` retain separate null, success and error
   states through matches, calls, coalescing and managed aggregate fields.
 - T017-79: zero-length fixed arrays support value copies, calls and aggregate

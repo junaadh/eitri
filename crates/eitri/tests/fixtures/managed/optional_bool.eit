@@ -11,7 +11,7 @@ test.check((yes.flag ?? false) && !(no.flag ?? true) && (absent.flag ?? true))
 test.check(yes.flag != no.flag && absent.flag == null && true == yes.flag)
 test.check(match value { .Value(flag) => flag, .Value(_) => false })
 test.check(yes == Box { flag: true, text: "yes" })
-let collapsed: ???bool = false
+let collapsed: ?<?bool> = false
 test.check((collapsed ?? true) == false)
 let plain = true
 let picked: ?bool = absent.flag ?? yes.flag

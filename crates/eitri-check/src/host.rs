@@ -245,7 +245,8 @@ fn value_type(
 ) -> Ty {
     if let TypeExpr::ResultNamed(token, _)
     | TypeExpr::ResultOptional(token, _)
-    | TypeExpr::OptionalResultNamed(token, _) = ty
+    | TypeExpr::OptionalResultNamed(token, _)
+    | TypeExpr::OptionalResultOptional(token, _) = ty
     {
         diagnostics.push(error(
             Code::Unsupported,

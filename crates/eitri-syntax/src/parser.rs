@@ -943,6 +943,36 @@ impl Parser<'_> {
     fn type_expr(&mut self) -> Parsed<TypeExpr> {
         if self.at(T::Question)
             && self.nth(1) == T::Lt
+            && self.nth(2) == T::Question
+            && self.nth(3) == T::Ident
+            && self.nth(4) == T::Gt
+        {
+            self.bump();
+            self.bump();
+            self.bump();
+            let token = self.bump();
+            self.bump();
+            return Ok(TypeExpr::OptionalNamed(token));
+        }
+        if self.at(T::Question)
+            && self.nth(1) == T::Lt
+            && self.nth(2) == T::Ident
+            && self.nth(3) == T::Bang
+            && self.nth(4) == T::Question
+            && self.nth(5) == T::Ident
+            && self.nth(6) == T::Gt
+        {
+            self.bump();
+            self.bump();
+            let error = self.bump();
+            self.bump();
+            self.bump();
+            let success = self.bump();
+            self.bump();
+            return Ok(TypeExpr::OptionalResultOptional(error, success));
+        }
+        if self.at(T::Question)
+            && self.nth(1) == T::Lt
             && self.nth(2) == T::Ident
             && self.nth(3) == T::Bang
             && self.nth(4) == T::Ident
@@ -1008,7 +1038,7 @@ impl Parser<'_> {
             });
         }
         let mut optional_tokens = 0;
-        while matches!(self.nth(optional_tokens), T::Question | T::QuestionQuestion) {
+        while self.nth(optional_tokens) == T::Question {
             optional_tokens += 1;
         }
         if optional_tokens != 0 && self.nth(optional_tokens) == T::Ident {
@@ -1074,7 +1104,7 @@ impl Parser<'_> {
                     },
                 }
             }
-            T::Question => "optional types",
+            T::Question | T::QuestionQuestion => "optional types",
             T::LBracket => "array types",
             T::Fn | T::Async => "function types",
             T::Lt => "grouped types",

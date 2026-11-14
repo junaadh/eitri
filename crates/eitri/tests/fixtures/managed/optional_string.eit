@@ -10,7 +10,7 @@ test.check((present.text ?? "missing") == "alive")
 test.check((absent.text ?? "missing") == "missing")
 test.check(match wrapped { .Empty => false, .Value(item) => item == "alive", .Value(_) => false })
 test.check(present == Box { text: "alive" })
-let collapsed: ???string = "alive"
+let collapsed: ?<?string> = "alive"
 test.check(present.text != null && absent.text == null)
 test.check(null == absent.text && "alive" == collapsed)
 fn fallback() -> string { test.emit(9); return "fallback" }
@@ -22,3 +22,6 @@ let picked: ?string = absent.text ?? present.text
 let neither: ?string = null ?? null
 test.check(from_null == "direct" && picked == "alive" && neither == null)
 test.check(null != "x" && "x" != null)
+
+let grouped: ?<?string> = "grouped"
+test.check(grouped == "grouped")

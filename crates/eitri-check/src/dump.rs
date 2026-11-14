@@ -256,6 +256,10 @@ impl Dumper<'_> {
 
     fn written_type(&self, ty: TypeExpr) -> String {
         match ty {
+            TypeExpr::OptionalResultOptional(error, success) => self.paint(
+                TYPE,
+                &format!("'?<{}!?{}>'", self.token(error), self.token(success)),
+            ),
             TypeExpr::OptionalResultNamed(error, success) => self.paint(
                 TYPE,
                 &format!("'?<{}!{}>'", self.token(error), self.token(success)),
@@ -385,7 +389,8 @@ impl Dumper<'_> {
             Node::Param(f, i) => {
                 let param = ast.params(ast.fns[f].params)[i];
                 let end = match param.ty {
-                    TypeExpr::OptionalResultNamed(_, token)
+                    TypeExpr::OptionalResultOptional(_, token)
+                    | TypeExpr::OptionalResultNamed(_, token)
                     | TypeExpr::ResultOptional(_, token)
                     | TypeExpr::ResultNamed(_, token)
                     | TypeExpr::FixedNamed(token, _)
