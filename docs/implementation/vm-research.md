@@ -2862,3 +2862,10 @@ measured fresh module compile p50/p99 13.0/15.8 µs and source-to-result
 inline tags. The 1001-sample release harness in the isolated workspace measured
 fresh module compile p50/p99 13.3/28.8 µs and source-to-result 13.7/29.6 µs on
 the general workload. Raw samples: `/private/tmp/eitri-t017-81-samples.csv`.
+
+### T017-82 grouped optional collapse
+
+Grouped optional type syntax collapses nested optionals without adding runtime
+storage. The 1001-sample release harness in the isolated workspace measured
+fresh module compile p50/p99 14.2/19.6 µs and source-to-result 14.5/20.4 µs on
+the general workload. Raw samples: `/private/tmp/eitri-t017-82-samples.csv`.
