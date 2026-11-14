@@ -136,6 +136,9 @@ impl Printer<'_> {
             }
             TypeExpr::FixedI64(token) => format!("[{}]i64", self.token(token)),
             TypeExpr::FixedString(token) => format!("[{}]string", self.token(token)),
+            TypeExpr::OptionalFixed(size, element) => {
+                format!("?[{}]{}", self.token(size), self.token(element))
+            }
             TypeExpr::FixedOptional(size, element) => {
                 format!("[{}]?{}", self.token(size), self.token(element))
             }

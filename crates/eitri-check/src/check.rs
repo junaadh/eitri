@@ -100,6 +100,7 @@ pub struct Checked {
     pub result_wrap: IndexVec<ExprId, Option<u32>>,
     pub result_types: Vec<(Ty, Ty)>,
     pub fixed_optional_types: Vec<Ty>,
+    pub optional_fixed_types: Vec<Ty>,
     /// For `let`: the declared binding; for assignment: the target.
     pub stmt_bindings: IndexVec<StmtId, Option<BindingId>>,
     /// Field index for a bare receiver-field assignment.
@@ -140,6 +141,7 @@ impl Checked {
         self.result_wrap.clear();
         self.result_types.clear();
         self.fixed_optional_types.clear();
+        self.optional_fixed_types.clear();
         self.stmt_bindings.clear();
         self.stmt_fields.clear();
         self.signatures.clear();
@@ -236,6 +238,7 @@ impl CheckScratch {
             + c.result_wrap.capacity() * size_of::<Option<u32>>()
             + c.result_types.capacity() * size_of::<(Ty, Ty)>()
             + c.fixed_optional_types.capacity() * size_of::<Ty>()
+            + c.optional_fixed_types.capacity() * size_of::<Ty>()
             + c.stmt_bindings.capacity() * size_of::<Option<BindingId>>()
             + c.stmt_fields.capacity() * size_of::<Option<u32>>()
             + c.signatures.capacity() * size_of::<Signature>()
@@ -307,6 +310,8 @@ impl CheckScratch {
             .reserve_budgeted(count.saturating_sub(c.enum_starts.len()), budget)?;
         c.enum_widths
             .reserve_budgeted(count.saturating_sub(c.enum_widths.len()), budget)?;
+        let optional_fixed_count = count.saturating_sub(c.optional_fixed_types.len());
+        budget.reserve_vec(&mut c.optional_fixed_types, optional_fixed_count)?;
         let fixed_optional_count = count.saturating_sub(c.fixed_optional_types.len());
         budget.reserve_vec(&mut c.fixed_optional_types, fixed_optional_count)?;
         let result_count = count.saturating_sub(c.result_types.len());
@@ -597,6 +602,35 @@ impl<'i> Checker<'_, 'i> {
     /// A written type; `void` only where `allow_void`.
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
         match ty {
+            TypeExpr::OptionalFixed(size, element) => {
+                let symbol = self.symbol(element);
+                let written = if symbol == eitri_base::sym::I64 {
+                    TypeExpr::FixedI64(size)
+                } else if symbol == eitri_base::sym::STRING {
+                    TypeExpr::FixedString(size)
+                } else if symbol.is_type_name() {
+                    TypeExpr::FixedScalar(size, element)
+                } else {
+                    TypeExpr::FixedNamed(size, element)
+                };
+                let inner = self.ty(written, false);
+                if inner == Ty::Error {
+                    return Ty::Error;
+                }
+                let index = if let Some(index) = self
+                    .out
+                    .optional_fixed_types
+                    .iter()
+                    .position(|&item| item == inner)
+                {
+                    index
+                } else {
+                    let index = self.out.optional_fixed_types.len();
+                    self.out.optional_fixed_types.push(inner);
+                    index
+                };
+                return Ty::OptionalFixed(index as u32);
+            }
             TypeExpr::ResultFixed(error, size, element) => {
                 let error_ty = self.ty(TypeExpr::Named(error), false);
                 let symbol = self.symbol(element);
@@ -1012,6 +1046,22 @@ impl<'i> Checker<'_, 'i> {
                             | Ty::FixedString(size)
                             | Ty::FixedScalar(size, _)
                             | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                            Ty::OptionalFixed(id) => {
+                                let inner = self.out.optional_fixed_types[id as usize];
+                                1 + match inner {
+                                    Ty::FixedI64(size)
+                                    | Ty::FixedString(size)
+                                    | Ty::FixedScalar(size, _)
+                                    | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                    Ty::FixedStruct(size, id) => u32::from(size)
+                                        .saturating_mul(self.out.struct_widths[id])
+                                        .max(1),
+                                    Ty::FixedEnum(size, id) => u32::from(size)
+                                        .saturating_mul(self.out.enum_widths[id])
+                                        .max(1),
+                                    _ => 1,
+                                }
+                            }
                             Ty::FixedOptional(size, id) => {
                                 let inner = self.out.fixed_optional_types[id as usize];
                                 let width = match inner {
@@ -1176,6 +1226,22 @@ impl<'i> Checker<'_, 'i> {
                     | Ty::FixedString(size)
                     | Ty::FixedScalar(size, _)
                     | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                    Ty::OptionalFixed(id) => {
+                        let inner = self.out.optional_fixed_types[id as usize];
+                        1 + match inner {
+                            Ty::FixedI64(size)
+                            | Ty::FixedString(size)
+                            | Ty::FixedScalar(size, _)
+                            | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                            Ty::FixedStruct(size, id) => u32::from(size)
+                                .saturating_mul(self.out.struct_widths[id])
+                                .max(1),
+                            Ty::FixedEnum(size, id) => u32::from(size)
+                                .saturating_mul(self.out.enum_widths[id])
+                                .max(1),
+                            _ => 1,
+                        }
+                    }
                     Ty::FixedOptional(size, id) => {
                         let inner = self.out.fixed_optional_types[id as usize];
                         let width = match inner {
@@ -1466,7 +1532,10 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 }
                 let child = fields[field];
-                let child_node = if let Ty::FixedOptional(_, id) = child {
+                let child_node = if let Ty::OptionalFixed(id) = child {
+                    let inner = self.out.optional_fixed_types[id as usize];
+                    inner.fixed_inner().map_or(inner, |(_, inner)| inner)
+                } else if let Ty::FixedOptional(_, id) = child {
                     self.out.fixed_optional_types[id as usize]
                         .tagged_optional_inner()
                         .unwrap_or(Ty::Error)
@@ -1528,6 +1597,22 @@ impl<'i> Checker<'_, 'i> {
                         | Ty::FixedString(size)
                         | Ty::FixedScalar(size, _)
                         | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                        Ty::OptionalFixed(id) => {
+                            let inner = self.out.optional_fixed_types[id as usize];
+                            1 + match inner {
+                                Ty::FixedI64(size)
+                                | Ty::FixedString(size)
+                                | Ty::FixedScalar(size, _)
+                                | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                Ty::FixedStruct(size, id) => u32::from(size)
+                                    .saturating_mul(self.out.struct_widths[id])
+                                    .max(1),
+                                Ty::FixedEnum(size, id) => u32::from(size)
+                                    .saturating_mul(self.out.enum_widths[id])
+                                    .max(1),
+                                _ => 1,
+                            }
+                        }
                         Ty::FixedOptional(size, id) => {
                             let inner = self.out.fixed_optional_types[id as usize];
                             let width = match inner {
@@ -2043,17 +2128,25 @@ impl<'i> Checker<'_, 'i> {
         }
     }
 
+    fn optional_inner(&self, ty: Ty) -> Option<Ty> {
+        match ty {
+            Ty::OptionalFixed(id) => Some(self.out.optional_fixed_types[id as usize]),
+            _ => ty.optional_inner(),
+        }
+    }
+
     fn value(&mut self, expr: ExprId, expected: Option<Ty>) -> Ty {
         let guidance = if matches!(
             self.input.ast.exprs[expr],
             Expr::Int { .. }
                 | Expr::Float { .. }
                 | Expr::StructLiteral { .. }
+                | Expr::FixedArray(_)
                 | Expr::EnumShorthand(_)
                 | Expr::Call { .. }
                 | Expr::NamedCall { .. }
         ) {
-            expected.and_then(Ty::optional_inner).or(expected)
+            expected.and_then(|ty| self.optional_inner(ty)).or(expected)
         } else {
             expected
         };
@@ -2087,6 +2180,12 @@ impl<'i> Checker<'_, 'i> {
         {
             self.out.result_wrap[expr] = Some(id);
             return Ty::Result(id);
+        }
+        if let Some(Ty::OptionalFixed(id)) = expected
+            && found == self.out.optional_fixed_types[id as usize]
+        {
+            self.out.optional_wrap[expr] = true;
+            return Ty::OptionalFixed(id);
         }
         if let Some(expected) = expected
             && (found.optional_of() == Some(expected)
@@ -2300,7 +2399,7 @@ impl<'i> Checker<'_, 'i> {
             Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
             Expr::Bool(_) => Ty::Bool,
             Expr::Null(token) => {
-                if expected.is_some_and(|ty| ty.optional_inner().is_some()) {
+                if expected.is_some_and(|ty| self.optional_inner(ty).is_some()) {
                     expected.unwrap()
                 } else {
                     self.report(
@@ -2400,7 +2499,7 @@ impl<'i> Checker<'_, 'i> {
         }
         let context = expected
             .and_then(|ty| {
-                if ty.optional_inner().is_some() {
+                if self.optional_inner(ty).is_some() {
                     Some(ty)
                 } else {
                     ty.optional_of()
@@ -2413,7 +2512,7 @@ impl<'i> Checker<'_, 'i> {
                 Expr::Bool(_) => Some(Ty::OptionalBool),
                 Expr::Char(_) => Some(Ty::OptionalChar),
                 _ => self.hint(tail).and_then(|ty| {
-                    if ty.optional_inner().is_some() {
+                    if self.optional_inner(ty).is_some() {
                         Some(ty)
                     } else {
                         ty.optional_of()
@@ -2448,7 +2547,8 @@ impl<'i> Checker<'_, 'i> {
                 }
                 source_kind = Some(Ty::OptionalI64);
             }
-            if !matches!(found, Ty::FindOffset | Ty::Error) && found.optional_inner().is_none() {
+            if !matches!(found, Ty::FindOffset | Ty::Error) && self.optional_inner(found).is_none()
+            {
                 self.report(
                     Code::TypeMismatch,
                     "left operand of `??` must be optional",
@@ -2467,7 +2567,7 @@ impl<'i> Checker<'_, 'i> {
         }
         let source_kind = source_kind.unwrap_or(Ty::Error);
         let result = match source_kind {
-            kind if kind.optional_inner().is_some() => {
+            kind if self.optional_inner(kind).is_some() => {
                 let hint = match self.ast().exprs[node] {
                     Expr::Null(_) => Some(source_kind),
                     Expr::Int { .. } | Expr::Float { .. } => source_kind.tagged_optional_inner(),
@@ -2478,7 +2578,7 @@ impl<'i> Checker<'_, 'i> {
                     self.out.optional_wrap[node] = true;
                     found = Ty::OptionalI64;
                 }
-                let inner = source_kind.optional_inner().unwrap();
+                let inner = self.optional_inner(source_kind).unwrap();
                 if found != inner && found != source_kind && found != Ty::Error {
                     self.mismatch(found, inner, self.span(node));
                 }
@@ -2894,7 +2994,7 @@ impl<'i> Checker<'_, 'i> {
             };
             if self.out.param_types[types]
                 .get(index)
-                .is_some_and(|ty| ty.optional_inner().is_some())
+                .is_some_and(|ty| self.optional_inner(*ty).is_some())
             {
                 return false;
             }
@@ -2947,7 +3047,7 @@ impl<'i> Checker<'_, 'i> {
                         mask[0] = 1;
                         Some(count)
                     }
-                    (ty, Expr::Null(_)) if ty.optional_inner().is_some() => {
+                    (ty, Expr::Null(_)) if self.optional_inner(ty).is_some() => {
                         mask[0] = 1;
                         Some(2)
                     }
@@ -2990,7 +3090,7 @@ impl<'i> Checker<'_, 'i> {
                         }
                         Some(count)
                     }
-                    ty if ty.optional_inner().is_some() => {
+                    ty if self.optional_inner(ty).is_some() => {
                         mask[0] = 0b10;
                         Some(2)
                     }
@@ -3430,7 +3530,7 @@ impl<'i> Checker<'_, 'i> {
             );
             return Ty::Error;
         }
-        let inner = subject.optional_inner();
+        let inner = self.optional_inner(subject);
         let mut fallback = false;
         let mut present = false;
         let mut null = false;
@@ -4397,7 +4497,7 @@ impl<'i> Checker<'_, 'i> {
         } = self.ast().exprs[expr]
         {
             let ty = self.hint_at(lhs, depth + 1)?;
-            return ty.optional_inner();
+            return self.optional_inner(ty);
         }
         if let Expr::Call { callee, .. } = self.ast().exprs[expr]
             && let Expr::Name(name) = self.ast().exprs[callee]
@@ -4457,7 +4557,7 @@ impl<'i> Checker<'_, 'i> {
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
             && self
                 .hint(first_rhs)
-                .is_some_and(|ty| ty.optional_inner().is_some())
+                .is_some_and(|ty| self.optional_inner(ty).is_some())
         {
             self.hint(first_rhs)
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
@@ -4525,7 +4625,7 @@ impl<'i> Checker<'_, 'i> {
         } else {
             guidance
         };
-        let mut lhs_ty = if guidance.is_some_and(|ty| ty.optional_inner().is_some()) {
+        let mut lhs_ty = if guidance.is_some_and(|ty| self.optional_inner(ty).is_some()) {
             self.value(leftmost, guidance)
         } else {
             self.expr(leftmost, guidance, true)

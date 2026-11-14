@@ -1,0 +1,18 @@
+//! host: test
+import test from "test"
+let none: ?[2]string = null
+let some: ?[2]string = ["one", "two"]
+test.check(none == null && some != null)
+test.check(match some { null => false, value => value[0] == "one" && value[1] == "two" })
+let fallback: [2]string = ["fallback", "other"]
+let picked = none ?? fallback
+test.check(picked[0] == "fallback")
+struct Holder { values: ?[2]string, marker: i64 }
+let holder = Holder { values: some, marker: 9 }
+test.check(holder.marker == 9 && match holder.values { null => false, value => value[1] == "two" })
+struct Item { text: string }
+struct Forward { values: ?[2]Item, marker: i64 }
+let forward = Forward { values: [Item { text: "a" }, Item { text: "b" }], marker: 8 }
+test.check(forward.marker == 8 && match forward.values { null => false, value => value[1].text == "b" })
+fn roundtrip(value: ?[2]string) -> ?[2]string { return value }
+test.check(match roundtrip(some) { null => false, value => value[0] == "one" })

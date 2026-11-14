@@ -2892,3 +2892,10 @@ Optional element layouts use checked element widths and nullable managed slots.
 The 1001-sample release harness in the isolated workspace measured fresh module
 compile p50/p99 13.4/19.8 µs and source-to-result 13.7/20.2 µs on the general
 workload. Raw samples: `/private/tmp/eitri-t017-85-samples.csv`.
+
+### T017-86 optional fixed arrays
+
+Optional fixed arrays use a presence tag plus nullable inline elements. The
+1001-sample release harness in the isolated workspace measured fresh module
+compile p50/p99 14.2/23.1 µs and source-to-result 14.5/23.6 µs on the general
+workload. Raw samples: `/private/tmp/eitri-t017-86-samples.csv`.
