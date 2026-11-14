@@ -465,47 +465,67 @@ impl Parser<'_> {
         let mut arms = Vec::new();
         self.skip_separators();
         while !self.at(T::RBrace) && !self.at(T::Eof) {
-            let literal = if matches!(
-                self.kind(),
-                T::Int | T::Float | T::Str | T::Char | T::True | T::False | T::Minus | T::Null
-            ) {
-                Some(self.prefix(true)?)
-            } else {
-                None
-            };
-            let range_end = if literal.is_some() && matches!(self.kind(), T::DotDot | T::DotDotEq) {
-                let inclusive = self.at(T::DotDotEq);
-                self.bump();
-                if !matches!(self.kind(), T::Int | T::Char | T::Minus) {
-                    return Err(self.expected("an integer or character literal"));
-                }
-                Some((self.prefix(true)?, inclusive))
-            } else {
-                None
-            };
-            let (case, qualifier, catch_binding) =
-                if literal.is_some() || self.eat(T::Wildcard).is_some() {
-                    (None, None, None)
-                } else if self.at(T::Ident) && self.nth(1) == T::Dot {
-                    let qualifier = self.bump();
-                    self.bump();
-                    (
-                        Some(self.expect(T::Ident, "a case name")?),
-                        Some(qualifier),
-                        None,
-                    )
-                } else if self.at(T::Ident) {
-                    (None, None, Some(self.bump()))
+            let alternatives_start = arms.len();
+            loop {
+                let literal = if matches!(
+                    self.kind(),
+                    T::Int | T::Float | T::Str | T::Char | T::True | T::False | T::Minus | T::Null
+                ) {
+                    Some(self.prefix(true)?)
                 } else {
-                    self.expect(T::Dot, "a case pattern")?;
-                    (Some(self.expect(T::Ident, "a case name")?), None, None)
+                    None
                 };
-            let parenthesized = self.eat(T::LParen).is_some();
-            let bindings = if parenthesized {
-                self.match_payload()?
-            } else {
-                eitri_base::List::EMPTY
-            };
+                let range_end =
+                    if literal.is_some() && matches!(self.kind(), T::DotDot | T::DotDotEq) {
+                        let inclusive = self.at(T::DotDotEq);
+                        self.bump();
+                        if !matches!(self.kind(), T::Int | T::Char | T::Minus) {
+                            return Err(self.expected("an integer or character literal"));
+                        }
+                        Some((self.prefix(true)?, inclusive))
+                    } else {
+                        None
+                    };
+                let (case, qualifier, catch_binding) =
+                    if literal.is_some() || self.eat(T::Wildcard).is_some() {
+                        (None, None, None)
+                    } else if self.at(T::Ident) && self.nth(1) == T::Dot {
+                        let qualifier = self.bump();
+                        self.bump();
+                        (
+                            Some(self.expect(T::Ident, "a case name")?),
+                            Some(qualifier),
+                            None,
+                        )
+                    } else if self.at(T::Ident) {
+                        (None, None, Some(self.bump()))
+                    } else {
+                        self.expect(T::Dot, "a case pattern")?;
+                        (Some(self.expect(T::Ident, "a case name")?), None, None)
+                    };
+                let parenthesized = self.eat(T::LParen).is_some();
+                let bindings = if parenthesized {
+                    self.match_payload()?
+                } else {
+                    eitri_base::List::EMPTY
+                };
+                let alternative_next = self.at(T::Pipe);
+                arms.push(crate::ast::MatchArm {
+                    literal,
+                    range_end,
+                    case,
+                    qualifier,
+                    catch_binding,
+                    parenthesized,
+                    bindings,
+                    guard: None,
+                    body: crate::ast::MatchBody::Expr(subject),
+                });
+                if !alternative_next {
+                    break;
+                }
+                self.bump();
+            }
             let guard = if self.eat(T::If).is_some() {
                 Some(self.expr(false)?)
             } else {
@@ -517,17 +537,22 @@ impl Parser<'_> {
             } else {
                 crate::ast::MatchBody::Expr(self.expr(false)?)
             };
-            arms.push(crate::ast::MatchArm {
-                literal,
-                range_end,
-                case,
-                qualifier,
-                catch_binding,
-                parenthesized,
-                bindings,
-                guard,
-                body,
-            });
+            if arms.len() - alternatives_start > 1 {
+                let unsupported = guard.is_some()
+                    || arms[alternatives_start..]
+                        .iter()
+                        .any(|arm| arm.catch_binding.is_some() || arm.parenthesized);
+                if unsupported {
+                    self.unsupported(
+                        self.ast.span(subject),
+                        "guarded or binding match alternatives",
+                    );
+                }
+            }
+            for arm in &mut arms[alternatives_start..] {
+                arm.guard = guard;
+                arm.body = body;
+            }
             if self.eat(T::Comma).is_none() && !self.at_statement_end() {
                 return Err(self.expected("a comma or line break"));
             }

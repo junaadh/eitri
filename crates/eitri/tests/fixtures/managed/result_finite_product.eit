@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+enum Problem { Bad }
+enum Value { Pair(a: bool, b: bool) }
+fn choose(a: bool, b: bool) -> Problem!Value { return Value.Pair(a, b) }
+fn number(a: bool, b: bool) -> i64 {
+    return match choose(a, b) {
+        .Err => -1,
+        .Ok(.Pair(false, _)) => 0,
+        .Ok(.Pair(true, false)) => 1,
+        .Ok(.Pair(true, true)) => 2,
+    }
+}
+test.check(number(false, true) == 0 && number(true, false) == 1 && number(true, true) == 2)

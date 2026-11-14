@@ -13,9 +13,9 @@ or match cases of a present enum. The checker recognizes full
 coverage of one boolean or nested-enum payload field per pattern group, with
 up to 32 such groups per match, and recognizes combinations of up to eight
 finite enum, boolean, and optional payload fields when their product has at
-most 256 combinations. Exhaustiveness combines unguarded literals and
+most 256 combinations, including enum payloads inside results. Exhaustiveness combines unguarded literals and
 ranges for `i8` and `u8`; other integer and character ranges require a catch-all.
-The remaining patterns
+Unguarded alternatives without bindings are supported. The remaining patterns
 below are the language contract for later work.
 
 ## `match`

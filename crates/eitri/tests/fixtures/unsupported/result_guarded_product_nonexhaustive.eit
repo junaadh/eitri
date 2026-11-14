@@ -1,0 +1,4 @@
+enum Problem { Bad }
+enum Value { Pair(a: bool, b: bool) }
+fn choose() -> Problem!Value { return Value.Pair(true, true) }
+let result = match choose() { .Err => 0, .Ok(.Pair(false, _)) => 1, .Ok(.Pair(true, false)) => 2, .Ok(.Pair(true, true)) if false => 3 }

@@ -3886,6 +3886,8 @@ impl<'i> Checker<'_, 'i> {
         let mut null = [false; 2];
         let mut present = [false; 2];
         let mut nested_coverage = [[0u64; 4]; 2];
+        let mut nested_products = [[(usize::MAX, [0u64; 4]); 32]; 2];
+        let mut nested_product_limit = false;
         let mut booleans = [[false; 2]; 2];
         let mut fallback = false;
         let mut null_subject = false;
@@ -3971,6 +3973,45 @@ impl<'i> Checker<'_, 'i> {
                                         children,
                                     )
                                 });
+                                if arm.guard.is_none()
+                                    && let Some(children) = pattern.nested_bindings
+                                    && let Some((mask, count)) =
+                                        self.finite_payload_product(nested, nested_index, children)
+                                {
+                                    let groups = &mut nested_products[index];
+                                    let group = groups
+                                        .iter()
+                                        .position(|(case, _)| *case == nested_index)
+                                        .or_else(|| {
+                                            groups.iter().position(|(case, _)| *case == usize::MAX)
+                                        });
+                                    if let Some(group) = group {
+                                        let (case, bits) = &mut groups[group];
+                                        *case = nested_index;
+                                        for (bits, mask) in bits.iter_mut().zip(mask) {
+                                            *bits |= mask;
+                                        }
+                                        if (0..count).all(|n| bits[n / 64] & (1 << (n % 64)) != 0) {
+                                            nested_coverage[index][nested_index / 64] |=
+                                                1 << (nested_index % 64);
+                                            if cases.len() <= 256
+                                                && (0..cases.len()).all(|tag| {
+                                                    nested_coverage[index][tag / 64]
+                                                        & (1 << (tag % 64))
+                                                        != 0
+                                                })
+                                            {
+                                                if payload.optional_inner().is_some() {
+                                                    present[index] = true;
+                                                } else {
+                                                    covered[index] = true;
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        nested_product_limit = true;
+                                    }
+                                }
                                 if arm.guard.is_none() && irrefutable {
                                     nested_coverage[index][nested_index / 64] |=
                                         1u64 << (nested_index % 64);
@@ -4099,7 +4140,15 @@ impl<'i> Checker<'_, 'i> {
             self.restore(mark);
         }
         if !fallback && (!covered.iter().all(|seen| *seen) || (optional && !null_subject)) {
-            self.report(Code::TypeMismatch, "non-exhaustive match", self.span(expr));
+            if nested_product_limit {
+                self.report(
+                    Code::Limit,
+                    "implementation limit: more than 32 finite pattern groups",
+                    self.span(expr),
+                );
+            } else {
+                self.report(Code::TypeMismatch, "non-exhaustive match", self.span(expr));
+            }
         }
         if used {
             result.unwrap_or(Ty::Error)

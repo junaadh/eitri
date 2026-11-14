@@ -3090,3 +3090,19 @@ harness in the isolated workspace measured fresh module compile p50/p99
 13.6/28.5 µs and source-to-result 13.9/29.0 µs on the general workload. Raw
 output and samples: `/private/tmp/eitri-t017-109-bench.txt` and
 `/private/tmp/eitri-t017-109-samples.csv`.
+
+### T017-110 finite products inside result matches
+
+Result matches track bounded finite products inside nested enum payload cases.
+The 1001-sample release harness in the isolated workspace measured fresh module
+compile p50/p99 14.6/18.1 µs and source-to-result 15.0/19.0 µs on the general
+workload. Raw output and samples: `/private/tmp/eitri-t017-110-bench.txt` and
+`/private/tmp/eitri-t017-110-samples.csv`.
+
+### T017-111 binding-free match alternatives
+
+Unguarded alternatives expand to checked arms while retaining the same body.
+The 1001-sample release harness in the isolated workspace measured fresh module
+compile p50/p99 15.0/20.9 µs and source-to-result 15.4/21.2 µs on the general
+workload. Raw output and samples: `/private/tmp/eitri-t017-111-bench.txt` and
+`/private/tmp/eitri-t017-111-samples.csv`.

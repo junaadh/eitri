@@ -1,0 +1,9 @@
+//! host: test
+import test from "test"
+enum Theme { Light, Dark, Custom }
+fn theme(value: Theme) -> i64 { return match value { .Light | .Dark => 1, .Custom => 2 } }
+fn letter(value: char) -> bool { return match value { 'a'..='z' | 'A'..='Z' => true, _ => false } }
+fn number(value: i64) -> i64 { return match value { 0 | 1 | 2 => 1, _ => 0 } }
+test.check(theme(Theme.Dark) == 1 && theme(Theme.Custom) == 2)
+test.check(letter('z') && letter('A') && !letter('0'))
+test.check(number(2) == 1 && number(3) == 0)
