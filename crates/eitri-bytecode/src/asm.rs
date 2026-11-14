@@ -733,6 +733,7 @@ impl<const RECORD: bool> Assembler<RECORD> {
             strings: Box::default(),
             sites: sites.into_boxed_slice(),
             record_shapes: Box::default(),
+            record_class_count: 0,
             roots,
             literal_types: literal_types.into_boxed_slice(),
             starts: starts.into_boxed_slice(),

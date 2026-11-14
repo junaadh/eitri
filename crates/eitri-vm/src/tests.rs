@@ -71,6 +71,7 @@ fn execute(
                 functions: &signatures,
                 hosts: &hosts,
                 record_shapes: &record_shapes,
+                record_class_count: 0,
             },
         )
         .unwrap_or_else(|e| panic!("{}: {e}", f.name));
@@ -699,6 +700,7 @@ fn limited_call_program(reentry: bool) -> IndexVec<FunctionId, Function> {
                 functions: &signatures,
                 hosts: &[sig(&[], &[])],
                 record_shapes: &[],
+                record_class_count: 0,
             },
         )
         .unwrap();
@@ -817,6 +819,7 @@ fn record_instructions_preserve_identity_and_mutation() {
                 functions: &signatures,
                 hosts: &hosts,
                 record_shapes: &function.record_shapes,
+                record_class_count: 0,
             },
         )
         .unwrap();

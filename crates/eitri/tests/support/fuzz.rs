@@ -178,6 +178,7 @@ pub fn bytecode(
         functions: &signatures,
         hosts,
         record_shapes: &[],
+        record_class_count: 0,
     };
     for function in functions.iter() {
         if eitri_bytecode::verify(function, &callees).is_err() {

@@ -843,6 +843,33 @@ impl<'i> Checker<'_, 'i> {
         }
 
         self.struct_layouts();
+        for (id, decl) in ast.enums.iter_enumerated() {
+            let start = self.out.enum_starts[id] as usize;
+            for (index, case) in ast.enum_cases[decl.cases].iter().enumerate() {
+                if case.indirect {
+                    let shape = ast.structs.len() + start + index;
+                    let fields = self.out.enum_case_types[start + index];
+                    let width: u32 = self.out.param_types[fields]
+                        .iter()
+                        .map(|&ty| match ty {
+                            Ty::Struct(id) => self.out.struct_widths[id],
+                            Ty::Enum(id) => self.out.enum_widths[id],
+                            Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                            Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
+                            ty if ty.tagged_optional_inner().is_some() => 2,
+                            _ => 1,
+                        })
+                        .sum();
+                    if shape > 255 || width > 256 {
+                        self.report(
+                            Code::Limit,
+                            "implementation limit: indirect payload shape exceeds 256",
+                            self.token_span(case.name),
+                        );
+                    }
+                }
+            }
+        }
         for (id, decl) in ast.structs.iter_enumerated() {
             if decl.is_class && self.out.struct_widths[id] > 256 {
                 self.report(
@@ -1131,6 +1158,13 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 };
                 let fields = &self.out.param_types[list];
+                if let Ty::Enum(id) = node
+                    && self.input.ast.enum_cases[self.input.ast.enums[id].cases][case].indirect
+                {
+                    *self.struct_stack.last_mut().unwrap() =
+                        (node, case + 1, 0, width.saturating_add(1));
+                    continue;
+                }
                 if field == fields.len() {
                     if matches!(node, Ty::Enum(_)) {
                         *self.struct_stack.last_mut().unwrap() = (node, case + 1, 0, width);
@@ -3645,6 +3679,22 @@ impl<'i> Checker<'_, 'i> {
             let Expr::Binary { op, rhs, .. } = ast.exprs[node] else {
                 unreachable!()
             };
+            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                && matches!(
+                    lhs_ty,
+                    Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalStruct(_) | Ty::OptionalEnum(_)
+                )
+                && ast
+                    .enums
+                    .iter()
+                    .any(|decl| ast.enum_cases[decl.cases].iter().any(|case| case.indirect))
+            {
+                self.report(
+                    Code::Unsupported,
+                    "not supported yet: aggregate equality in modules with indirect enum payloads",
+                    self.span(node),
+                );
+            }
             let valid = valid_operand(op, lhs_ty);
             if !valid && lhs_ty == Ty::Void && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
                 self.report(

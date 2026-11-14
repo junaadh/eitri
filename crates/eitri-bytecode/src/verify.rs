@@ -30,6 +30,7 @@ pub struct Callees<'a> {
     pub functions: &'a IndexVec<FunctionId, Signature>,
     pub hosts: &'a [Signature],
     pub record_shapes: &'a [Box<[ValueType]>],
+    pub record_class_count: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -878,7 +879,10 @@ fn structure(
     callees: &Callees<'_>,
     memory: &mut Option<eitri_base::MemoryBudget>,
 ) -> Result<Vec<Insn>, VerifyError> {
-    if function.record_shapes.as_ref() != callees.record_shapes {
+    if function.record_class_count != callees.record_class_count
+        || function.record_class_count as usize > function.record_shapes.len()
+        || function.record_shapes.as_ref() != callees.record_shapes
+    {
         return Err(error(
             0,
             ErrorKind::InvalidScalar("inconsistent record shapes"),

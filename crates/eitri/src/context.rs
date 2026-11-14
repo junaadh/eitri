@@ -322,6 +322,7 @@ impl Context {
             functions: &signatures,
             hosts: &hosts,
             record_shapes: &record_shapes,
+            record_class_count: 0,
         };
         // Validate the retained artifact before any rewrites. Unsupported
         // metadata is preserved verbatim instead of silently regenerated.
@@ -749,6 +750,7 @@ impl Context {
             functions: &signatures,
             hosts: &registered,
             record_shapes: &record_shapes,
+            record_class_count: 0,
         };
         let managed = functions.iter().any(|f| {
             let mut pc = 0;
@@ -812,6 +814,11 @@ impl Context {
                 .iter()
                 .next()
                 .map_or(&[], |f| &f.record_shapes),
+            record_class_count: program
+                .functions
+                .iter()
+                .next()
+                .map_or(0, |f| f.record_class_count),
         };
         for f in program.functions.iter() {
             if let Err(error) = eitri_bytecode::verify(f, &callees) {
@@ -1175,6 +1182,11 @@ fn verify(
             .iter()
             .next()
             .map_or(&[], |f| &f.record_shapes),
+        record_class_count: program
+            .functions
+            .iter()
+            .next()
+            .map_or(0, |f| f.record_class_count),
     };
     for f in program.functions.iter() {
         if let Err(error) = eitri_bytecode::verify_budgeted(f, &callees, memory) {
@@ -1286,6 +1298,7 @@ mod root_optimizer_tests {
             functions: &signatures,
             hosts: &hosts,
             record_shapes: &[],
+            record_class_count: 0,
         };
         let function = &mut compiled.program.functions.as_mut_slice()[0];
         assert!(eitri_bytecode::verify(function, &callees).is_ok());

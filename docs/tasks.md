@@ -804,6 +804,9 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
+- T017-55: indirect enum payloads allocate traced records, supporting recursive
+  construction and matching under forced collection. Aggregate equality in
+  modules containing indirect cases remains unsupported.
 - T017-54: mutating struct methods operate on class value fields rooted in a
   binding, including bare receiver fields, with forced collection.
 - T017-53: class fields can contain multi-slot aggregates and optionals, with

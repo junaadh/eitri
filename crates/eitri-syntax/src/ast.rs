@@ -265,6 +265,7 @@ pub struct MatchExpr {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EnumCase {
     pub name: TokenId,
+    pub indirect: bool,
     pub fields: List<Param>,
 }
 

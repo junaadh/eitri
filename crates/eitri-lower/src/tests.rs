@@ -67,6 +67,7 @@ fn compile_mode(text: &str, simple: bool) -> Program {
         functions: &signatures,
         hosts: &hosts,
         record_shapes: &[],
+        record_class_count: 0,
     };
     for f in program.functions.iter() {
         verify(f, &callees)
@@ -215,6 +216,7 @@ fn root_builder_diagnostics_and_verification_are_transactional() {
         functions: &signatures,
         hosts: &[],
         record_shapes: &[],
+        record_class_count: 0,
     };
     let function = program
         .functions

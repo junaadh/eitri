@@ -32,6 +32,7 @@ fn optimized(text: &str) -> (String, Report) {
         functions: &signatures,
         hosts: &hosts,
         record_shapes: &[],
+        record_class_count: 0,
     };
     for f in &functions {
         crate::verify(f, &callees).unwrap_or_else(|e| panic!("{}: {e}", f.name));

@@ -33,6 +33,11 @@ bindings execute on both interpreters. Structs and enums can contain each other,
 with inline cycles rejected. Richer patterns remain future work. The rest of
 this chapter is the language contract for those features.
 
+Indirect enum cases and whole-enum `@indirect` declarations can construct and
+match recursive payloads. Each indirect payload allocates a traced record.
+Aggregate equality is currently rejected in modules containing indirect cases;
+indirect payload layouts are limited to 256 slots and shape IDs to 255.
+
 ## Declaration identity across contexts
 
 A named declaration's stable key is **(module path, declaration name)**.

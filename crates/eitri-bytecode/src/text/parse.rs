@@ -263,6 +263,7 @@ struct Headers<'a> {
     hosts: Vec<(HostDecl, Span)>,
     host_index: FxHashMap<&'a str, u32>,
     record_shapes: Vec<Box<[ValueType]>>,
+    record_class_count: u32,
 }
 
 impl<'a> Parser<'_, 'a> {
@@ -407,10 +408,17 @@ impl<'a> Parser<'_, 'a> {
             hosts: Vec::new(),
             host_index: FxHashMap::default(),
             record_shapes: Vec::new(),
+            record_class_count: 0,
         };
         loop {
             match self.peek().tok {
                 Tok::End => return Ok(headers),
+                Tok::Word("record_classes") => {
+                    self.next();
+                    let (count, span) = self.int()?;
+                    headers.record_class_count = u32::try_from(count)
+                        .map_err(|_| syntax(span, "record class count out of range"))?;
+                }
                 Tok::Word("record_shape") => {
                     self.next();
                     self.punct(b'(')?;
@@ -601,6 +609,7 @@ impl<'a> Body<'_, '_, 'a> {
                 .map_err(|error| mismatch(define.frame.1, format!("cannot assemble: {error:?}")))?;
         function.strings = strings.into_boxed_slice();
         function.record_shapes = self.headers.record_shapes.clone().into_boxed_slice();
+        function.record_class_count = self.headers.record_class_count;
         function.reentry_safe = define.reentry_safe;
         if function.frame_size != define.frame.0 {
             return Err(mismatch(

@@ -461,6 +461,16 @@ impl Parser<'_> {
                 }
                 return Ok(());
             }
+            T::Attribute
+                if self.kind == ModuleKind::Script
+                    && &self.text[self.current_span().range()] == "@indirect"
+                    && self.nth(1) == T::Enum =>
+            {
+                self.bump();
+                self.enum_decl(true)?;
+                *items_seen = true;
+                return Ok(());
+            }
             T::Attribute => {
                 self.unsupported(self.current_span(), "attributes");
                 self.bump();
@@ -490,7 +500,7 @@ impl Parser<'_> {
                 Ok(())
             }
             T::Enum if self.kind == ModuleKind::Script => {
-                self.enum_decl()?;
+                self.enum_decl(false)?;
                 Ok(())
             }
             T::Struct | T::Class | T::Enum | T::Interface | T::Extend | T::Type => {
@@ -695,7 +705,7 @@ impl Parser<'_> {
         result
     }
 
-    fn enum_decl(&mut self) -> Parsed<()> {
+    fn enum_decl(&mut self, all_indirect: bool) -> Parsed<()> {
         let mark = self.enum_cases.len();
         let result = (|| {
             self.bump();
@@ -703,14 +713,25 @@ impl Parser<'_> {
             self.expect(T::LBrace, "`{`")?;
             self.skip_separators();
             while !self.at(T::RBrace) && !self.at(T::Eof) {
+                let indirect = if self.at(T::Attribute)
+                    && &self.text[self.current_span().range()] == "@indirect"
+                {
+                    self.bump();
+                    true
+                } else {
+                    all_indirect
+                };
                 let case = self.expect(T::Ident, "a case name")?;
                 let fields = if self.at(T::LParen) {
                     self.params()?
                 } else {
                     eitri_base::List::EMPTY
                 };
-                self.enum_cases
-                    .push(crate::ast::EnumCase { name: case, fields });
+                self.enum_cases.push(crate::ast::EnumCase {
+                    name: case,
+                    fields,
+                    indirect: indirect && !fields.is_empty(),
+                });
                 if self.eat(T::Comma).is_none() && !self.at_statement_end() {
                     return Err(self.expected("a line break or `,`"));
                 }

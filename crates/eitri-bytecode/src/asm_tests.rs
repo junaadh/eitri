@@ -23,6 +23,7 @@ fn check(f: &Function) -> Result<(), VerifyError> {
             functions: &functions,
             hosts: &hosts,
             record_shapes: &[],
+            record_class_count: 0,
         },
     )
 }
@@ -902,6 +903,7 @@ fn managed_string_roots_are_verified_against_slot_types() {
         functions: &signatures,
         hosts: &[],
         record_shapes: &[],
+        record_class_count: 0,
     };
     f.roots = string_roots(&f, &callees).unwrap();
     verify(&f, &callees).unwrap();
@@ -946,6 +948,7 @@ fn string_join_verifies_every_part_and_roots_the_whole_window() {
         functions: &signatures,
         hosts: &[],
         record_shapes: &[],
+        record_class_count: 0,
     };
     f.roots = string_roots(&f, &callees).unwrap();
     verify(&f, &callees).unwrap();
@@ -975,6 +978,7 @@ fn string_slice_checks_its_full_operand_window() {
         functions: &signatures,
         hosts: &[],
         record_shapes: &[],
+        record_class_count: 0,
     };
     f.roots = string_roots(&f, &callees).unwrap();
     verify(&f, &callees).unwrap();
@@ -1015,6 +1019,7 @@ fn scalar_format_requires_the_exact_operand_type() {
         functions: &signatures,
         hosts: &[],
         record_shapes: &[],
+        record_class_count: 0,
     };
     assert!(matches!(
         string_roots(&f, &callees).unwrap_err().kind,
@@ -1038,6 +1043,7 @@ fn interpolation_plan_checks_types_window_and_roots() {
         functions: &signatures,
         hosts: &[],
         record_shapes: &[],
+        record_class_count: 0,
     };
     f.roots = string_roots(&f, &callees).unwrap();
     verify(&f, &callees).unwrap();
@@ -1080,6 +1086,7 @@ fn record_fields_and_program_shapes_are_verified() {
         functions: &signatures,
         hosts: &[],
         record_shapes: &shapes,
+        record_class_count: 0,
     };
     assert_eq!(
         verify(&function, &callees).unwrap_err().kind,
@@ -1090,6 +1097,7 @@ fn record_fields_and_program_shapes_are_verified() {
         functions: &signatures,
         hosts: &[],
         record_shapes: &incompatible,
+        record_class_count: 0,
     };
     assert_eq!(
         verify(&function, &callees).unwrap_err().kind,

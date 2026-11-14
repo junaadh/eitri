@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+enum List { Empty, @indirect Cons(head: string, tail: List) }
+fn count(list: List) -> i64 { return match list { .Empty => 0, .Cons(_, tail) => 1 + count(tail) } }
+let list = List.Cons("first", List.Cons("second", List.Empty))
+test.check(count(list) == 2)
+test.check(match list { .Empty => false, .Cons(head, _) => head == "first" })

@@ -34,6 +34,7 @@ fn function(op: Op, params: &[V], result: V, c: i64) -> IndexVec<FunctionId, Fun
             functions: &signatures,
             hosts: &[],
             record_shapes: &[],
+            record_class_count: 0,
         },
     )
     .unwrap();

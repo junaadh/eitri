@@ -137,6 +137,7 @@ pub struct Function {
     pub sites: Box<[CallSite]>,
     /// Program-wide record field types indexed by nominal declaration ID.
     pub record_shapes: Box<[Box<[ValueType]>]>,
+    pub record_class_count: u32,
     /// Cold root publication metadata, indexed independently of call sites.
     pub roots: crate::FunctionRoots,
     /// The type each literal load (`LDI`, `LDK`, `LDK_X`) produces, by PC,
@@ -161,6 +162,7 @@ impl Function {
             && self.strings == other.strings
             && self.sites == other.sites
             && self.record_shapes == other.record_shapes
+            && self.record_class_count == other.record_class_count
             && self.literal_types == other.literal_types
             && self.starts == other.starts
             && self.spans == other.spans

@@ -2591,3 +2591,19 @@ execution 250/417 ns, total 10.3/15.0 µs; retained context was 31,047 B.
 This scalar benchmark does not exercise class methods. Samples:
 `/private/tmp/eitri-t017-54-samples.csv`; report:
 `/private/tmp/eitri-t017-54-bench.txt`.
+
+### T017-55 indirect enum payloads
+
+Indirect enum cases allocate traced records, breaking inline recursive layout
+cycles. Construction, recursive calls, nested case patterns and managed fields
+run on both interpreters and lowerers with forced collection. Payload shapes
+are limited to 256 slots and shape IDs to 255. Aggregate equality in a module
+containing indirect cases is conservatively rejected pending structural record
+comparison.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 10.8/26.0 µs,
+execution 291/667 ns, total 11.0/26.6 µs; retained context was 31,047 B.
+This scalar benchmark does not exercise indirect payloads. Samples:
+`/private/tmp/eitri-t017-55-samples.csv`; report:
+`/private/tmp/eitri-t017-55-bench.txt`.

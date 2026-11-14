@@ -33,6 +33,9 @@ pub fn print(
     assert_eq!(functions.len(), bodies.len(), "one body per function");
     let mut out = String::new();
     if let Some(first) = functions.first() {
+        if !first.record_shapes.is_empty() {
+            writeln!(out, "record_classes {}", first.record_class_count).unwrap();
+        }
         for shape in &first.record_shapes {
             let fields = shape
                 .iter()

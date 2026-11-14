@@ -332,10 +332,18 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
             );
         }
     }
-    let has_classes = ast.structs.iter().any(|decl| decl.is_class);
+    let has_classes = ast.structs.iter().any(|decl| decl.is_class)
+        || ast
+            .enums
+            .iter()
+            .any(|decl| ast.enum_cases[decl.cases].iter().any(|case| case.indirect));
     let mut record_shapes = lowerer
         .asm
-        .temporary_vec(if has_classes { ast.structs.len() } else { 0 })
+        .temporary_vec(if has_classes {
+            ast.structs.len() + lowerer.checked.enum_case_types.len()
+        } else {
+            0
+        })
         .map_err(|error| lowering_error(error, input, "<module>", Span::default()))?;
     if has_classes {
         for (id, decl) in ast.structs.iter_enumerated() {
@@ -358,6 +366,25 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
             }
             record_shapes.push(shape.into_boxed_slice());
         }
+        for (id, decl) in ast.enums.iter_enumerated() {
+            let start = lowerer.checked.enum_starts[id] as usize;
+            for (index, case) in ast.enum_cases[decl.cases].iter().enumerate() {
+                let fields = lowerer.checked.enum_case_types[start + index];
+                let mut shape = lowerer
+                    .asm
+                    .temporary_vec(0)
+                    .map_err(|error| lowering_error(error, input, "<module>", Span::default()))?;
+                if case.indirect {
+                    for field in 0..lowerer.checked.param_types[fields].len() {
+                        let ty = lowerer.checked.param_types[fields][field];
+                        lowerer.flatten_type(ty, &mut shape).map_err(|error| {
+                            lowering_error(error, input, "<module>", Span::default())
+                        })?;
+                    }
+                }
+                record_shapes.push(shape.into_boxed_slice());
+            }
+        }
         for function in functions.as_mut_slice() {
             let mut shapes = lowerer
                 .asm
@@ -371,6 +398,7 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
                 shapes.push(fields.into_boxed_slice());
             }
             function.record_shapes = shapes.into_boxed_slice();
+            function.record_class_count = ast.structs.len() as u32;
         }
     }
     if has_classes
@@ -438,6 +466,7 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
             functions: &signatures,
             hosts: &hosts,
             record_shapes: &record_shapes,
+            record_class_count: 0,
         };
         for function in functions.as_mut_slice() {
             let mut pc = 0;
@@ -789,39 +818,53 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         }
         let capacity =
             self.width(ty) as usize + self.input.ast.structs.len() + self.input.ast.enums.len();
+        enum Work {
+            Type(Ty, bool),
+            Record(u32),
+        }
         let mut pending = self.asm.temporary_vec(capacity)?;
-        pending.push((ty, nullable));
-        while let Some((next, nullable)) = pending.pop() {
+        pending.push(Work::Type(ty, nullable));
+        while let Some(work) = pending.pop() {
+            let (next, nullable) = match work {
+                Work::Type(ty, nullable) => (ty, nullable),
+                Work::Record(id) => {
+                    output.push(ValueType::NullableRecord(id));
+                    continue;
+                }
+            };
             match next {
                 Ty::Struct(id) => {
                     let fields = &self.checked.param_types[self.checked.struct_fields[id]];
                     if fields.is_empty() {
                         output.push(ValueType::I64);
                     } else {
-                        pending.extend(fields.iter().rev().map(|&ty| (ty, nullable)));
+                        pending.extend(fields.iter().rev().map(|&ty| Work::Type(ty, nullable)));
                     }
                 }
                 Ty::Enum(id) => {
                     output.push(ValueType::I64);
                     let start = self.checked.enum_starts[id] as usize;
                     let count = self.input.ast.enum_cases[self.input.ast.enums[id].cases].len();
-                    for &list in self.checked.enum_case_types[start..start + count]
-                        .iter()
-                        .rev()
-                    {
-                        pending.extend(
-                            self.checked.param_types[list]
-                                .iter()
-                                .rev()
-                                .map(|&ty| (ty, true)),
-                        );
+                    for index in (0..count).rev() {
+                        let case = self.input.ast.enum_cases[self.input.ast.enums[id].cases][index];
+                        if case.indirect {
+                            pending.push(Work::Record(self.indirect_shape(id, index)));
+                        } else {
+                            let list = self.checked.enum_case_types[start + index];
+                            pending.extend(
+                                self.checked.param_types[list]
+                                    .iter()
+                                    .rev()
+                                    .map(|&ty| Work::Type(ty, true)),
+                            );
+                        }
                     }
                 }
                 Ty::String if nullable => output.push(ValueType::NullableString),
                 Ty::Class(id) if nullable => output.push(ValueType::NullableRecord(id.as_u32())),
                 ty if ty.tagged_optional_inner().is_some() => {
                     output.push(ValueType::Bool);
-                    pending.push((ty.tagged_optional_inner().unwrap(), true));
+                    pending.push(Work::Type(ty.tagged_optional_inner().unwrap(), true));
                 }
                 _ => output.push(value_type(next)),
             }
@@ -829,15 +872,24 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         Ok(())
     }
 
+    fn indirect_shape(&self, id: eitri_syntax::ast::EnumId, case: usize) -> u32 {
+        self.input.ast.structs.len() as u32 + self.checked.enum_starts[id] + case as u32
+    }
+
     fn enum_case_offset(&self, id: eitri_syntax::ast::EnumId, case: usize) -> u32 {
         let start = self.checked.enum_starts[id] as usize;
-        1 + self.checked.enum_case_types[start..start + case]
-            .iter()
-            .map(|&list| {
-                self.checked.param_types[list]
-                    .iter()
-                    .map(|&ty| self.width(ty))
-                    .sum::<u32>()
+        let cases = &self.input.ast.enum_cases[self.input.ast.enums[id].cases];
+        1 + (0..case)
+            .map(|index| {
+                if cases[index].indirect {
+                    1
+                } else {
+                    let list = self.checked.enum_case_types[start + index];
+                    self.checked.param_types[list]
+                        .iter()
+                        .map(|&ty| self.width(ty))
+                        .sum::<u32>()
+                }
             })
             .sum::<u32>()
     }
@@ -1667,6 +1719,72 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 } else {
                     self.asm.load(slot + offset as u32, 0, ty, span)?;
                 }
+            }
+            if cases[case as usize].indirect {
+                let fields = ast.params(cases[case as usize].fields);
+                let types =
+                    checked.enum_case_types[checked.enum_starts[id] as usize + case as usize];
+                let payload_width: u32 = checked.param_types[types]
+                    .iter()
+                    .map(|&ty| self.width(ty))
+                    .sum();
+                let first = self.top;
+                self.top += payload_width.max(1);
+                let temporary = self.top;
+                if let Expr::NamedCall { args, .. } = ast.exprs[e] {
+                    for (position, arg) in ast.field_inits[args].iter().enumerate() {
+                        let index = if self.input.tokens.kind(arg.name)
+                            == eitri_syntax::TokenKind::LParen
+                        {
+                            position
+                        } else {
+                            fields
+                                .iter()
+                                .position(|field| {
+                                    self.input.tokens.symbol(field.name)
+                                        == self.input.tokens.symbol(arg.name)
+                                })
+                                .expect("checked field")
+                        };
+                        let offset: u32 = checked.param_types[types][..index]
+                            .iter()
+                            .map(|&ty| self.width(ty))
+                            .sum();
+                        self.expr(arg.value, Some(first + offset))?;
+                        self.top = temporary;
+                    }
+                }
+                if let Expr::Call { args, .. } = ast.exprs[e] {
+                    for (index, &arg) in ast.args(args).iter().enumerate() {
+                        let offset: u32 = checked.param_types[types][..index]
+                            .iter()
+                            .map(|&ty| self.width(ty))
+                            .sum();
+                        self.expr(arg, Some(first + offset))?;
+                        self.top = temporary;
+                    }
+                }
+                let record = self.temp();
+                self.asm.emit(
+                    Op::RecordNew,
+                    Operands::abc(
+                        record.into(),
+                        first.into(),
+                        self.indirect_shape(id, case as usize).into(),
+                    ),
+                    span,
+                )?;
+                self.asm.emit(
+                    Op::RecordWrap,
+                    Operands::abc(
+                        (slot + self.enum_case_offset(id, case as usize)).into(),
+                        record.into(),
+                        0,
+                    ),
+                    span,
+                )?;
+                self.top = end;
+                return Ok(slot);
             }
             if let Expr::NamedCall { args, .. } = ast.exprs[e] {
                 let fields = ast.params(cases[case as usize].fields);
@@ -3329,6 +3447,34 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let types =
             self.checked.enum_case_types[self.checked.enum_starts[enum_id] as usize + index];
         let fields = ast.params(cases[index].fields);
+        let payload = if cases[index].indirect {
+            let record = self.temp();
+            self.asm.emit(
+                Op::RecordUnwrap,
+                Operands::abc(
+                    record.into(),
+                    (subject + self.enum_case_offset(enum_id, index)).into(),
+                    0,
+                ),
+                span,
+            )?;
+            let width: u32 = self.checked.param_types[types]
+                .iter()
+                .map(|&ty| self.width(ty))
+                .sum();
+            let first = self.top;
+            self.top += width;
+            for offset in 0..width {
+                self.asm.emit(
+                    Op::RecordGet,
+                    Operands::abc((first + offset).into(), record.into(), offset.into()),
+                    span,
+                )?;
+            }
+            Some(first)
+        } else {
+            None
+        };
         for (position, pattern) in ast.match_bindings[bindings].iter().enumerate() {
             let offset = pattern.label.map_or(position, |label| {
                 fields
@@ -3353,7 +3499,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     .expect("checked nested case");
                 let constant = self.temp();
                 self.asm.load(constant, tag as u64, ValueType::I64, span)?;
-                let source = subject + self.enum_field_offset(enum_id, index, offset);
+                let source = payload.map_or_else(
+                    || subject + self.enum_field_offset(enum_id, index, offset),
+                    |first| {
+                        first
+                            + self.checked.param_types[types][..offset]
+                                .iter()
+                                .map(|&ty| self.width(ty))
+                                .sum::<u32>()
+                    },
+                );
                 let source = self.match_present(source, payload_ty, next, span)?;
                 self.asm.branch_if(Cond::Ne, source, constant, next, span)?;
                 if let Some(children) = pattern.nested_bindings {
@@ -3361,7 +3516,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             } else if let Some(literal) = pattern.literal {
                 let ty = self.checked.param_types[types][offset];
-                let source = subject + self.enum_field_offset(enum_id, index, offset);
+                let source = payload.map_or_else(
+                    || subject + self.enum_field_offset(enum_id, index, offset),
+                    |first| {
+                        first
+                            + self.checked.param_types[types][..offset]
+                                .iter()
+                                .map(|&ty| self.width(ty))
+                                .sum::<u32>()
+                    },
+                );
                 if matches!(ast.exprs[literal], Expr::Null(_)) {
                     if let Ty::OptionalClass(id) = ty {
                         let null = self.temp();
@@ -3395,7 +3559,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
                 let source = self.match_present(source, ty, next, span)?;
                 let inner = ty.optional_inner().unwrap_or(ty);
-                let source = if ty == Ty::String {
+                let source = if ty == Ty::String && payload.is_none() {
                     let slot = self.temp();
                     self.move_nullable(ty, source, slot, false, span)?;
                     slot
@@ -3431,7 +3595,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
                 let ty = self.checked.param_types[types][offset];
-                let source = subject + self.enum_field_offset(enum_id, index, offset);
+                let source = payload.map_or_else(
+                    || subject + self.enum_field_offset(enum_id, index, offset),
+                    |first| {
+                        first
+                            + self.checked.param_types[types][..offset]
+                                .iter()
+                                .map(|&ty| self.width(ty))
+                                .sum::<u32>()
+                    },
+                );
                 let source = self.match_present(source, ty, next, span)?;
                 let target = self.top;
                 let narrowed = self.checked.bindings[binding].ty;
@@ -3445,8 +3618,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             span,
                         )?;
                     }
-                } else {
+                } else if payload.is_none() {
                     self.move_nullable(ty, source, target, false, span)?;
+                } else {
+                    for part in 0..self.width(ty) {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc((target + part).into(), (source + part).into(), 0),
+                            span,
+                        )?;
+                    }
                 }
             }
         }
