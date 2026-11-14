@@ -1465,7 +1465,12 @@ impl Eval<'_> {
     ) -> Flow<Value> {
         let ast = self.ast;
         let node = ast.matches[id];
+        let mut skip_alternatives = false;
         for &arm in &ast.match_arms[node.arms] {
+            if skip_alternatives {
+                skip_alternatives = arm.alternative_next;
+                continue;
+            }
             if arm.literal.is_some() {
                 continue;
             }
@@ -1541,6 +1546,7 @@ impl Eval<'_> {
             if let Some(guard) = arm.guard
                 && !self.expr(host, guard)?.bool()
             {
+                skip_alternatives = arm.alternative_next;
                 continue;
             }
             return match arm.body {
@@ -2370,7 +2376,12 @@ impl Eval<'_> {
                     }
                     Value::OptionalEnum(_, None) | Value::OptionalResult(_, None) => {
                         let ast = self.ast;
+                        let mut skip_alternatives = false;
                         for &arm in &ast.match_arms[node.arms] {
+                            if skip_alternatives {
+                                skip_alternatives = arm.alternative_next;
+                                continue;
+                            }
                             let matches = arm
                                 .literal
                                 .is_some_and(|e| matches!(ast.exprs[e], Expr::Null(_)))
@@ -2383,6 +2394,7 @@ impl Eval<'_> {
                             if let Some(guard) = arm.guard
                                 && !self.expr(host, guard)?.bool()
                             {
+                                skip_alternatives = arm.alternative_next;
                                 continue;
                             }
                             return match arm.body {
@@ -2401,7 +2413,12 @@ impl Eval<'_> {
                 }
                 let Value::Enum(enum_id, case, payload) = subject else {
                     let ast = self.ast;
+                    let mut skip_alternatives = false;
                     for &arm in &ast.match_arms[node.arms] {
+                        if skip_alternatives {
+                            skip_alternatives = arm.alternative_next;
+                            continue;
+                        }
                         let present = match subject {
                             Value::OptionalFixed(_, Some(value)) => {
                                 Some(self.structs[value as usize][0])
@@ -2488,6 +2505,7 @@ impl Eval<'_> {
                         if let Some(guard) = arm.guard
                             && !self.expr(host, guard)?.bool()
                         {
+                            skip_alternatives = arm.alternative_next;
                             continue;
                         }
                         return match arm.body {
@@ -2500,7 +2518,12 @@ impl Eval<'_> {
                 let cases = &self.ast.enum_cases[self.ast.enums[enum_id].cases];
                 let name = self.tokens.symbol(cases[case as usize].name);
                 let ast = self.ast;
+                let mut skip_alternatives = false;
                 for &arm in &ast.match_arms[node.arms] {
+                    if skip_alternatives {
+                        skip_alternatives = arm.alternative_next;
+                        continue;
+                    }
                     if arm.literal.is_some() {
                         continue;
                     }
@@ -2521,6 +2544,7 @@ impl Eval<'_> {
                     if let Some(guard) = arm.guard
                         && !self.expr(host, guard)?.bool()
                     {
+                        skip_alternatives = arm.alternative_next;
                         continue;
                     }
                     return match arm.body {

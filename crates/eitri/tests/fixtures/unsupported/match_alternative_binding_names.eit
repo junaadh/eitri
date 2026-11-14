@@ -1,0 +1,2 @@
+enum Value { A(x: i64), B(x: i64) }
+let value = match Value.A(1) { .A(x) | .B(y) => 1 }

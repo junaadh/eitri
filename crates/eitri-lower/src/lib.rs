@@ -5042,12 +5042,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         self.expr(node.subject, Some(subject))?;
         let end = self.asm.label();
         let all = &ast.match_arms[node.arms];
-        let arms = if all.last().is_some_and(|arm| arm.guard.is_some()) {
-            &all[..all.len() - 1]
-        } else {
-            all
-        };
+        let arms = &all[..all
+            .iter()
+            .rposition(|arm| arm.guard.is_none())
+            .map_or(0, |i| i + 1)];
+        let mut alternative_end = None;
         for (index, arm) in arms.iter().enumerate() {
+            if arm.alternative_next && alternative_end.is_none() {
+                alternative_end = Some(self.asm.label());
+            }
             let mark = self.top;
             let next = self.asm.label();
             if let Some(literal) = arm.literal {
@@ -5145,7 +5148,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             if let Some(guard) = arm.guard {
-                self.branch(guard, false, next)?;
+                self.branch(guard, false, alternative_end.unwrap_or(next))?;
             }
             match arm.body {
                 eitri_syntax::ast::MatchBody::Expr(body) => {
@@ -5178,6 +5181,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             {
                 self.asm.jump(next, span);
             }
+            if !arm.alternative_next
+                && let Some(label) = alternative_end.take()
+            {
+                self.asm.bind(label)?;
+            }
             self.top = mark;
         }
         self.asm.bind(end)?;
@@ -5204,13 +5212,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         self.expr(node.subject, Some(subject))?;
         let end = self.asm.label();
         let arms = &ast.match_arms[node.arms];
-        let arms = if arms.last().is_some_and(|arm| arm.guard.is_some()) {
-            &arms[..arms.len() - 1]
-        } else {
-            arms
-        };
+        let arms = &arms[..arms
+            .iter()
+            .rposition(|arm| arm.guard.is_none())
+            .map_or(0, |i| i + 1)];
         let (error, success) = self.checked.result_types[result_id as usize];
+        let mut alternative_end = None;
         for (index, arm) in arms.iter().enumerate() {
+            if arm.alternative_next && alternative_end.is_none() {
+                alternative_end = Some(self.asm.label());
+            }
             let mark = self.top;
             let next = self.asm.label();
             if arm.literal.is_some() {
@@ -5357,7 +5368,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             if let Some(guard) = arm.guard {
-                self.branch(guard, false, next)?;
+                self.branch(guard, false, alternative_end.unwrap_or(next))?;
             }
             match arm.body {
                 eitri_syntax::ast::MatchBody::Expr(body) => {
@@ -5405,6 +5416,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             self.asm.bind(next)?;
             if index + 1 == arms.len() && partial {
                 self.asm.jump(next, span);
+            }
+            if !arm.alternative_next
+                && let Some(label) = alternative_end.take()
+            {
+                self.asm.bind(label)?;
             }
             self.top = mark;
         }
@@ -5459,12 +5475,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let all_arms = &ast.match_arms[node.arms];
         // A final guarded arm is unreachable: preceding unguarded arms must
         // already be exhaustive because guards never contribute coverage.
-        let arms = if all_arms.last().is_some_and(|arm| arm.guard.is_some()) {
-            &all_arms[..all_arms.len() - 1]
-        } else {
-            all_arms
-        };
+        let arms = &all_arms[..all_arms
+            .iter()
+            .rposition(|arm| arm.guard.is_none())
+            .map_or(0, |i| i + 1)];
+        let mut alternative_end = None;
         for (arm_index, arm) in arms.iter().enumerate() {
+            if arm.alternative_next && alternative_end.is_none() {
+                alternative_end = Some(self.asm.label());
+            }
             let next = self.asm.label();
             let mark = self.top;
             if arm.literal.is_some() {
@@ -5508,7 +5527,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             if let Some(guard) = arm.guard {
-                self.branch(guard, false, next)?;
+                self.branch(guard, false, alternative_end.unwrap_or(next))?;
             }
             match arm.body {
                 eitri_syntax::ast::MatchBody::Expr(body) => {
@@ -5551,6 +5570,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 // Exhaustiveness makes this edge unreachable for a valid enum.
                 // Keep a real target for the verifier even when all arms return.
                 self.asm.jump(next, span);
+            }
+            if !arm.alternative_next
+                && let Some(label) = alternative_end.take()
+            {
+                self.asm.bind(label)?;
             }
             self.top = mark;
         }

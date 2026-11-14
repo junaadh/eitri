@@ -15,7 +15,7 @@ up to 32 such groups per match, and recognizes combinations of up to eight
 finite enum, boolean, and optional payload fields when their product has at
 most 256 combinations, including enum payloads inside results. Exhaustiveness combines unguarded literals and
 ranges for `i8` and `u8`; other integer and character ranges require a catch-all.
-Unguarded alternatives without bindings are supported. The remaining patterns
+Alternatives support shared guards and matching bindings. The remaining patterns
 below are the language contract for later work.
 
 ## `match`

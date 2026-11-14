@@ -1,0 +1,2 @@
+enum Value { Number(x: i64), Flag(x: bool) }
+let value = match Value.Number(1) { .Number(x) | .Flag(x) => 1 }

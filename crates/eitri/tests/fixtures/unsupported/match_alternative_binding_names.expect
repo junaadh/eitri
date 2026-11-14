@@ -1,0 +1,1 @@
+error[E0301] 78..79: match alternatives must bind the same names and types

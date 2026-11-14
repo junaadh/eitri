@@ -808,8 +808,12 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   fixed-array sizes beyond 256, and remaining pattern and default behavior.
   Aggregate host signatures remain unsupported. T017 stays open until its
   completion criteria are verified.
+- T017-113: match alternatives can bind the same names with the same types,
+  including nested payloads and shared guards; mismatches reject.
+- T017-112: guarded match alternatives evaluate the guard once after the
+  first matching alternative and skip the remaining alternatives on failure.
 - T017-111: unguarded, binding-free match alternatives support literal, range
-  and enum-case patterns; guarded and binding alternatives remain.
+  and enum-case patterns; guarded alternatives followed in T017-112.
 - T017-110: result match exhaustiveness recognizes bounded finite products
   inside nested enum payloads, with guarded cases remaining non-covering.
 - T017-109: enum match coverage combines finite enum, boolean and optional

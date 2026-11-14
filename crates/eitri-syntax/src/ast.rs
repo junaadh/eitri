@@ -313,6 +313,8 @@ pub struct MatchBinding {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MatchArm {
+    /// The next arm is another alternative of this source arm.
+    pub alternative_next: bool,
     pub literal: Option<ExprId>,
     pub range_end: Option<(ExprId, bool)>,
     pub case: Option<TokenId>,

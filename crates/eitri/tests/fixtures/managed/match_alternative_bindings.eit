@@ -1,0 +1,13 @@
+//! host: test
+import test from "test"
+enum Message { Text(value: string), Other(value: string), Empty }
+fn get(value: Message) -> string {
+    return match value { .Text(text) | .Other(text) => text, .Empty => "none" }
+}
+test.check(get(Message.Text("a")) == "a" && get(Message.Other("b")) == "b")
+fn probe(text: string) -> bool { test.emit(1); return text == "yes" }
+let value = match Message.Other("no") { .Text(text) | .Other(text) if probe(text) => text, _ => "fallback" }
+test.check(value == "fallback")
+enum Wrapper { A(inner: Message), B(inner: Message) }
+let nested = match Wrapper.B(Message.Text("nested")) { .A(.Text(text)) | .B(.Text(text)) => text, _ => "none" }
+test.check(nested == "nested")

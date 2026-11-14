@@ -3106,3 +3106,20 @@ The 1001-sample release harness in the isolated workspace measured fresh module
 compile p50/p99 15.0/20.9 µs and source-to-result 15.4/21.2 µs on the general
 workload. Raw output and samples: `/private/tmp/eitri-t017-111-bench.txt` and
 `/private/tmp/eitri-t017-111-samples.csv`.
+
+### T017-112 guarded match alternatives
+
+A guard runs once after the first matching alternative; a false result skips
+all remaining alternatives of the same source arm. The 1001-sample release
+harness in the isolated workspace measured fresh module compile p50/p99
+17.0/21.7 µs and source-to-result 17.5/22.2 µs on the general workload. Raw
+output and samples: `/private/tmp/eitri-t017-112-bench.txt` and
+`/private/tmp/eitri-t017-112-samples.csv`.
+
+### T017-113 bindings across match alternatives
+
+Alternative bindings are unified by name and type, with up to 256 names per
+arm. The 1001-sample release harness in the isolated workspace measured fresh
+module compile p50/p99 15.8/44.2 µs and source-to-result 16.1/45.3 µs on the
+general workload. Raw output and samples: `/private/tmp/eitri-t017-113-bench.txt`
+and `/private/tmp/eitri-t017-113-samples.csv`.

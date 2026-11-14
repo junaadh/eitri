@@ -3664,6 +3664,111 @@ impl<'i> Checker<'_, 'i> {
         Some((covered, combinations))
     }
 
+    /// Validate and unify bindings of alternatives before checking the shared
+    /// guard and body. Up to 256 bindings per arm are compared by name.
+    fn alternative_bindings(
+        &mut self,
+        arm: eitri_syntax::ast::MatchArm,
+        canonical: &mut Option<Vec<(Symbol, BindingId)>>,
+        span: Span,
+    ) {
+        fn collect(
+            ast: &Ast,
+            list: List<eitri_syntax::ast::MatchBinding>,
+            names: &mut Vec<TokenId>,
+        ) {
+            for pattern in &ast.match_bindings[list] {
+                if pattern.literal.is_none() && pattern.nested_case.is_none() {
+                    names.push(pattern.name);
+                }
+                if let Some(children) = pattern.nested_bindings {
+                    collect(ast, children, names);
+                }
+            }
+        }
+        if canonical.is_none() && !arm.alternative_next {
+            return;
+        }
+        let mut names = Vec::new();
+        if let Some(name) = arm.catch_binding {
+            names.push(name);
+        }
+        collect(self.ast(), arm.bindings, &mut names);
+        names.retain(|&name| self.input.tokens.kind(name) != eitri_syntax::TokenKind::Wildcard);
+        if names.len() > 256 {
+            self.report(
+                Code::Limit,
+                "implementation limit: more than 256 alternative bindings",
+                span,
+            );
+            names.truncate(256);
+        }
+        if let Some(expected) = canonical.as_ref() {
+            for (index, &name) in names.iter().enumerate() {
+                if names[..index]
+                    .iter()
+                    .any(|&prior| self.symbol(prior) == self.symbol(name))
+                {
+                    self.report(
+                        Code::DuplicateName,
+                        "duplicate match alternative binding",
+                        self.token_span(name),
+                    );
+                }
+            }
+            if names.len() != expected.len() {
+                self.report(
+                    Code::TypeMismatch,
+                    "match alternatives must bind the same names and types",
+                    span,
+                );
+            }
+            for &name in &names {
+                let symbol = self.symbol(name);
+                let actual = self.out.pattern_bindings[name];
+                if let (Some(actual), Some((_, binding))) =
+                    (actual, expected.iter().find(|(key, _)| *key == symbol))
+                {
+                    if self.out.bindings[actual].ty != self.out.bindings[*binding].ty {
+                        self.report(
+                            Code::TypeMismatch,
+                            "match alternatives must bind the same names and types",
+                            self.token_span(name),
+                        );
+                    }
+                    self.out.pattern_bindings[name] = Some(*binding);
+                    self.declare(symbol, Name::Binding(*binding));
+                } else {
+                    self.report(
+                        Code::TypeMismatch,
+                        "match alternatives must bind the same names and types",
+                        self.token_span(name),
+                    );
+                }
+            }
+        } else {
+            let mut bindings = Vec::new();
+            for name in names {
+                if let Some(binding) = self.out.pattern_bindings[name] {
+                    let symbol = self.symbol(name);
+                    if bindings.iter().any(|(key, _)| *key == symbol) {
+                        self.report(
+                            Code::DuplicateName,
+                            "duplicate match alternative binding",
+                            self.token_span(name),
+                        );
+                    } else {
+                        bindings.push((symbol, binding));
+                    }
+                }
+            }
+            *canonical = Some(bindings);
+        }
+        if !arm.alternative_next {
+            *canonical = None;
+        }
+    }
+
     fn match_expr(
         &mut self,
         expr: ExprId,
@@ -3715,6 +3820,7 @@ impl<'i> Checker<'_, 'i> {
         let mut fallback = false;
         let mut null_covered = false;
         let mut result = expected;
+        let mut alternatives = None;
         for arm in &self.ast().match_arms[node.arms] {
             let mark = self.mark();
             if let Some(literal) = arm.literal {
@@ -3824,6 +3930,7 @@ impl<'i> Checker<'_, 'i> {
                     }
                 }
             }
+            self.alternative_bindings(*arm, &mut alternatives, self.span(expr));
             if let Some(guard) = arm.guard {
                 self.value(guard, Some(Ty::Bool));
             }
@@ -3892,6 +3999,7 @@ impl<'i> Checker<'_, 'i> {
         let mut fallback = false;
         let mut null_subject = false;
         let mut result = expected;
+        let mut alternatives = None;
         for arm in &self.ast().match_arms[node.arms] {
             let mark = self.mark();
             if let Some(literal) = arm.literal {
@@ -4113,6 +4221,7 @@ impl<'i> Checker<'_, 'i> {
                     }
                 }
             }
+            self.alternative_bindings(*arm, &mut alternatives, self.span(expr));
             if let Some(guard) = arm.guard {
                 self.value(guard, Some(Ty::Bool));
             }
@@ -4182,6 +4291,7 @@ impl<'i> Checker<'_, 'i> {
         // Bounded work: at most 256 bit updates per pattern and four words of storage.
         let mut narrow_coverage = [0u64; 4];
         let mut result = expected;
+        let mut alternatives = None;
         for arm in &self.ast().match_arms[node.arms] {
             let mark = self.mark();
             if let Some(literal) = arm.literal {
@@ -4269,6 +4379,7 @@ impl<'i> Checker<'_, 'i> {
                     }
                 }
             }
+            self.alternative_bindings(*arm, &mut alternatives, self.span(expr));
             if let Some(guard) = arm.guard {
                 self.value(guard, Some(Ty::Bool));
             }

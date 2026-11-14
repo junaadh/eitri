@@ -699,6 +699,7 @@ impl Parser<'_> {
                     };
                     let alternative_next = self.at(T::Pipe);
                     self.match_arms.push(crate::ast::MatchArm {
+                        alternative_next,
                         literal,
                         range_end,
                         case,
@@ -725,18 +726,6 @@ impl Parser<'_> {
                 } else {
                     crate::ast::MatchBody::Expr(self.expr(false)?)
                 };
-                if self.match_arms.len() - alternatives_start > 1 {
-                    let unsupported = guard.is_some()
-                        || self.match_arms[alternatives_start..]
-                            .iter()
-                            .any(|arm| arm.catch_binding.is_some() || arm.parenthesized);
-                    if unsupported {
-                        self.unsupported(
-                            self.ast.span(subject),
-                            "guarded or binding match alternatives",
-                        );
-                    }
-                }
                 for arm in &mut self.match_arms[alternatives_start..] {
                     arm.guard = guard;
                     arm.body = body;

@@ -1,0 +1,1 @@
+error[E0301] 100..101: match alternatives must bind the same names and types

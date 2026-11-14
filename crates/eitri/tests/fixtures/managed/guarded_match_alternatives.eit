@@ -1,0 +1,15 @@
+//! host: test
+import test from "test"
+fn probe() -> bool { test.emit(1); return false }
+let value = match 2 { 1..=3 | 2 if probe() => 1, _ => 2 }
+test.check(value == 2)
+enum Choice { A, B }
+let value = match Choice.A { .A | .A if probe() => 1, .A => 2, .B => 3 }
+test.check(value == 2)
+enum Problem { Bad }
+fn choose() -> Problem!i64 { return 3 }
+let value = match choose() { .Ok | .Ok if probe() => 1, .Ok => 2, .Err => 3 }
+test.check(value == 2)
+enum Tagged { One(x: i64), Two(x: i64) }
+let value = match Tagged.One(4) { .One(_) | .Two(_) if probe() => 1, .One(_) => 2, .Two(_) => 3 }
+test.check(value == 2)
