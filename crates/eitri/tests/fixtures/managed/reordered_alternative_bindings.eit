@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+enum Value { A(x: i64, y: string), B(y: string, x: i64) }
+fn inspect(value: Value) -> bool {
+    return match value { .A(x, y) | .B(y, x) => x == 5 && y == "kept" }
+}
+test.check(inspect(Value.A(5, "kept")) && inspect(Value.B("kept", 5)))

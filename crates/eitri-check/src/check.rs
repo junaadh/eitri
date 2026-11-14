@@ -681,6 +681,10 @@ impl<'i> Checker<'_, 'i> {
                 };
                 return Ty::Result(index as u32);
             }
+            TypeExpr::OptionalResultOptionalFixed(error, size, element) => {
+                let inner = self.ty(TypeExpr::ResultOptionalFixed(error, size, element), false);
+                return inner.optional_of().unwrap_or(Ty::Error);
+            }
             TypeExpr::OptionalResultNamed(error, success)
             | TypeExpr::OptionalResultOptional(error, success) => {
                 let inner = self.ty(

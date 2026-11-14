@@ -291,6 +291,15 @@ impl Dumper<'_> {
                     self.token(element)
                 ),
             ),
+            TypeExpr::OptionalResultOptionalFixed(error, size, element) => self.paint(
+                TYPE,
+                &format!(
+                    "'?<{}!?[{}]{}>'",
+                    self.token(error),
+                    self.token(size),
+                    self.token(element)
+                ),
+            ),
             TypeExpr::OptionalResultOptional(error, success) => self.paint(
                 TYPE,
                 &format!("'?<{}!?{}>'", self.token(error), self.token(success)),
@@ -437,6 +446,7 @@ impl Dumper<'_> {
                     | TypeExpr::ResultNestedFixed(_, _, token)
                     | TypeExpr::ResultOptionalFixed(_, _, token)
                     | TypeExpr::OptionalResultOptional(_, token)
+                    | TypeExpr::OptionalResultOptionalFixed(_, _, token)
                     | TypeExpr::OptionalResultNamed(_, token)
                     | TypeExpr::ResultOptional(_, token)
                     | TypeExpr::ResultNamed(_, token)

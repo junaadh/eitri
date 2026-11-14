@@ -1009,6 +1009,27 @@ impl Parser<'_> {
             && self.nth(1) == T::Lt
             && self.nth(2) == T::Ident
             && self.nth(3) == T::Bang
+            && self.nth(4) == T::QuestionBracket
+            && self.nth(5) == T::Int
+            && self.nth(6) == T::RBracket
+            && self.nth(7) == T::Ident
+            && self.nth(8) == T::Gt
+        {
+            self.bump();
+            self.bump();
+            let error = self.bump();
+            self.bump();
+            self.bump();
+            let size = self.bump();
+            self.bump();
+            let element = self.bump();
+            self.bump();
+            return Ok(TypeExpr::OptionalResultOptionalFixed(error, size, element));
+        }
+        if self.at(T::Question)
+            && self.nth(1) == T::Lt
+            && self.nth(2) == T::Ident
+            && self.nth(3) == T::Bang
             && self.nth(4) == T::Question
             && self.nth(5) == T::Ident
             && self.nth(6) == T::Gt

@@ -192,6 +192,7 @@ pub enum TypeExpr {
     ResultNestedFixed(TokenId, TokenId, TokenId),
     OptionalResultNamed(TokenId, TokenId),
     OptionalResultOptional(TokenId, TokenId),
+    OptionalResultOptionalFixed(TokenId, TokenId, TokenId),
     OptionalString(TokenId),
     OptionalI64(TokenId),
     OptionalBool(TokenId),

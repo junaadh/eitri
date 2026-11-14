@@ -134,6 +134,12 @@ impl Printer<'_> {
                 self.token(size),
                 self.token(element)
             ),
+            TypeExpr::OptionalResultOptionalFixed(error, size, element) => format!(
+                "?<{}!?[{}]{}>",
+                self.token(error),
+                self.token(size),
+                self.token(element)
+            ),
             TypeExpr::OptionalResultOptional(error, success) => {
                 format!("?<{}!?{}>", self.token(error), self.token(success))
             }

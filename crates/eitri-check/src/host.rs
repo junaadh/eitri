@@ -249,7 +249,8 @@ fn value_type(
     | TypeExpr::ResultNamed(token, _)
     | TypeExpr::ResultOptional(token, _)
     | TypeExpr::OptionalResultNamed(token, _)
-    | TypeExpr::OptionalResultOptional(token, _) = ty
+    | TypeExpr::OptionalResultOptional(token, _)
+    | TypeExpr::OptionalResultOptionalFixed(token, _, _) = ty
     {
         diagnostics.push(error(
             Code::Unsupported,

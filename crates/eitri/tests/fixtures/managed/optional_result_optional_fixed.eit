@@ -1,0 +1,18 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+fn choose(mode: i64) -> Problem!?[2]string {
+    if mode == 0 { return null }
+    if mode == 1 { return ["a", "b"] }
+    return .Err(Problem.Bad("bad"))
+}
+let absent: ?<Problem!?[2]string> = null
+let empty: ?<Problem!?[2]string> = choose(0)
+let value: ?<Problem!?[2]string> = choose(1)
+let error: ?<Problem!?[2]string> = choose(2)
+struct Holder { value: ?<Problem!?[2]string>, marker: i64 }
+let holder = Holder { value: value, marker: 9 }
+test.check(match absent { null => true, .Ok => false, .Err => false })
+test.check(match empty { null => false, .Ok(null) => true, .Ok(_) => false, .Err => false })
+test.check(holder.marker == 9 && match holder.value { null => false, .Ok(null) => false, .Ok(items) => items[1] == "b", .Err => false })
+test.check(match error { null => false, .Ok => false, .Err(.Bad(text)) => text == "bad" })
