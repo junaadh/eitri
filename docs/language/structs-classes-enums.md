@@ -1,5 +1,12 @@
 # Structs, classes, and enums
 
+Classes with single-slot scalar, string, optional-string, or class-reference fields
+support construction, defaults, update literals, identity equality, shared field
+mutation, and script calls. Class references can appear inside structs, enums,
+and optional aggregate values. Class methods, optional class types, aggregate
+class fields, and host class signatures are not yet supported. Class objects
+and their reference graph are traced by the collector.
+
 The current implementation accepts structs with up to 256 scalar, string or
 nested aggregate fields, literals, field reads and writes, and copies in local
 bindings and control flow. `let` fields cannot be changed after construction.

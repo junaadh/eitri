@@ -362,6 +362,13 @@ pub enum Sem {
     LoadImm,
     LoadConst,
     StringAlloc,
+    RecordAlloc,
+    RecordGet,
+    RecordSet,
+    RecordEq,
+    RecordNull,
+    RecordWrap,
+    RecordUnwrap,
     StringLen,
     StringConcat,
     StringCompare,
@@ -719,6 +726,13 @@ ops! {
     StrFmtBool = "STR.FMT.BOOL", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::Bool), FAULT, true, Managed;
     StrFmtChar = "STR.FMT.CHAR", "STR", Abc, [Dst, Src, None], Sem::StringFormat(crate::ValueType::Char), FAULT, true, Managed;
     StrInterpolate = "STR.INTERPOLATE", "STR", Abc, [Dst, Src, FormatIndex], Sem::StringInterpolate, FAULT, true, Managed;
+    RecordNew = "RECORD.NEW", "RECORD", Abc, [Dst, Src, Index8], Sem::RecordAlloc, FAULT, true, Managed;
+    RecordGet = "RECORD.GET", "RECORD", Abc, [Dst, Src, Index8], Sem::RecordGet, FAULT, true, None;
+    RecordSet = "RECORD.SET", "RECORD", Abc, [Src, Src, Index8], Sem::RecordSet, FAULT, true, None;
+    RecordNull = "RECORD.NULL", "RECORD", Abc, [Dst, None, Index8], Sem::RecordNull, FAULT, true, Managed;
+    RecordWrap = "RECORD.WRAP", "RECORD", Abc, [Dst, Src, None], Sem::RecordWrap, NONE, true, None;
+    RecordUnwrap = "RECORD.UNWRAP", "RECORD", Abc, [Dst, Src, None], Sem::RecordUnwrap, FAULT, true, None;
+    RecordEq = "RECORD.EQ", "RECORD", Abc, [Dst, Src, Src], Sem::RecordEq, NONE, true, None;
 
 }
 

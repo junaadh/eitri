@@ -59,12 +59,18 @@ fn execute(
     let functions: IndexVec<FunctionId, Function> = IndexVec::from_raw(functions);
     let signatures = IndexVec::from_raw(functions.iter().map(|f| f.signature.clone()).collect());
     let hosts = host_signatures();
+    let record_shapes = functions
+        .iter()
+        .next()
+        .map(|f| f.record_shapes.clone())
+        .unwrap_or_default();
     for f in functions.iter() {
         verify(
             f,
             &Callees {
                 functions: &signatures,
                 hosts: &hosts,
+                record_shapes: &record_shapes,
             },
         )
         .unwrap_or_else(|e| panic!("{}: {e}", f.name));
@@ -692,6 +698,7 @@ fn limited_call_program(reentry: bool) -> IndexVec<FunctionId, Function> {
             &Callees {
                 functions: &signatures,
                 hosts: &[sig(&[], &[])],
+                record_shapes: &[],
             },
         )
         .unwrap();
@@ -788,4 +795,39 @@ fn refused_reentry_does_not_grow_storage_or_refund_fuel() {
             assert_eq!(host.calls, 1);
         }
     }
+}
+
+#[test]
+fn record_instructions_preserve_identity_and_mutation() {
+    let mut asm = Assembler::new();
+    asm.load(1, 9, I64, S).unwrap();
+    asm.emit(Op::RecordNew, Operands::abc(2, 1, 0), S).unwrap();
+    asm.load(3, 27, I64, S).unwrap();
+    asm.emit(Op::RecordSet, Operands::abc(2, 3, 0), S).unwrap();
+    asm.emit(Op::RecordGet, Operands::abc(0, 2, 0), S).unwrap();
+    asm.ret(S).unwrap();
+    let mut function = asm.finish("record", sig(&[], &[I64])).unwrap();
+    function.record_shapes = vec![vec![I64].into_boxed_slice()].into_boxed_slice();
+    let signatures = IndexVec::from_raw(vec![function.signature.clone()]);
+    let hosts = host_signatures();
+    function.roots = asm
+        .string_roots(
+            &function,
+            &Callees {
+                functions: &signatures,
+                hosts: &hosts,
+                record_shapes: &function.record_shapes,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        execute(
+            vec![function],
+            &[],
+            Limits::default(),
+            &mut Recorder::default()
+        )
+        .unwrap(),
+        vec![27]
+    );
 }

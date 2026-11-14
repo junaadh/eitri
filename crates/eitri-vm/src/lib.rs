@@ -1179,8 +1179,11 @@ fn format_type_op(ty: eitri_bytecode::ValueType) -> Op {
         ValueType::F64 => Op::StrFmtF64,
         ValueType::Bool => Op::StrFmtBool,
         ValueType::Char => Op::StrFmtChar,
-        ValueType::String | ValueType::NullableString => {
-            unreachable!("strings use their managed payload")
+        ValueType::String
+        | ValueType::NullableString
+        | ValueType::Record(_)
+        | ValueType::NullableRecord(_) => {
+            unreachable!("managed values use their payload")
         }
     }
 }
@@ -1268,6 +1271,118 @@ type StringTransformState<'a> = (
     &'a mut Vec<Frame>,
     &'a mut Option<eitri_base::MemoryBudget>,
 );
+
+#[inline(never)]
+fn record_operation(
+    op: Op,
+    (a, b, c): (usize, usize, usize),
+    slots: &mut [u64],
+    state: StringTransformState<'_>,
+    (memory_limit, force_gc): (usize, bool),
+    (functions, id, base, start): (&IndexVec<FunctionId, Function>, FunctionId, usize, usize),
+) -> Result<(), FaultKind> {
+    let (heap, references, host_roots, frames, memory) = state;
+    let function = &functions[id];
+    match op {
+        Op::RecordNull => {
+            if force_gc {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+            }
+            let length = references.len().max(base + function.frame_size as usize);
+            resize_vm(references, length, None, memory)?;
+            references[base + a] = None;
+        }
+        Op::RecordWrap | Op::RecordUnwrap => {
+            let value = references[base + b];
+            if op == Op::RecordUnwrap && value.is_none() {
+                return Err(FaultKind::InvalidEnumPayload);
+            }
+            references[base + a] = value;
+        }
+        Op::RecordNew => {
+            if force_gc {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+            }
+            let length = references.len().max(base + function.frame_size as usize);
+            resize_vm(references, length, None, memory)?;
+            let shape = &function.record_shapes[c];
+            let count = shape.len();
+            let first = base + b;
+            let alloc = |heap: &mut heap::Heap,
+                         memory: &mut Option<eitri_base::MemoryBudget>,
+                         refs: &[Option<heap::HeapRef>]| {
+                let fields = slots[b..b + count]
+                    .iter()
+                    .copied()
+                    .zip(refs[first..first + count].iter().copied())
+                    .zip(shape.iter())
+                    .map(|((word, reference), ty)| heap::RecordField {
+                        word,
+                        reference: ty.is_managed().then_some(reference).flatten(),
+                    });
+                heap.alloc_record(c as u32, fields, memory_limit, memory)
+            };
+            let mut allocated = alloc(heap, memory, references);
+            if allocated.is_err() {
+                collect_at(
+                    heap,
+                    references,
+                    (host_roots, frames, memory),
+                    functions,
+                    id,
+                    base,
+                    start,
+                )?;
+                allocated = alloc(heap, memory, references);
+            }
+            references[base + a] = Some(allocated.map_err(|_| FaultKind::OutOfMemory)?);
+        }
+        Op::RecordGet => {
+            let reference = references[base + b].expect("verified record");
+            let field = heap
+                .record(reference)
+                .and_then(|fields| fields.get(c))
+                .copied()
+                .ok_or(FaultKind::InvalidEnumPayload)?;
+            slots[a] = field.word;
+            references[base + a] = field.reference;
+        }
+        Op::RecordSet => {
+            let reference = references[base + a].expect("verified record");
+            let shape = heap
+                .record_shape(reference)
+                .ok_or(FaultKind::InvalidEnumPayload)?;
+            let managed = function.record_shapes[shape as usize][c].is_managed();
+            let value = heap::RecordField {
+                word: slots[b],
+                reference: if managed { references[base + b] } else { None },
+            };
+            *heap
+                .record_mut(reference)
+                .and_then(|fields| fields.get_mut(c))
+                .ok_or(FaultKind::InvalidEnumPayload)? = value;
+        }
+        Op::RecordEq => slots[a] = u64::from(references[base + b] == references[base + c]),
+        _ => unreachable!(),
+    }
+    Ok(())
+}
 
 #[inline(never)]
 fn string_transform(
@@ -1510,6 +1625,23 @@ fn execute(
                     };
                 }
                 match op {
+                    Op::RecordNew
+                    | Op::RecordGet
+                    | Op::RecordSet
+                    | Op::RecordEq
+                    | Op::RecordNull
+                    | Op::RecordWrap
+                    | Op::RecordUnwrap => {
+                        record_operation(
+                            op,
+                            (a!(), b!(), c!()),
+                            s,
+                            (m.heap, m.references, m.host_roots, m.frames, m.memory),
+                            (m.memory_limit, m.force_gc),
+                            (functions, id, base, start),
+                        )
+                        .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;
+                    }
                     Op::NullableEq => {
                         let left = m.references[base + b!()];
                         let right = m.references[base + c!()];

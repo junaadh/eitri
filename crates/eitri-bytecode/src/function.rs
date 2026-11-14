@@ -20,12 +20,18 @@ pub enum ValueType {
     Char,
     String,
     NullableString,
+    /// A managed record whose layout is indexed in the program's shape table.
+    Record(u32),
+    NullableRecord(u32),
     Bool,
 }
 
 impl ValueType {
     pub fn is_managed(self) -> bool {
-        matches!(self, Self::String | Self::NullableString)
+        matches!(
+            self,
+            Self::String | Self::NullableString | Self::Record(_) | Self::NullableRecord(_)
+        )
     }
     pub fn integer(self) -> bool {
         matches!(self, Self::I8 | Self::U8 | Self::I64 | Self::U64)
@@ -42,7 +48,9 @@ impl ValueType {
     }
     pub fn canonical(self, word: u64) -> bool {
         match self {
-            Self::String | Self::NullableString => false,
+            Self::String | Self::NullableString | Self::Record(_) | Self::NullableRecord(_) => {
+                false
+            }
             Self::Bool => word <= 1,
             Self::I8 => word == (word as i8 as i64 as u64),
             Self::U8 => word <= 255,
@@ -127,6 +135,8 @@ pub struct Function {
     /// UTF-8 literal bytes owned by this function's compiled artifact.
     pub strings: Box<[Box<str>]>,
     pub sites: Box<[CallSite]>,
+    /// Program-wide record field types indexed by nominal declaration ID.
+    pub record_shapes: Box<[Box<[ValueType]>]>,
     /// Cold root publication metadata, indexed independently of call sites.
     pub roots: crate::FunctionRoots,
     /// The type each literal load (`LDI`, `LDK`, `LDK_X`) produces, by PC,
@@ -150,6 +160,7 @@ impl Function {
             && self.consts == other.consts
             && self.strings == other.strings
             && self.sites == other.sites
+            && self.record_shapes == other.record_shapes
             && self.literal_types == other.literal_types
             && self.starts == other.starts
             && self.spans == other.spans

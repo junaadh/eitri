@@ -277,6 +277,7 @@ pub struct EnumDecl {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StructDecl {
     pub name: TokenId,
+    pub is_class: bool,
     pub fields: List<Param>,
 }
 

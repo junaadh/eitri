@@ -341,6 +341,93 @@ fn managed_op(
 ) -> Result<Option<u64>, FaultKind> {
     let end = st.base + st.function.frame_size as usize;
     match op {
+        Op::RecordNull => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let length = st.m.references.len().max(end);
+            resize_vm(st.m.references, length, None, st.m.memory)?;
+            st.m.references[st.base + a] = None;
+            Ok(None)
+        }
+        Op::RecordWrap | Op::RecordUnwrap => {
+            let value = st.m.references[st.base + b];
+            if op == Op::RecordUnwrap && value.is_none() {
+                return Err(FaultKind::InvalidEnumPayload);
+            }
+            st.m.references[st.base + a] = value;
+            Ok(None)
+        }
+        Op::RecordNew => {
+            if st.m.force_gc {
+                trace(st, pc)?;
+            }
+            let length = st.m.references.len().max(end);
+            resize_vm(st.m.references, length, None, st.m.memory)?;
+            let shape = &st.function.record_shapes[c];
+            let first = st.base + b;
+            let count = shape.len();
+            let memory_limit = st.m.memory_limit;
+            let alloc = |heap: &mut super::heap::Heap,
+                         memory: &mut Option<eitri_base::MemoryBudget>,
+                         slots: &[u64],
+                         refs: &[Option<super::heap::HeapRef>]| {
+                let fields = slots[first..first + count]
+                    .iter()
+                    .copied()
+                    .zip(refs[first..first + count].iter().copied())
+                    .zip(shape.iter())
+                    .map(|((word, reference), ty)| super::heap::RecordField {
+                        word,
+                        reference: ty.is_managed().then_some(reference).flatten(),
+                    });
+                heap.alloc_record(c as u32, fields, memory_limit, memory)
+            };
+            let mut result = alloc(st.m.heap, st.m.memory, st.m.slots, st.m.references);
+            if result.is_err() {
+                trace(st, pc)?;
+                result = alloc(st.m.heap, st.m.memory, st.m.slots, st.m.references);
+            }
+            st.m.references[st.base + a] = Some(result.map_err(|_| FaultKind::OutOfMemory)?);
+            Ok(None)
+        }
+        Op::RecordGet => {
+            let reference = st.m.references[st.base + b].expect("verified record");
+            let field =
+                st.m.heap
+                    .record(reference)
+                    .and_then(|fields| fields.get(c))
+                    .copied()
+                    .ok_or(FaultKind::InvalidEnumPayload)?;
+            st.m.references[st.base + a] = field.reference;
+            Ok(Some(field.word))
+        }
+        Op::RecordSet => {
+            let reference = st.m.references[st.base + a].expect("verified record");
+            let shape =
+                st.m.heap
+                    .record_shape(reference)
+                    .ok_or(FaultKind::InvalidEnumPayload)?;
+            let managed = st.function.record_shapes[shape as usize][c].is_managed();
+            let value = super::heap::RecordField {
+                word: st.m.slots[st.base + b],
+                reference: if managed {
+                    st.m.references[st.base + b]
+                } else {
+                    None
+                },
+            };
+            let field =
+                st.m.heap
+                    .record_mut(reference)
+                    .and_then(|fields| fields.get_mut(c))
+                    .ok_or(FaultKind::InvalidEnumPayload)?;
+            *field = value;
+            Ok(None)
+        }
+        Op::RecordEq => Ok(Some(u64::from(
+            st.m.references[st.base + b] == st.m.references[st.base + c],
+        ))),
         Op::NullableEq => {
             let left = st.m.references[st.base + b];
             let right = st.m.references[st.base + c];
@@ -712,6 +799,13 @@ macro_rules! branch_handler {
 }
 
 managed_handler!(mov, Op::Mov);
+managed_handler!(record_new, Op::RecordNew);
+managed_handler!(record_null, Op::RecordNull);
+managed_handler!(record_wrap, Op::RecordWrap);
+managed_handler!(record_unwrap, Op::RecordUnwrap);
+managed_handler!(record_get, Op::RecordGet);
+managed_handler!(record_set, Op::RecordSet);
+managed_handler!(record_eq, Op::RecordEq);
 managed_handler!(str_new, Op::StrNew);
 managed_handler!(str_len, Op::StrLen);
 managed_handler!(str_concat, Op::StrConcat);
@@ -863,6 +957,13 @@ extern "rust-preserve-none" fn wide(
         Op::from_byte(op),
         Some(
             Op::Mov
+                | Op::RecordNew
+                | Op::RecordNull
+                | Op::RecordWrap
+                | Op::RecordUnwrap
+                | Op::RecordGet
+                | Op::RecordSet
+                | Op::RecordEq
                 | Op::StrNew
                 | Op::StrLen
                 | Op::StrConcat
@@ -1291,6 +1392,13 @@ static TABLE: [Handler; 256] = {
     table[Op::FremF32 as usize] = t013_frem_f32;
     table[Op::FremF64 as usize] = t013_frem_f64;
     table[Op::Mov as usize] = mov;
+    table[Op::RecordNew as usize] = record_new;
+    table[Op::RecordNull as usize] = record_null;
+    table[Op::RecordWrap as usize] = record_wrap;
+    table[Op::RecordUnwrap as usize] = record_unwrap;
+    table[Op::RecordGet as usize] = record_get;
+    table[Op::RecordSet as usize] = record_set;
+    table[Op::RecordEq as usize] = record_eq;
     table[Op::StrNew as usize] = str_new;
     table[Op::StrLen as usize] = str_len;
     table[Op::StrConcat as usize] = str_concat;

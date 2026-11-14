@@ -32,6 +32,15 @@ pub fn print(
 ) -> String {
     assert_eq!(functions.len(), bodies.len(), "one body per function");
     let mut out = String::new();
+    if let Some(first) = functions.first() {
+        for shape in &first.record_shapes {
+            let fields = shape
+                .iter()
+                .map(|&ty| type_name(Some(ty)))
+                .collect::<Vec<_>>();
+            writeln!(out, "record_shape ({})", fields.join(", ")).unwrap();
+        }
+    }
     let used: BTreeSet<u32> = functions
         .iter()
         .flat_map(|f| f.sites.iter())
@@ -43,7 +52,7 @@ pub fn print(
     for &index in &used {
         match hosts.get(index as usize) {
             Some(host) => {
-                let params: Vec<&str> = host
+                let params: Vec<String> = host
                     .signature
                     .params
                     .iter()

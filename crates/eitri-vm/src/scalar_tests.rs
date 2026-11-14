@@ -33,6 +33,7 @@ fn function(op: Op, params: &[V], result: V, c: i64) -> IndexVec<FunctionId, Fun
         &Callees {
             functions: &signatures,
             hosts: &[],
+            record_shapes: &[],
         },
     )
     .unwrap();
@@ -263,7 +264,8 @@ fn noncanonical_literals_and_conversion_descriptors_are_rejected() {
                 &f,
                 &Callees {
                     functions: &signatures,
-                    hosts: &[]
+                    hosts: &[],
+                    record_shapes: &[]
                 }
             )
             .is_err()
@@ -304,7 +306,8 @@ fn noncanonical_literals_and_conversion_descriptors_are_rejected() {
                     &f,
                     &Callees {
                         functions: &signatures,
-                        hosts: &[]
+                        hosts: &[],
+                        record_shapes: &[]
                     }
                 )
                 .is_err()

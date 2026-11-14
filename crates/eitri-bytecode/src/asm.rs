@@ -732,6 +732,7 @@ impl<const RECORD: bool> Assembler<RECORD> {
             consts: consts.into_boxed_slice(),
             strings: Box::default(),
             sites: sites.into_boxed_slice(),
+            record_shapes: Box::default(),
             roots,
             literal_types: literal_types.into_boxed_slice(),
             starts: starts.into_boxed_slice(),

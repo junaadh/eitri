@@ -1,9 +1,9 @@
-//! Non-moving storage for managed strings.
+//! Non-moving storage for managed values.
 //!
-//! A reference retains its pointer provenance; it is never converted to an
-//! integer. Collection uses expected O(R+N) time and O(1) temporary memory
-//! for R roots and N objects; hash collisions can make it quadratic. Strings
-//! contain no outgoing edges.
+//! References retain pointer provenance and are never converted to integers.
+//! Collection takes expected O(R + N + E) time for roots, objects and object
+//! edges; hash collisions can make lookup quadratic. Its reusable worklist is
+//! reserved when record objects are allocated, so collection does not allocate.
 
 use eitri_base::FxHashMap;
 use std::ptr::NonNull;
@@ -14,6 +14,22 @@ pub struct HeapRef(NonNull<Object>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ObjectKind {
     String,
+    Record,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RecordField {
+    pub word: u64,
+    pub reference: Option<HeapRef>,
+}
+
+#[derive(Debug)]
+enum ObjectData {
+    String(String),
+    Record {
+        shape: u32,
+        fields: Vec<RecordField>,
+    },
 }
 
 #[derive(Debug)]
@@ -26,7 +42,7 @@ struct Header {
 #[derive(Debug)]
 struct Object {
     header: Header,
-    text: String,
+    data: ObjectData,
 }
 
 /// A host-owned root token. Release it through the context that issued it.
@@ -71,6 +87,7 @@ pub struct Heap {
     index: FxHashMap<HeapRef, usize>,
     retained: Vec<RetainedSlot>,
     free_retained: Vec<usize>,
+    mark_stack: Vec<usize>,
     bytes: usize,
 }
 
@@ -328,7 +345,7 @@ impl Heap {
                 size,
                 marked: false,
             },
-            text,
+            data: ObjectData::String(text),
         }) {
             Ok(object) => object,
             Err(_) => {
@@ -343,10 +360,90 @@ impl Heap {
         Ok(reference)
     }
 
+    /// Allocate a record after reserving its payload and collector worklist.
+    pub fn alloc_record(
+        &mut self,
+        shape: u32,
+        fields: impl ExactSizeIterator<Item = RecordField>,
+        limit: usize,
+        memory: &mut Option<eitri_base::MemoryBudget>,
+    ) -> Result<HeapRef, HeapLimit> {
+        let payload = fields
+            .len()
+            .checked_mul(size_of::<RecordField>())
+            .ok_or(HeapLimit)?;
+        self.reserve_object(payload, limit, memory)?;
+        let needed = self.objects.len() + 1;
+        let additional = needed.saturating_sub(self.mark_stack.len());
+        super::reserve_vm(&mut self.mark_stack, additional, memory).map_err(|_| HeapLimit)?;
+        let mut values = Vec::new();
+        super::reserve_vm(&mut values, fields.len(), memory).map_err(|_| HeapLimit)?;
+        values.extend(fields);
+        let payload = values
+            .capacity()
+            .checked_mul(size_of::<RecordField>())
+            .ok_or(HeapLimit)?;
+        let size = size_of::<Object>().checked_add(payload).ok_or(HeapLimit)?;
+        let Some(bytes) = self.bytes.checked_add(size).filter(|&bytes| bytes <= limit) else {
+            super::release_vm(payload, memory);
+            return Err(HeapLimit);
+        };
+        if super::charge_vm(size_of::<Object>(), memory).is_err() {
+            super::release_vm(payload, memory);
+            return Err(HeapLimit);
+        }
+        let mut object = match Box::try_new(Object {
+            header: Header {
+                kind: ObjectKind::Record,
+                size,
+                marked: false,
+            },
+            data: ObjectData::Record {
+                shape,
+                fields: values,
+            },
+        }) {
+            Ok(object) => object,
+            Err(_) => {
+                super::release_vm(size, memory);
+                return Err(HeapLimit);
+            }
+        };
+        let reference = HeapRef(NonNull::from(object.as_mut()));
+        self.index.insert(reference, self.objects.len());
+        self.objects.push(object);
+        self.bytes = bytes;
+        Ok(reference)
+    }
+
+    pub fn record(&self, reference: HeapRef) -> Option<&[RecordField]> {
+        match &self.objects.get(*self.index.get(&reference)?)?.data {
+            ObjectData::Record { fields, .. } => Some(fields),
+            ObjectData::String(_) => None,
+        }
+    }
+
+    pub fn record_shape(&self, reference: HeapRef) -> Option<u32> {
+        match &self.objects.get(*self.index.get(&reference)?)?.data {
+            ObjectData::Record { shape, .. } => Some(*shape),
+            ObjectData::String(_) => None,
+        }
+    }
+
+    pub fn record_mut(&mut self, reference: HeapRef) -> Option<&mut [RecordField]> {
+        match &mut self.objects.get_mut(*self.index.get(&reference)?)?.data {
+            ObjectData::Record { fields, .. } => Some(fields),
+            ObjectData::String(_) => None,
+        }
+    }
+
     /// Looks up a live reference without dereferencing an untrusted pointer.
     pub fn string(&self, reference: HeapRef) -> Option<&str> {
         let object = self.objects.get(*self.index.get(&reference)?)?;
-        (object.header.kind == ObjectKind::String).then_some(object.text.as_str())
+        match &object.data {
+            ObjectData::String(text) => Some(text.as_str()),
+            ObjectData::Record { .. } => None,
+        }
     }
 
     /// Add a host-owned collector root; slots are generation-checked and
@@ -422,6 +519,7 @@ impl Heap {
     pub fn retained_metadata_bytes(&self) -> usize {
         self.retained.capacity() * std::mem::size_of::<RetainedSlot>()
             + self.free_retained.capacity() * std::mem::size_of::<usize>()
+            + self.mark_stack.capacity() * std::mem::size_of::<usize>()
     }
 
     /// Validate every frame before marking, so malformed metadata cannot
@@ -468,8 +566,14 @@ impl Heap {
     }
 
     fn mark(&mut self, reference: HeapRef) {
-        if let Some(&index) = self.index.get(&reference) {
+        if let Some(&index) = self.index.get(&reference)
+            && !self.objects[index].header.marked
+        {
             self.objects[index].header.marked = true;
+            if self.objects[index].header.kind == ObjectKind::Record {
+                debug_assert!(self.mark_stack.len() < self.mark_stack.capacity());
+                self.mark_stack.push(index);
+            }
         }
     }
 
@@ -477,6 +581,21 @@ impl Heap {
         for index in 0..self.retained.len() {
             if let Some(reference) = self.retained[index].reference {
                 self.mark(reference);
+            }
+        }
+        while let Some(index) = self.mark_stack.pop() {
+            let length = match &self.objects[index].data {
+                ObjectData::Record { fields, .. } => fields.len(),
+                ObjectData::String(_) => unreachable!(),
+            };
+            for offset in 0..length {
+                let reference = match &self.objects[index].data {
+                    ObjectData::Record { fields, .. } => fields[offset].reference,
+                    ObjectData::String(_) => unreachable!(),
+                };
+                if let Some(reference) = reference {
+                    self.mark(reference);
+                }
             }
         }
         self.objects.retain_mut(|object| {
@@ -603,5 +722,56 @@ mod tests {
         let mut heap = Heap::default();
         assert_eq!(heap.alloc_string("hello", 0, &mut None), Err(HeapLimit));
         assert_eq!(heap.bytes(), 0);
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+
+    #[test]
+    fn rooted_record_graph_survives_and_unrooted_cycles_are_collected() {
+        let mut heap = Heap::default();
+        let mut memory = None;
+        let text = heap.alloc_string("kept", usize::MAX, &mut memory).unwrap();
+        let child = heap
+            .alloc_record(
+                0,
+                [
+                    RecordField {
+                        word: 5,
+                        reference: Some(text),
+                    },
+                    RecordField {
+                        word: 9,
+                        reference: Some(text),
+                    },
+                ]
+                .into_iter(),
+                usize::MAX,
+                &mut memory,
+            )
+            .unwrap();
+        let parent = heap
+            .alloc_record(
+                0,
+                [RecordField {
+                    word: 7,
+                    reference: Some(child),
+                }]
+                .into_iter(),
+                usize::MAX,
+                &mut memory,
+            )
+            .unwrap();
+        heap.record_mut(child).unwrap()[0].reference = Some(parent);
+        heap.collect([parent], &mut memory);
+        assert_eq!(heap.record(parent).unwrap()[0].word, 7);
+        assert_eq!(heap.record(child).unwrap()[0].word, 5);
+        assert_eq!(heap.string(text), Some("kept"));
+        heap.collect([], &mut memory);
+        assert!(heap.record(parent).is_none());
+        assert!(heap.record(child).is_none());
+        assert!(heap.string(text).is_none());
     }
 }

@@ -29,6 +29,7 @@ use crate::spec::{AllocationClass, BRANCH, Cond, END, Op, POLL, Role, Sem, Test}
 pub struct Callees<'a> {
     pub functions: &'a IndexVec<FunctionId, Signature>,
     pub hosts: &'a [Signature],
+    pub record_shapes: &'a [Box<[ValueType]>],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -453,7 +454,12 @@ fn scalar_root_state(
         while bits != 0 {
             let slot = (word_index * 64 + bits.trailing_zeros() as usize) as u32;
             match slots[slot as usize] {
-                Slot::Ty(ValueType::String | ValueType::NullableString) => {}
+                Slot::Ty(
+                    ValueType::String
+                    | ValueType::NullableString
+                    | ValueType::Record(_)
+                    | ValueType::NullableRecord(_),
+                ) => {}
                 Slot::Ty(_) => return Err(ErrorKind::RootWrongShape(slot)),
                 _ => return Err(ErrorKind::RootNotInitialized(slot)),
             }
@@ -593,12 +599,30 @@ fn intern_live_state(
     memory: &mut Option<eitri_base::MemoryBudget>,
 ) -> Result<crate::RootState, VerifyError> {
     let last = state.iter().zip(live).rposition(|(&ty, &live)| {
-        live && matches!(ty, Slot::Ty(ValueType::String | ValueType::NullableString))
+        live && matches!(
+            ty,
+            Slot::Ty(
+                ValueType::String
+                    | ValueType::NullableString
+                    | ValueType::Record(_)
+                    | ValueType::NullableRecord(_)
+            )
+        )
     });
     let words = last.map_or(0, |slot| slot / 64 + 1);
     let mut ordinary = filled_memory(words, 0u64, memory)?;
     for (slot, (&ty, &live)) in state.iter().zip(live).enumerate() {
-        if live && matches!(ty, Slot::Ty(ValueType::String | ValueType::NullableString)) {
+        if live
+            && matches!(
+                ty,
+                Slot::Ty(
+                    ValueType::String
+                        | ValueType::NullableString
+                        | ValueType::Record(_)
+                        | ValueType::NullableRecord(_)
+                )
+            )
+        {
             ordinary[slot / 64] |= 1 << (slot % 64);
         }
     }
@@ -701,6 +725,11 @@ pub fn string_roots_budgeted(
             }
         }
         match insn.decoded.op.info().sem {
+            Sem::RecordAlloc => {
+                let first = insn.decoded.operands.b as usize;
+                let count = function.record_shapes[insn.decoded.operands.c as usize].len();
+                uses[i * frame + first..i * frame + first + count].fill(true);
+            }
             Sem::StringInterpolate => {
                 let plan = &function.strings[insn.decoded.operands.c as usize];
                 let count = crate::format_parts(plan)
@@ -849,6 +878,25 @@ fn structure(
     callees: &Callees<'_>,
     memory: &mut Option<eitri_base::MemoryBudget>,
 ) -> Result<Vec<Insn>, VerifyError> {
+    if function.record_shapes.as_ref() != callees.record_shapes {
+        return Err(error(
+            0,
+            ErrorKind::InvalidScalar("inconsistent record shapes"),
+        ));
+    }
+    for ty in function
+        .signature
+        .params
+        .iter()
+        .chain(&function.signature.results)
+        .chain(function.record_shapes.iter().flat_map(|shape| shape.iter()))
+    {
+        if let ValueType::Record(id) | ValueType::NullableRecord(id) = ty
+            && *id as usize >= function.record_shapes.len()
+        {
+            return Err(error(0, ErrorKind::InvalidScalar("unknown record shape")));
+        }
+    }
     let code = &function.code;
     let signature = &function.signature;
     if (function.frame_size as usize) < signature.results.len() + signature.params.len() {
@@ -862,6 +910,25 @@ fn structure(
         let at = pc as u32;
         let decoded = decode(code, pc).map_err(|e| error(at, ErrorKind::Decode(e)))?;
         let info = decoded.op.info();
+        if decoded.op == Op::RecordNull
+            && decoded.operands.c as usize >= function.record_shapes.len()
+        {
+            return Err(error(at, ErrorKind::InvalidScalar("invalid record shape")));
+        }
+        if decoded.op == Op::RecordNew {
+            let Some(shape) = function.record_shapes.get(decoded.operands.c as usize) else {
+                return Err(error(at, ErrorKind::InvalidScalar("invalid record shape")));
+            };
+            if (decoded.operands.b as usize)
+                .checked_add(shape.len())
+                .is_none_or(|end| end > function.frame_size as usize)
+            {
+                return Err(error(
+                    at,
+                    ErrorKind::InvalidScalar("invalid record operand window"),
+                ));
+            }
+        }
         if decoded.op == Op::StrNew && decoded.operands.b as usize >= function.strings.len() {
             return Err(error(at, ErrorKind::NoConstant(decoded.operands.b as u32)));
         }
@@ -1186,6 +1253,68 @@ fn transfer(
     let [a, b, c] = columns(d);
     let write = |state: &mut [Slot], slot: i64, ty| state[slot as usize] = Slot::Ty(ty);
     match d.op.info().sem {
+        Sem::RecordNull => write(state, a, ValueType::NullableRecord(c as u32)),
+        Sem::RecordWrap => {
+            let ValueType::Record(id) = read(state, pc, b, None)? else {
+                return Err(error(
+                    pc,
+                    ErrorKind::InvalidScalar("expected record reference"),
+                ));
+            };
+            write(state, a, ValueType::NullableRecord(id));
+        }
+        Sem::RecordUnwrap => {
+            let ValueType::NullableRecord(id) = read(state, pc, b, None)? else {
+                return Err(error(
+                    pc,
+                    ErrorKind::InvalidScalar("expected nullable record reference"),
+                ));
+            };
+            write(state, a, ValueType::Record(id));
+        }
+        Sem::RecordAlloc => {
+            let id = c as u32;
+            let shape = &function.record_shapes[id as usize];
+            for (offset, &ty) in shape.iter().enumerate() {
+                read(state, pc, b + offset as i64, Some(ty))?;
+            }
+            write(state, a, ValueType::Record(id));
+        }
+        Sem::RecordGet | Sem::RecordSet => {
+            let source = if matches!(d.op.info().sem, Sem::RecordGet) {
+                b
+            } else {
+                a
+            };
+            let ValueType::Record(id) = read(state, pc, source, None)? else {
+                return Err(error(
+                    pc,
+                    ErrorKind::InvalidScalar("expected record reference"),
+                ));
+            };
+            let ty = function
+                .record_shapes
+                .get(id as usize)
+                .and_then(|shape| shape.get(c as usize))
+                .copied()
+                .ok_or_else(|| error(pc, ErrorKind::InvalidScalar("invalid record field")))?;
+            if matches!(d.op.info().sem, Sem::RecordGet) {
+                write(state, a, ty);
+            } else {
+                read(state, pc, b, Some(ty))?;
+            }
+        }
+        Sem::RecordEq => {
+            let ty = read(state, pc, b, None)?;
+            if !matches!(ty, ValueType::Record(_) | ValueType::NullableRecord(_)) {
+                return Err(error(
+                    pc,
+                    ErrorKind::InvalidScalar("expected record reference"),
+                ));
+            }
+            read(state, pc, c, Some(ty))?;
+            write(state, a, Bool);
+        }
         Sem::NullableEq => {
             read(state, pc, b, Some(ValueType::NullableString))?;
             read(state, pc, c, Some(ValueType::NullableString))?;

@@ -168,6 +168,7 @@ pub fn value_type(ty: Ty) -> ValueType {
         Ty::Char => ValueType::Char,
         Ty::Bool => ValueType::Bool,
         Ty::String => ValueType::String,
+        Ty::Class(id) => ValueType::Record(id.as_u32()),
         Ty::OptionalString => ValueType::NullableString,
         Ty::FindOffset => ValueType::I64,
         _ => {
@@ -330,7 +331,40 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
             );
         }
     }
-    if !lowerer.checked.strings.is_empty()
+    let has_classes = ast.structs.iter().any(|decl| decl.is_class);
+    let mut record_shapes = lowerer
+        .asm
+        .temporary_vec(if has_classes { ast.structs.len() } else { 0 })
+        .map_err(|error| lowering_error(error, input, "<module>", Span::default()))?;
+    if has_classes {
+        for (id, decl) in ast.structs.iter_enumerated() {
+            let fields = &lowerer.checked.param_types[lowerer.checked.struct_fields[id]];
+            let mut shape = lowerer
+                .asm
+                .temporary_vec(if decl.is_class { fields.len() } else { 0 })
+                .map_err(|error| lowering_error(error, input, "<module>", Span::default()))?;
+            if decl.is_class {
+                shape.extend(fields.iter().copied().map(value_type));
+            }
+            record_shapes.push(shape.into_boxed_slice());
+        }
+        for function in functions.as_mut_slice() {
+            let mut shapes = lowerer
+                .asm
+                .artifact_vec(record_shapes.len())
+                .map_err(|error| lowering_error(error, input, &function.name, Span::default()))?;
+            for shape in &record_shapes {
+                let mut fields = lowerer.asm.artifact_vec(shape.len()).map_err(|error| {
+                    lowering_error(error, input, &function.name, Span::default())
+                })?;
+                fields.extend_from_slice(shape);
+                shapes.push(fields.into_boxed_slice());
+            }
+            function.record_shapes = shapes.into_boxed_slice();
+        }
+    }
+    if has_classes
+        || !lowerer.checked.strings.is_empty()
         || !lowerer.checked.enum_case_types.is_empty()
         || !lowerer.plans.is_empty()
         || functions.iter().any(|f| {
@@ -393,6 +427,7 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
         let callees = eitri_bytecode::Callees {
             functions: &signatures,
             hosts: &hosts,
+            record_shapes: &record_shapes,
         };
         for function in functions.as_mut_slice() {
             let mut pc = 0;
@@ -471,6 +506,13 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
         drop(hosts);
         lowerer.asm.release_temporary_bytes(temporary_bytes);
     }
+    let shape_bytes = record_shapes.capacity() * size_of::<Box<[ValueType]>>()
+        + record_shapes
+            .iter()
+            .map(|shape| size_of_val(shape.as_ref()))
+            .sum::<usize>();
+    drop(record_shapes);
+    lowerer.asm.release_temporary_bytes(shape_bytes);
     Ok(Program {
         functions,
         entry: ENTRY,
@@ -651,13 +693,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             std::str::from_utf8(bytes).expect("identifier UTF-8")
         });
         let mut function = self.asm.finish(name, signature)?;
-        function.reentry_safe =
-            !matches!(types.ret, Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalString)
-                && types.ret.tagged_optional_inner().is_none()
-                && !parameter_types.iter().any(|ty| {
-                    (matches!(ty, Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalString)
-                        || ty.tagged_optional_inner().is_some())
-                });
+        function.reentry_safe = !matches!(
+            types.ret,
+            Ty::Struct(_) | Ty::Enum(_) | Ty::Class(_) | Ty::OptionalString
+        ) && types.ret.tagged_optional_inner().is_none()
+            && !parameter_types.iter().any(|ty| {
+                (matches!(
+                    ty,
+                    Ty::Struct(_) | Ty::Enum(_) | Ty::Class(_) | Ty::OptionalString
+                ) || ty.tagged_optional_inner().is_some())
+            });
         Ok(function)
     }
 
@@ -714,10 +759,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             return self.flatten_with_nullable(inner, true, output);
         }
         if !matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
-            output.push(if nullable && ty == Ty::String {
-                ValueType::NullableString
-            } else {
-                value_type(ty)
+            output.push(match ty {
+                Ty::String if nullable => ValueType::NullableString,
+                Ty::Class(id) if nullable => ValueType::NullableRecord(id.as_u32()),
+                _ => value_type(ty),
             });
             return Ok(());
         }
@@ -752,6 +797,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                 }
                 Ty::String if nullable => output.push(ValueType::NullableString),
+                Ty::Class(id) if nullable => output.push(ValueType::NullableRecord(id.as_u32())),
                 ty if ty.tagged_optional_inner().is_some() => {
                     output.push(ValueType::Bool);
                     pending.push((ty.tagged_optional_inner().unwrap(), true));
@@ -795,14 +841,22 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let mut types = self.asm.temporary_vec(self.width(ty) as usize)?;
         self.flatten_type(ty, &mut types)?;
         for (offset, value_ty) in types.into_iter().enumerate() {
-            let op = if value_ty == ValueType::String {
-                if wrapping {
-                    Op::NullableWrap
-                } else {
-                    Op::NullableUnwrap
+            let op = match value_ty {
+                ValueType::String => {
+                    if wrapping {
+                        Op::NullableWrap
+                    } else {
+                        Op::NullableUnwrap
+                    }
                 }
-            } else {
-                Op::Mov
+                ValueType::Record(_) => {
+                    if wrapping {
+                        Op::RecordWrap
+                    } else {
+                        Op::RecordUnwrap
+                    }
+                }
+                _ => Op::Mov,
             };
             self.asm.emit(
                 op,
@@ -942,6 +996,44 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
             Stmt::Assign {
                 op, value, span, ..
+            } if checked.stmt_fields[id].is_some()
+                && checked.stmt_bindings[id]
+                    .is_some_and(|b| matches!(checked.bindings[b].ty, Ty::Class(_))) =>
+            {
+                let binding = checked.stmt_bindings[id].unwrap();
+                let index = checked.stmt_fields[id].unwrap();
+                let object = self.slots[binding];
+                let old = if matches!(op, AssignOp::Compound(_)) {
+                    let slot = self.temp();
+                    self.asm.emit(
+                        Op::RecordGet,
+                        Operands::abc(slot.into(), object.into(), index.into()),
+                        span,
+                    )?;
+                    Some(slot)
+                } else {
+                    None
+                };
+                let rhs = self.expr(value, None)?;
+                let result = if let AssignOp::Compound(binary) = op {
+                    let Ty::Class(owner) = checked.bindings[binding].ty else {
+                        unreachable!()
+                    };
+                    let ty = checked.param_types[checked.struct_fields[owner]][index as usize];
+                    let slot = self.temp();
+                    self.operate(binary, ty, slot, old.unwrap(), rhs, span)?;
+                    slot
+                } else {
+                    rhs
+                };
+                self.asm.emit(
+                    Op::RecordSet,
+                    Operands::abc(object.into(), result.into(), index.into()),
+                    span,
+                )?;
+            }
+            Stmt::Assign {
+                op, value, span, ..
             } => {
                 let binding = checked.stmt_bindings[id].expect("a checked assignment has a target");
                 let (slot, ty) = if let Some(index) = checked.stmt_fields[id] {
@@ -996,6 +1088,45 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             Stmt::Expr(e) => self.discard(e)?,
+            Stmt::AssignField {
+                target,
+                op,
+                value,
+                span,
+            } if matches!(ast.exprs[target], Expr::Member { base, .. } if matches!(checked.types[base], Ty::Class(_))) =>
+            {
+                let Expr::Member { base, .. } = ast.exprs[target] else {
+                    unreachable!()
+                };
+                let Res::Field(index) = checked.resolutions[target] else {
+                    unreachable!()
+                };
+                let object = self.expr(base, None)?;
+                let old = if matches!(op, AssignOp::Compound(_)) {
+                    let slot = self.temp();
+                    self.asm.emit(
+                        Op::RecordGet,
+                        Operands::abc(slot.into(), object.into(), index.into()),
+                        span,
+                    )?;
+                    Some(slot)
+                } else {
+                    None
+                };
+                let rhs = self.expr(value, None)?;
+                let result = if let AssignOp::Compound(binary) = op {
+                    let slot = self.temp();
+                    self.operate(binary, checked.types[target], slot, old.unwrap(), rhs, span)?;
+                    slot
+                } else {
+                    rhs
+                };
+                self.asm.emit(
+                    Op::RecordSet,
+                    Operands::abc(object.into(), result.into(), index.into()),
+                    span,
+                )?;
+            }
             Stmt::AssignField {
                 target,
                 op,
@@ -1450,7 +1581,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             let mut layout = self.asm.temporary_vec(width as usize)?;
             self.flatten_type(Ty::Enum(id), &mut layout)?;
             for (offset, &ty) in layout.iter().enumerate().skip(1) {
-                if ty == ValueType::NullableString {
+                if let ValueType::NullableRecord(id) = ty {
+                    self.asm.emit(
+                        Op::RecordNull,
+                        Operands::abc((slot + offset as u32).into(), 0, id.into()),
+                        span,
+                    )?;
+                } else if ty == ValueType::NullableString {
                     self.asm.emit(
                         Op::NullableNull,
                         Operands::abc((slot + offset as u32).into(), 0, 0),
@@ -1542,7 +1679,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         .temporary_vec(self.width(checked.types[e]) as usize)?;
                     self.flatten_type(checked.types[e], &mut layout)?;
                     for (offset, ty) in layout.into_iter().enumerate() {
-                        if ty == ValueType::NullableString {
+                        if let ValueType::NullableRecord(id) = ty {
+                            self.asm.emit(
+                                Op::RecordNull,
+                                Operands::abc((slot + offset as u32).into(), 0, id.into()),
+                                span,
+                            )?;
+                        } else if ty == ValueType::NullableString {
                             self.asm.emit(
                                 Op::NullableNull,
                                 Operands::abc((slot + offset as u32).into(), 0, 0),
@@ -1565,6 +1708,12 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 self.asm
                     .load(slot, u64::from(value), ValueType::Bool, span)?;
                 Ok(slot)
+            }
+            Expr::StructLiteral { fields, .. } if matches!(checked.types[e], Ty::Class(_)) => {
+                let Ty::Class(id) = checked.types[e] else {
+                    unreachable!()
+                };
+                self.class_literal(id, fields, dst, span)
             }
             Expr::StructLiteral { fields, .. } => {
                 let Res::Struct(id) = checked.resolutions[e] else {
@@ -1663,6 +1812,22 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
                 Ok(slot)
             }
+            Expr::Member { base, .. }
+                if matches!(checked.types[base], Ty::Class(_))
+                    && matches!(checked.resolutions[e], Res::Field(_)) =>
+            {
+                let Res::Field(index) = checked.resolutions[e] else {
+                    unreachable!()
+                };
+                let source = self.expr(base, None)?;
+                let target = self.dst(dst);
+                self.asm.emit(
+                    Op::RecordGet,
+                    Operands::abc(target.into(), source.into(), index.into()),
+                    span,
+                )?;
+                Ok(target)
+            }
             Expr::Member { base, .. } if matches!(checked.resolutions[e], Res::Field(_)) => {
                 let Res::Field(index) = checked.resolutions[e] else {
                     unreachable!()
@@ -1711,6 +1876,19 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         _ => Ok(source),
                     }
                 }
+            }
+            Expr::SelfValue(_) | Expr::Name(_) if matches!(checked.resolutions[e], Res::SelfField(binding, _) if matches!(checked.bindings[binding].ty, Ty::Class(_))) =>
+            {
+                let Res::SelfField(binding, index) = checked.resolutions[e] else {
+                    unreachable!()
+                };
+                let target = self.dst(dst);
+                self.asm.emit(
+                    Op::RecordGet,
+                    Operands::abc(target.into(), self.slots[binding].into(), index.into()),
+                    span,
+                )?;
+                Ok(target)
             }
             Expr::SelfValue(_) | Expr::Name(_) => {
                 let slot = match checked.resolutions[e] {
@@ -1875,6 +2053,36 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     Operands::abc(slot.into(), left.into(), right.into()),
                     span,
                 )?;
+                Ok(slot)
+            }
+            Expr::Binary {
+                op: BinaryOp::Eq | BinaryOp::NotEq,
+                lhs,
+                rhs,
+            } if matches!(checked.types[lhs], Ty::Class(_)) => {
+                let left = self.expr(lhs, None)?;
+                let right = self.expr(rhs, None)?;
+                let slot = self.dst(dst);
+                self.asm.emit(
+                    Op::RecordEq,
+                    Operands::abc(slot.into(), left.into(), right.into()),
+                    span,
+                )?;
+                if matches!(
+                    ast.exprs[e],
+                    Expr::Binary {
+                        op: BinaryOp::NotEq,
+                        ..
+                    }
+                ) {
+                    let zero = self.temp();
+                    self.asm.load(zero, 0, ValueType::Bool, span)?;
+                    self.asm.emit(
+                        Op::CsetEq,
+                        Operands::abc(slot.into(), slot.into(), zero.into()),
+                        span,
+                    )?;
+                }
                 Ok(slot)
             }
             Expr::Binary {
@@ -2805,6 +3013,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     )?;
                     self.asm.branch_if(Cond::Ne, temp, zero, fail, span)?;
                 }
+                ValueType::Record(_) | ValueType::NullableRecord(_) => {
+                    self.asm.emit(
+                        Op::RecordEq,
+                        Operands::abc(temp.into(), left.into(), right.into()),
+                        span,
+                    )?;
+                    self.asm.branch_test(Test::False, temp, fail, span);
+                }
                 ValueType::NullableString => {
                     self.asm.emit(
                         Op::NullableEq,
@@ -3042,6 +3258,89 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
         }
         Ok(())
+    }
+
+    fn class_literal(
+        &mut self,
+        id: eitri_syntax::ast::StructId,
+        fields: eitri_base::List<eitri_syntax::ast::FieldInit>,
+        dst: Option<u32>,
+        span: Span,
+    ) -> Lowered<u32> {
+        let ast = self.input.ast;
+        let result = self.dst(dst);
+        let declared = ast.params(ast.structs[id].fields);
+        let entries = &ast.field_inits[fields];
+        let first = self.top;
+        self.top += (declared.len() as u32).max(1);
+        let end = self.top;
+        if declared.is_empty() {
+            self.asm.load(first, 0, ValueType::I64, span)?;
+        }
+        for field in entries
+            .iter()
+            .filter(|field| self.input.tokens.kind(field.name) != eitri_syntax::TokenKind::DotDot)
+        {
+            let index = declared
+                .iter()
+                .position(|item| {
+                    self.input.tokens.symbol(item.name) == self.input.tokens.symbol(field.name)
+                })
+                .expect("checked field");
+            self.expr(field.value, Some(first + index as u32))?;
+            self.top = end;
+        }
+        let base = entries
+            .last()
+            .filter(|field| self.input.tokens.kind(field.name) == eitri_syntax::TokenKind::DotDot)
+            .map(|field| field.value);
+        if let Some(base) = base {
+            let source = self.expr(base, None)?;
+            for (index, field) in declared.iter().enumerate() {
+                if !entries.iter().any(|init| {
+                    self.input.tokens.kind(init.name) != eitri_syntax::TokenKind::DotDot
+                        && self.input.tokens.symbol(init.name)
+                            == self.input.tokens.symbol(field.name)
+                }) {
+                    self.asm.emit(
+                        Op::RecordGet,
+                        Operands::abc(
+                            (first + index as u32).into(),
+                            source.into(),
+                            (index as u32).into(),
+                        ),
+                        span,
+                    )?;
+                }
+            }
+            self.top = end;
+        }
+        for (index, field) in declared.iter().enumerate() {
+            if base.is_none()
+                && let Some(default) = field.default
+                && !entries.iter().any(|init| {
+                    self.input.tokens.kind(init.name) != eitri_syntax::TokenKind::DotDot
+                        && self.input.tokens.symbol(init.name)
+                            == self.input.tokens.symbol(field.name)
+                })
+            {
+                if self.default_depth >= 16 || self.default_expansions >= 65_536 {
+                    return Err(AsmError::CodeTooLarge);
+                }
+                self.default_depth += 1;
+                self.default_expansions += 1;
+                let value = self.expr(default, Some(first + index as u32));
+                self.default_depth -= 1;
+                value?;
+                self.top = end;
+            }
+        }
+        self.asm.emit(
+            Op::RecordNew,
+            Operands::abc(result.into(), first.into(), id.as_u32().into()),
+            span,
+        )?;
+        Ok(result)
     }
 
     fn match_scalar(

@@ -584,7 +584,18 @@ impl<'i> Checker<'_, 'i> {
             TypeExpr::OptionalBool(_) => return Ty::OptionalBool,
             TypeExpr::OptionalNamed(token) => {
                 let inner = self.ty(TypeExpr::Named(token), false);
-                return inner.optional_of().unwrap_or(Ty::Error);
+                return if let Some(optional) = inner.optional_of() {
+                    optional
+                } else {
+                    if inner != Ty::Error {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: optional class types",
+                            self.token_span(token),
+                        );
+                    }
+                    Ty::Error
+                };
             }
             TypeExpr::OptionalScalar(token) => {
                 return match type_name(self.symbol(token)) {
@@ -631,7 +642,12 @@ impl<'i> Checker<'_, 'i> {
                     .flatten()
                     .is_some() =>
             {
-                Ty::Struct(self.struct_names[self.symbol(token).index()].unwrap())
+                let id = self.struct_names[self.symbol(token).index()].unwrap();
+                if self.ast().structs[id].is_class {
+                    Ty::Class(id)
+                } else {
+                    Ty::Struct(id)
+                }
             }
             TypeName::Unknown => {
                 self.report(
@@ -692,6 +708,13 @@ impl<'i> Checker<'_, 'i> {
         }
         // Struct names are indexed by interned symbol, so type lookup is O(1).
         for (id, decl) in ast.structs.iter_enumerated() {
+            if decl.is_class && id.index() > 255 {
+                self.report(
+                    Code::Limit,
+                    "implementation limit: class declaration index exceeds 255",
+                    self.token_span(decl.name),
+                );
+            }
             let symbol = self.symbol(decl.name);
             if symbol.index() >= self.struct_names.len() {
                 self.struct_names.resize(symbol.index() + 1, None);
@@ -799,6 +822,16 @@ impl<'i> Checker<'_, 'i> {
             let mut field_count = 0;
             for field in ast.params(decl.fields) {
                 let ty = self.ty(field.ty, false);
+                if decl.is_class
+                    && (matches!(ty, Ty::Struct(_) | Ty::Enum(_))
+                        || ty.tagged_optional_inner().is_some())
+                {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: multi-slot class fields",
+                        self.token_span(field.name),
+                    );
+                }
                 if ast
                     .params(decl.fields)
                     .iter()
@@ -852,17 +885,17 @@ impl<'i> Checker<'_, 'i> {
             }
             if let Some(receiver) = decl.receiver {
                 let ty = self.ty(TypeExpr::Named(receiver), false);
-                if !matches!(ty, Ty::Struct(_) | Ty::Enum(_) | Ty::Error) {
+                if !matches!(ty, Ty::Struct(_) | Ty::Class(_) | Ty::Enum(_) | Ty::Error) {
                     self.report(
                         Code::TypeMismatch,
-                        "extension requires a struct or enum",
+                        "extension requires a struct, class or enum",
                         self.token_span(receiver),
                     );
                 }
-                if matches!(ty, Ty::Enum(_)) && decl.mutating {
+                if matches!(ty, Ty::Enum(_) | Ty::Class(_)) && decl.mutating {
                     self.report(
                         Code::TypeMismatch,
-                        "enum methods cannot be mutating",
+                        "enum and class methods cannot be mutating",
                         self.token_span(decl.name),
                     );
                 }
@@ -1330,7 +1363,9 @@ impl<'i> Checker<'_, 'i> {
                     },
                     _ => None,
                 };
-                if !binding.is_some_and(|b| self.out.bindings[b].mutable) {
+                if !matches!(self.out.types[base], Ty::Class(_))
+                    && !binding.is_some_and(|b| self.out.bindings[b].mutable)
+                {
                     self.report(
                         Code::AssignToImmutable,
                         "cannot assign through an immutable value",
@@ -1479,7 +1514,10 @@ impl<'i> Checker<'_, 'i> {
                 return;
             }
         };
-        let mutable = binding.is_some_and(|b| self.out.bindings[b].mutable);
+        let mutable = binding.is_some_and(|b| {
+            self.out.bindings[b].mutable
+                || (field.is_some() && matches!(self.out.bindings[b].ty, Ty::Class(_)))
+        });
         if !mutable {
             let spelling = self.spelling(target);
             self.report(
@@ -1489,7 +1527,7 @@ impl<'i> Checker<'_, 'i> {
             );
         }
         if let Some((binding, index, _)) = field {
-            let Ty::Struct(owner) = self.out.bindings[binding].ty else {
+            let (Ty::Struct(owner) | Ty::Class(owner)) = self.out.bindings[binding].ty else {
                 unreachable!()
             };
             if self.input.ast.params(self.input.ast.structs[owner].fields)[index as usize].readonly
@@ -2016,7 +2054,7 @@ impl<'i> Checker<'_, 'i> {
             return None;
         }
         let binding = self.current?.self_binding?;
-        let Ty::Struct(id) = self.out.bindings[binding].ty else {
+        let (Ty::Struct(id) | Ty::Class(id)) = self.out.bindings[binding].ty else {
             return None;
         };
         let fields = self.input.ast.params(self.input.ast.structs[id].fields);
@@ -2854,7 +2892,14 @@ impl<'i> Checker<'_, 'i> {
             }
         }
         if let Some(base) = base {
-            self.value(base, Some(Ty::Struct(id)));
+            self.value(
+                base,
+                Some(if decl.is_class {
+                    Ty::Class(id)
+                } else {
+                    Ty::Struct(id)
+                }),
+            );
         }
         if base.is_none()
             && declared
@@ -2865,12 +2910,16 @@ impl<'i> Checker<'_, 'i> {
             self.report(Code::TypeMismatch, "missing struct field", self.span(expr));
         }
         self.out.resolutions[expr] = Res::Struct(id);
-        Ty::Struct(id)
+        if decl.is_class {
+            Ty::Class(id)
+        } else {
+            Ty::Struct(id)
+        }
     }
 
     fn check_readonly_path(&mut self, mut expr: ExprId) {
         while let Expr::Member { base, name } = self.input.ast.exprs[expr] {
-            if let (Ty::Struct(id), Res::Field(index)) =
+            if let (Ty::Struct(id) | Ty::Class(id), Res::Field(index)) =
                 (self.out.types[base], self.out.resolutions[expr])
                 && self.input.ast.params(self.input.ast.structs[id].fields)[index as usize].readonly
             {
@@ -2901,17 +2950,17 @@ impl<'i> Checker<'_, 'i> {
         let may_be_struct = match self.input.ast.exprs[base] {
             Expr::Name(token) => match self.lookup(self.symbol(token)) {
                 Some(Name::Binding(binding)) => self.receiver_field(token).map_or(
-                    matches!(self.out.bindings[binding].ty, Ty::Struct(_)),
-                    |(_, _, ty)| matches!(ty, Ty::Struct(_)),
+                    matches!(self.out.bindings[binding].ty, Ty::Struct(_) | Ty::Class(_)),
+                    |(_, _, ty)| matches!(ty, Ty::Struct(_) | Ty::Class(_)),
                 ),
                 _ => self
                     .receiver_field(token)
-                    .is_some_and(|(_, _, ty)| matches!(ty, Ty::Struct(_))),
+                    .is_some_and(|(_, _, ty)| matches!(ty, Ty::Struct(_) | Ty::Class(_))),
             },
             _ => true,
         };
         if may_be_struct {
-            if let Ty::Struct(id) = self.value(base, None) {
+            if let Ty::Struct(id) | Ty::Class(id) = self.value(base, None) {
                 let fields = self.input.ast.params(self.input.ast.structs[id].fields);
                 if let Some(index) = fields
                     .iter()
@@ -3054,7 +3103,7 @@ impl<'i> Checker<'_, 'i> {
             && !matches!(ast.exprs[base], Expr::Name(token) if matches!(self.lookup(self.symbol(token)), Some(Name::Module(_))))
         {
             let receiver = self.value(base, None);
-            if matches!(receiver, Ty::Struct(_) | Ty::Enum(_)) {
+            if matches!(receiver, Ty::Struct(_) | Ty::Class(_) | Ty::Enum(_)) {
                 let method = self
                     .methods
                     .iter()
@@ -3468,7 +3517,7 @@ impl<'i> Checker<'_, 'i> {
             return Some(Ty::FindOffset);
         }
         if let Expr::Member { base, name } = self.ast().exprs[expr]
-            && let Some(Ty::Struct(id)) = self.hint_at(base, depth + 1)
+            && let Some(Ty::Struct(id) | Ty::Class(id)) = self.hint_at(base, depth + 1)
         {
             let fields = self.ast().params(self.ast().structs[id].fields);
             let index = fields

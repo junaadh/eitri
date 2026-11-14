@@ -2509,3 +2509,26 @@ execution 209/292 ns, total 9,459/9,959 ns; retained context memory was
 30,898 B. This benchmark does not exercise match bindings. Samples:
 `/private/tmp/eitri-t017-49-samples.csv`; report:
 `/private/tmp/eitri-t017-49-bench.txt`.
+
+### T017-50 heap-backed class identity
+
+Classes with single-slot fields allocate non-moving record objects. The collector
+traces their reference edges with a context-owned worklist reserved at object
+allocation; marking is expected O(roots + objects + edges), subject to hash
+collisions, and collection does not allocate. Construction, shallow update,
+identity equality, mutation and script calls run on both interpreters. Nullable
+record slots carry class references through enum and optional-aggregate layouts.
+The class fixture runs both lowerers and interpreters with forced collection;
+malformed record shapes and field indices are rejected by the verifier. Class
+methods, optional class types and multi-slot class fields remain future work.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 10.7/12.2 µs,
+execution 291/375 ns, total 11.0/12.5 µs; 48 allocations (5,048 B), 3,184 B
+metadata and 31,047 B retained context. T017-49 measured 9,250/9,709 ns compile,
+209/292 ns execution, 9,459/9,959 ns total, 48 allocations (4,762 B), 2,978 B
+metadata and 30,898 B retained. The tagged bytecode value type and additional
+function metadata increase scalar-path storage; the latency comparison is from
+single runs and this workload does not execute classes. Samples:
+`/private/tmp/eitri-t017-50-samples.csv`; report:
+`/private/tmp/eitri-t017-50-bench.txt`.

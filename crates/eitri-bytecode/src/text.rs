@@ -34,7 +34,13 @@ pub struct HostDecl {
 /// The entry function's name. Not a script identifier, so it cannot clash.
 pub const MODULE: &str = "<module>";
 
-fn type_name(ty: Option<ValueType>) -> &'static str {
+fn type_name(ty: Option<ValueType>) -> String {
+    if let Some(ValueType::Record(id)) = ty {
+        return format!("record_{id}");
+    }
+    if let Some(ValueType::NullableRecord(id)) = ty {
+        return format!("nullable_record_{id}");
+    }
     match ty {
         Some(ValueType::I64) => "i64",
         Some(ValueType::I8) => "i8",
@@ -46,8 +52,10 @@ fn type_name(ty: Option<ValueType>) -> &'static str {
         Some(ValueType::String) => "string",
         Some(ValueType::NullableString) => "nullable_string",
         Some(ValueType::Bool) => "bool",
+        Some(ValueType::Record(_) | ValueType::NullableRecord(_)) => unreachable!(),
         None => "void",
     }
+    .to_owned()
 }
 
 fn mnemonic(op: Op) -> String {

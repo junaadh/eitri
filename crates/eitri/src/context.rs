@@ -313,9 +313,15 @@ impl Context {
         let functions = &mut compiled.program.functions;
         let hosts = eitri_lower::host_signatures(&self.hosts);
         let signatures = Program::signatures_of(functions);
+        let record_shapes = functions
+            .iter()
+            .next()
+            .map(|f| f.record_shapes.clone())
+            .unwrap_or_default();
         let callees = Callees {
             functions: &signatures,
             hosts: &hosts,
+            record_shapes: &record_shapes,
         };
         // Validate the retained artifact before any rewrites. Unsupported
         // metadata is preserved verbatim instead of silently regenerated.
@@ -326,6 +332,7 @@ impl Context {
         let mut kept = IndexVec::with_capacity(bodies.len());
         for (function, body) in functions.as_mut_slice().iter_mut().zip(bodies.iter()) {
             if !function.reentry_safe
+                || !function.record_shapes.is_empty()
                 || !function.strings.is_empty()
                 || function
                     .signature
@@ -733,9 +740,15 @@ impl Context {
             ));
         }
         let signatures = Program::signatures_of(&functions);
+        let record_shapes = functions
+            .iter()
+            .next()
+            .map(|f| f.record_shapes.clone())
+            .unwrap_or_default();
         let callees = Callees {
             functions: &signatures,
             hosts: &registered,
+            record_shapes: &record_shapes,
         };
         let managed = functions.iter().any(|f| {
             let mut pc = 0;
@@ -753,6 +766,7 @@ impl Context {
                 pc += decoded.words as usize;
             }
             nullable
+                || !f.record_shapes.is_empty()
                 || !f.strings.is_empty()
                 || f.signature
                     .params
@@ -793,6 +807,11 @@ impl Context {
         let callees = Callees {
             functions: &signatures,
             hosts: &registered,
+            record_shapes: program
+                .functions
+                .iter()
+                .next()
+                .map_or(&[], |f| &f.record_shapes),
         };
         for f in program.functions.iter() {
             if let Err(error) = eitri_bytecode::verify(f, &callees) {
@@ -1047,6 +1066,11 @@ impl Compiled {
                         + size_of_val(&*f.strings)
                         + f.strings.iter().map(|s| s.len()).sum::<usize>()
                         + size_of_val(&*f.sites)
+                        + size_of_val(&*f.record_shapes)
+                        + f.record_shapes
+                            .iter()
+                            .map(|shape| size_of_val(shape.as_ref()))
+                            .sum::<usize>()
                         + f.roots.heap_bytes()
                         + size_of_val(&*f.literal_types)
                         + size_of_val(&*f.starts)
@@ -1146,6 +1170,11 @@ fn verify(
     let callees = Callees {
         functions: &signatures,
         hosts: &host_signatures,
+        record_shapes: program
+            .functions
+            .iter()
+            .next()
+            .map_or(&[], |f| &f.record_shapes),
     };
     for f in program.functions.iter() {
         if let Err(error) = eitri_bytecode::verify_budgeted(f, &callees, memory) {
@@ -1256,6 +1285,7 @@ mod root_optimizer_tests {
         let callees = Callees {
             functions: &signatures,
             hosts: &hosts,
+            record_shapes: &[],
         };
         let function = &mut compiled.program.functions.as_mut_slice()[0];
         assert!(eitri_bytecode::verify(function, &callees).is_ok());

@@ -262,6 +262,7 @@ struct Headers<'a> {
     functions: FxHashMap<&'a str, FunctionId>,
     hosts: Vec<(HostDecl, Span)>,
     host_index: FxHashMap<&'a str, u32>,
+    record_shapes: Vec<Box<[ValueType]>>,
 }
 
 impl<'a> Parser<'_, 'a> {
@@ -354,6 +355,23 @@ impl<'a> Parser<'_, 'a> {
             "nullable_string" => Ok((Some(ValueType::NullableString), span)),
             "bool" => Ok((Some(ValueType::Bool), span)),
             "void" if void_ok => Ok((None, span)),
+            word if word
+                .strip_prefix("nullable_record_")
+                .and_then(|id| id.parse::<u32>().ok())
+                .is_some() =>
+            {
+                Ok((
+                    Some(ValueType::NullableRecord(word[16..].parse().unwrap())),
+                    span,
+                ))
+            }
+            word if word
+                .strip_prefix("record_")
+                .and_then(|id| id.parse::<u32>().ok())
+                .is_some() =>
+            {
+                Ok((Some(ValueType::Record(word[7..].parse().unwrap())), span))
+            }
             _ => Err(syntax(span, format!("expected a type, found `{word}`"))),
         }
     }
@@ -388,10 +406,26 @@ impl<'a> Parser<'_, 'a> {
             functions: FxHashMap::default(),
             hosts: Vec::new(),
             host_index: FxHashMap::default(),
+            record_shapes: Vec::new(),
         };
         loop {
             match self.peek().tok {
                 Tok::End => return Ok(headers),
+                Tok::Word("record_shape") => {
+                    self.next();
+                    self.punct(b'(')?;
+                    let mut fields = Vec::new();
+                    if !self.eat_punct(b')') {
+                        loop {
+                            fields.push(self.value_type()?.0);
+                            if self.eat_punct(b')') {
+                                break;
+                            }
+                            self.punct(b',')?;
+                        }
+                    }
+                    headers.record_shapes.push(fields.into_boxed_slice());
+                }
                 Tok::Word("declare") => {
                     self.next();
                     let (ret, _) = self.ty(true)?;
@@ -566,6 +600,7 @@ impl<'a> Body<'_, '_, 'a> {
             ir::assemble(&body, define.name, define.signature.clone(), asm)
                 .map_err(|error| mismatch(define.frame.1, format!("cannot assemble: {error:?}")))?;
         function.strings = strings.into_boxed_slice();
+        function.record_shapes = self.headers.record_shapes.clone().into_boxed_slice();
         function.reentry_safe = define.reentry_safe;
         if function.frame_size != define.frame.0 {
             return Err(mismatch(

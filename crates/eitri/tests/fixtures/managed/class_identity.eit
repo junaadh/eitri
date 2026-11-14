@@ -1,0 +1,23 @@
+//! host: test
+import test from "test"
+class Player { score: i64, name: string }
+fn change(player: Player) -> void { player.score += 2 }
+let p = Player { score: 3, name: "rooted" }
+let q = p
+q.score = 5
+change(p)
+test.check(p.score == 7 && q.score == 7)
+test.check(p == q && p != Player { score: 7, name: "rooted" })
+let copy = Player { score: 10, ..p }
+test.check(copy != p && copy.name == "rooted")
+class Parent { child: Player }
+struct Box { player: Player }
+let parent = Parent { child: p }
+test.check(parent.child == p && parent.child.name == "rooted")
+test.check(Box { player: p } == Box { player: q })
+enum Selection { None, Chosen(player: Player), Boxed(value: Box) }
+let chosen = Selection.Chosen(p)
+test.check(match chosen { .None => false, .Chosen(player) => player == q, .Boxed(_) => false })
+let no_box: ?Box = null
+let yes_box: ?Box = Box { player: p }
+test.check(no_box == null && (yes_box ?? Box { player: q }).player == p)

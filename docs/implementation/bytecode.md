@@ -401,7 +401,9 @@ instructions. `STR.SLICE` reads a contiguous string/start/end window, and
 `STR.FIND` uses -1 internally for a missing nonnegative byte offset. The
 verifier checks the full operand window and roots. String literals use a
 per-function UTF-8 literal pool; `.eits` represents each
-pool entry as `literal h` followed by its hexadecimal bytes. Update this
+pool entry as `literal h` followed by its hexadecimal bytes. Record instructions
+use verified nominal field shapes and the managed collector; `.eits` records the
+shape table before the function definitions. Update this
 manifest with `python3 tools/update_opcode_manifest.py`.
 
 | Family | Opcodes | Variants |
@@ -425,7 +427,8 @@ manifest with `python3 tools/update_opcode_manifest.py`.
 | `CALL` | 3 | script, host, value |
 | `RET`, `TRAP`, `WIDE` | 3 | |
 | `STR` | 31 | managed string allocation and byte length |
-| **Total** | **196** | 60 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
+| `RECORD` | 7 | allocation, field access, identity, and nullable references |
+| **Total** | **203** | 53 left for maps, optionals and enums, closures, `dyn`, tasks, and quickened forms |
 
 `SHR` immediate forms need no width, because the amount is checked at
 compile time and a canonical value shifted right stays canonical. `LDF_X`

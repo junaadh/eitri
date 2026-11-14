@@ -212,6 +212,7 @@ enum Value {
     OptionalStruct(eitri_syntax::ast::StructId, Option<u32>),
     OptionalEnum(eitri_syntax::ast::EnumId, Option<(u32, u32)>),
     Struct(eitri_syntax::ast::StructId, u32),
+    Class(eitri_syntax::ast::StructId, u32),
     Enum(eitri_syntax::ast::EnumId, u32, u32),
     Void,
 }
@@ -258,6 +259,7 @@ impl Value {
             Self::OptionalStruct(id, _) => Ty::OptionalStruct(id),
             Self::OptionalEnum(id, _) => Ty::OptionalEnum(id),
             Self::Struct(id, _) => Ty::Struct(id),
+            Self::Class(id, _) => Ty::Class(id),
             Self::Enum(id, _, _) => Ty::Enum(id),
             Self::Scalar(ty, _) => ty,
             Self::Void => Ty::Void,
@@ -313,6 +315,7 @@ impl Value {
             | Value::OptionalStruct(_, _)
             | Value::OptionalEnum(_, _)
             | Value::Struct(_, _)
+            | Value::Class(_, _)
             | Value::Enum(_, _, _)
             | Value::Void => {
                 unreachable!("the checker rejects managed or void host arguments")
@@ -415,6 +418,25 @@ impl Eval<'_> {
             }
             Stmt::Assign {
                 op, value, span, ..
+            } if self.checked.stmt_fields[id].is_some()
+                && self.checked.stmt_bindings[id]
+                    .is_some_and(|b| matches!(self.checked.bindings[b].ty, Ty::Class(_))) =>
+            {
+                let binding = self.checked.stmt_bindings[id].unwrap();
+                let field = self.checked.stmt_fields[id].unwrap() as usize;
+                let Value::Class(_, index) = self.read(binding) else {
+                    unreachable!()
+                };
+                let old = self.structs[index as usize][field];
+                let rhs = self.expr(host, value)?;
+                let result = match op {
+                    AssignOp::Set => rhs,
+                    AssignOp::Compound(op) => self.binary_values(op, old, rhs, span)?,
+                };
+                self.structs[index as usize][field] = result;
+            }
+            Stmt::Assign {
+                op, value, span, ..
             } => {
                 let binding = self.checked.stmt_bindings[id].expect("checked assignment");
                 let rhs = self.expr(host, value)?;
@@ -442,6 +464,30 @@ impl Eval<'_> {
                     };
                     self.locals[binding.index()] = Some(new);
                 }
+            }
+            Stmt::AssignField {
+                target,
+                op,
+                value,
+                span,
+            } if matches!(self.ast.exprs[target], Expr::Member { base, .. } if matches!(self.checked.types[base], Ty::Class(_))) =>
+            {
+                let Expr::Member { base, .. } = self.ast.exprs[target] else {
+                    unreachable!()
+                };
+                let Res::Field(field) = self.checked.resolutions[target] else {
+                    unreachable!()
+                };
+                let Value::Class(_, index) = self.expr(host, base)? else {
+                    unreachable!()
+                };
+                let old = self.structs[index as usize][field as usize];
+                let rhs = self.expr(host, value)?;
+                let result = match op {
+                    AssignOp::Set => rhs,
+                    AssignOp::Compound(op) => self.binary_values(op, old, rhs, span)?,
+                };
+                self.structs[index as usize][field as usize] = result;
             }
             Stmt::AssignField {
                 target,
@@ -852,7 +898,9 @@ impl Eval<'_> {
                     result[index] = self.expr(host, field.value)?;
                 }
                 if let Some(base) = base {
-                    let Value::Struct(_, index) = self.expr(host, base)? else {
+                    let (Value::Struct(_, index) | Value::Class(_, index)) =
+                        self.expr(host, base)?
+                    else {
                         unreachable!()
                     };
                     for (slot, value) in result.iter_mut().zip(&self.structs[index as usize]) {
@@ -871,13 +919,18 @@ impl Eval<'_> {
                 }
                 let index = self.structs.len() as u32;
                 self.structs.push(result);
-                Ok(Value::Struct(id, index))
+                Ok(if self.ast.structs[id].is_class {
+                    Value::Class(id, index)
+                } else {
+                    Value::Struct(id, index)
+                })
             }
             Expr::Member { base, .. } if matches!(self.checked.resolutions[e], Res::Field(_)) => {
                 let Res::Field(field) = self.checked.resolutions[e] else {
                     unreachable!()
                 };
-                let Value::Struct(_, index) = self.expr(host, base)? else {
+                let (Value::Struct(_, index) | Value::Class(_, index)) = self.expr(host, base)?
+                else {
                     unreachable!()
                 };
                 Ok(self.structs[index as usize][field as usize])
@@ -931,7 +984,8 @@ impl Eval<'_> {
             Expr::SelfValue(_) | Expr::Name(_) => match self.checked.resolutions[e] {
                 Res::Binding(binding) => Ok(self.read(binding)),
                 Res::SelfField(binding, field) => {
-                    let Value::Struct(_, index) = self.read(binding) else {
+                    let (Value::Struct(_, index) | Value::Class(_, index)) = self.read(binding)
+                    else {
                         unreachable!()
                     };
                     Ok(self.structs[index as usize][field as usize])
@@ -1541,6 +1595,10 @@ impl Eval<'_> {
     fn binary_values(&mut self, op: BinaryOp, a: Value, b: Value, span: Span) -> Flow<Value> {
         use BinaryOp::*;
         let ty = a.ty();
+        if matches!(ty, Ty::Class(_)) {
+            let equal = a == b;
+            return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
+        }
         if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
             let equal = self.aggregate_equal(a, b);
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));

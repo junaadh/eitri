@@ -1,0 +1,16 @@
+//! host: test
+import test from "test"
+class Counter { count: i64, name: string }
+extend Counter {
+    fn add(value: i64) -> void { self.count += value }
+    fn increment() -> void { count += 1 }
+    fn name_copy() -> string { return name }
+    fn twice() -> void { increment(); self.increment() }
+    static fn make() -> Counter { return Counter { count: 1, name: "counter" } }
+}
+let first = Counter.make()
+let alias = first
+first.add(5)
+alias.twice()
+test.check(first.count == 8 && alias.count == 8)
+test.check(first.name_copy() == "counter")

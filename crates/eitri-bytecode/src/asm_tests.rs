@@ -22,6 +22,7 @@ fn check(f: &Function) -> Result<(), VerifyError> {
         &Callees {
             functions: &functions,
             hosts: &hosts,
+            record_shapes: &[],
         },
     )
 }
@@ -900,6 +901,7 @@ fn managed_string_roots_are_verified_against_slot_types() {
     let callees = Callees {
         functions: &signatures,
         hosts: &[],
+        record_shapes: &[],
     };
     f.roots = string_roots(&f, &callees).unwrap();
     verify(&f, &callees).unwrap();
@@ -943,6 +945,7 @@ fn string_join_verifies_every_part_and_roots_the_whole_window() {
     let callees = Callees {
         functions: &signatures,
         hosts: &[],
+        record_shapes: &[],
     };
     f.roots = string_roots(&f, &callees).unwrap();
     verify(&f, &callees).unwrap();
@@ -971,6 +974,7 @@ fn string_slice_checks_its_full_operand_window() {
     let callees = Callees {
         functions: &signatures,
         hosts: &[],
+        record_shapes: &[],
     };
     f.roots = string_roots(&f, &callees).unwrap();
     verify(&f, &callees).unwrap();
@@ -1010,6 +1014,7 @@ fn scalar_format_requires_the_exact_operand_type() {
     let callees = Callees {
         functions: &signatures,
         hosts: &[],
+        record_shapes: &[],
     };
     assert!(matches!(
         string_roots(&f, &callees).unwrap_err().kind,
@@ -1032,6 +1037,7 @@ fn interpolation_plan_checks_types_window_and_roots() {
     let callees = Callees {
         functions: &signatures,
         hosts: &[],
+        record_shapes: &[],
     };
     f.roots = string_roots(&f, &callees).unwrap();
     verify(&f, &callees).unwrap();
@@ -1056,5 +1062,37 @@ fn interpolation_plan_checks_types_window_and_roots() {
     assert_eq!(
         verify(&f, &callees).unwrap_err().kind,
         ErrorKind::RootMissing(2)
+    );
+}
+
+#[test]
+fn record_fields_and_program_shapes_are_verified() {
+    let mut asm = Assembler::new();
+    asm.load(1, 3, I64, S).unwrap();
+    asm.emit(Op::RecordNew, Operands::abc(2, 1, 0), S).unwrap();
+    asm.emit(Op::RecordGet, Operands::abc(0, 2, 1), S).unwrap();
+    asm.ret(S).unwrap();
+    let mut function = asm.finish("bad_field", sig(&[], &[I64])).unwrap();
+    function.record_shapes = vec![vec![I64].into_boxed_slice()].into_boxed_slice();
+    let signatures = IndexVec::from_raw(vec![function.signature.clone()]);
+    let shapes = function.record_shapes.clone();
+    let callees = Callees {
+        functions: &signatures,
+        hosts: &[],
+        record_shapes: &shapes,
+    };
+    assert_eq!(
+        verify(&function, &callees).unwrap_err().kind,
+        ErrorKind::InvalidScalar("invalid record field")
+    );
+    let incompatible = [vec![Bool].into_boxed_slice()];
+    let callees = Callees {
+        functions: &signatures,
+        hosts: &[],
+        record_shapes: &incompatible,
+    };
+    assert_eq!(
+        verify(&function, &callees).unwrap_err().kind,
+        ErrorKind::InvalidScalar("inconsistent record shapes")
     );
 }

@@ -320,7 +320,7 @@ impl Parser<'_> {
                 self.bump();
                 self.item(items_seen)
             }
-            T::Struct if self.kind == ModuleKind::Script => {
+            T::Struct | T::Class if self.kind == ModuleKind::Script => {
                 self.struct_decl()?;
                 Ok(())
             }
@@ -580,6 +580,7 @@ impl Parser<'_> {
     }
 
     fn struct_decl(&mut self) -> Parsed<()> {
+        let is_class = self.at(T::Class);
         self.bump();
         let name = self.expect(T::Ident, "a struct name")?;
         self.expect(T::LBrace, "`{`")?;
@@ -608,9 +609,11 @@ impl Parser<'_> {
         }
         self.expect(T::RBrace, "`}`")?;
         let fields = self.ast.params.push(&fields);
-        self.ast
-            .structs
-            .push(crate::ast::StructDecl { name, fields });
+        self.ast.structs.push(crate::ast::StructDecl {
+            name,
+            fields,
+            is_class,
+        });
         Ok(())
     }
 

@@ -3,13 +3,13 @@ use crate::{DecodeError, EncodeError, Operands, decode, disassemble, encode};
 
 #[test]
 fn inventory_matches_the_manifest() {
-    assert_eq!(Op::ALL.len(), 196, "the documented inventory");
+    assert_eq!(Op::ALL.len(), 203, "the documented inventory");
     // Numbering is the table order, so it is deterministic.
     for (index, &op) in Op::ALL.iter().enumerate() {
         assert_eq!(op as usize, index);
         assert_eq!(Op::from_byte(index as u8), Some(op));
     }
-    assert_eq!(Op::from_byte(196), None);
+    assert_eq!(Op::from_byte(203), None);
     let mut names: Vec<&str> = OPS.iter().map(|info| info.name).collect();
     names.sort();
     names.dedup();
@@ -42,7 +42,7 @@ fn inventory_matches_the_manifest() {
         assert_eq!(actual, documented, "families {families:?}");
         rows += 1;
     }
-    assert_eq!(rows, 19, "every manifest row was checked");
+    assert_eq!(rows, 20, "every manifest row was checked");
 }
 
 #[test]
@@ -383,7 +383,7 @@ fn malformed_code_is_rejected() {
         Err(DecodeError::Reserved)
     );
     // Opcodes past the table.
-    assert_eq!(decode(&[200], 0), Err(DecodeError::UnknownOpcode(200)));
+    assert_eq!(decode(&[255], 0), Err(DecodeError::UnknownOpcode(255)));
 }
 
 #[test]
