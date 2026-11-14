@@ -245,6 +245,7 @@ fn value_type(
 ) -> Ty {
     if let TypeExpr::ResultFixed(token, _, _)
     | TypeExpr::ResultNestedFixed(token, _, _)
+    | TypeExpr::ResultOptionalFixed(token, _, _)
     | TypeExpr::ResultNamed(token, _)
     | TypeExpr::ResultOptional(token, _)
     | TypeExpr::OptionalResultNamed(token, _)
@@ -261,6 +262,7 @@ fn value_type(
     | TypeExpr::FixedNestedOptional(token, _, _)
     | TypeExpr::FixedNestedResult(token, _, _)
     | TypeExpr::OptionalFixed(token, _)
+    | TypeExpr::OptionalFixedResult(token, _, _)
     | TypeExpr::OptionalNestedFixed(token, _, _)
     | TypeExpr::FixedOptional(token, _)
     | TypeExpr::FixedResult(token, _, _)

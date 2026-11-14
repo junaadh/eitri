@@ -264,6 +264,15 @@ impl Dumper<'_> {
 
     fn written_type(&self, ty: TypeExpr) -> String {
         match ty {
+            TypeExpr::ResultOptionalFixed(error, size, element) => self.paint(
+                TYPE,
+                &format!(
+                    "'{}!?[{}]{}'",
+                    self.token(error),
+                    self.token(size),
+                    self.token(element)
+                ),
+            ),
             TypeExpr::ResultNestedFixed(error, size, element) => self.paint(
                 TYPE,
                 &format!(
@@ -302,6 +311,7 @@ impl Dumper<'_> {
             | TypeExpr::FixedNestedOptional(size, _, _)
             | TypeExpr::FixedNestedResult(size, _, _)
             | TypeExpr::OptionalFixed(size, _)
+            | TypeExpr::OptionalFixedResult(size, _, _)
             | TypeExpr::OptionalNestedFixed(size, _, _)
             | TypeExpr::FixedOptional(size, _)
             | TypeExpr::FixedResult(size, _, _)
@@ -425,6 +435,7 @@ impl Dumper<'_> {
                 let end = match param.ty {
                     TypeExpr::ResultFixed(_, _, token)
                     | TypeExpr::ResultNestedFixed(_, _, token)
+                    | TypeExpr::ResultOptionalFixed(_, _, token)
                     | TypeExpr::OptionalResultOptional(_, token)
                     | TypeExpr::OptionalResultNamed(_, token)
                     | TypeExpr::ResultOptional(_, token)
@@ -433,6 +444,7 @@ impl Dumper<'_> {
                     | TypeExpr::FixedNestedOptional(token, _, _)
                     | TypeExpr::FixedNestedResult(token, _, _)
                     | TypeExpr::OptionalFixed(token, _)
+                    | TypeExpr::OptionalFixedResult(token, _, _)
                     | TypeExpr::OptionalNestedFixed(token, _, _)
                     | TypeExpr::FixedOptional(token, _)
                     | TypeExpr::FixedResult(token, _, _)

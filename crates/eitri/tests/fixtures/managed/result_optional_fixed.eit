@@ -1,0 +1,17 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+struct Holder { value: Problem!?[2]string, marker: i64 }
+fn get(mode: i64) -> Problem!?[2]string {
+    if mode == 0 { return null }
+    if mode == 1 { return ["a", "b"] }
+    return .Err(Problem.Bad("no"))
+}
+fn relay(mode: i64) -> Problem!?[2]string { return try get(mode) }
+let holder = Holder { value: relay(1), marker: 9 }
+test.check(holder.marker == 9 && match holder.value { .Ok(items) => items[1] == "b", .Ok(null) => false, .Err => false })
+test.check(match relay(0) { .Ok(null) => true, .Ok(_) => false, .Err => false })
+test.check(match relay(2) { .Err(.Bad(text)) => text == "no", .Ok => false })
+test.check((try? get(0)) == null)
+test.check((try? get(2)) == null)
+test.check(match try? get(1) { null => false, items => items[0] == "a" })

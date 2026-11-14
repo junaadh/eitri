@@ -2825,7 +2825,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let done = self.asm.label();
                 self.asm.branch_imm(Cond::Eq, source, 0, done, span)?;
                 let offset = u32::from(
-                    success.optional_inner().is_none()
+                    self.optional_inner(success).is_none()
                         && !matches!(success, Ty::String | Ty::Class(_)),
                 );
                 if offset != 0 {
@@ -5397,18 +5397,18 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             pattern.literal.is_some()
                                 || pattern.nested_case.is_some()
                                 || (self.checked.pattern_bindings[pattern.name].is_some()
-                                    && (if self
-                                        .input
-                                        .interner
-                                        .resolve(self.input.tokens.symbol(arm.case.unwrap()))
-                                        == "Ok"
-                                    {
-                                        success
-                                    } else {
-                                        error
-                                    })
-                                    .optional_inner()
-                                    .is_some())
+                                    && self
+                                        .optional_inner(
+                                            if self.input.interner.resolve(
+                                                self.input.tokens.symbol(arm.case.unwrap()),
+                                            ) == "Ok"
+                                            {
+                                                success
+                                            } else {
+                                                error
+                                            },
+                                        )
+                                        .is_some())
                         });
             if !terminal && (index + 1 != arms.len() || partial) {
                 self.asm.jump(end, span);

@@ -808,6 +808,10 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   fixed-array sizes beyond 256, and remaining pattern and default behavior.
   Aggregate host signatures remain unsupported. T017 stays open until its
   completion criteria are verified.
+- T017-115: optional fixed arrays of results preserve null, error and success
+  payloads, equality, script calls, inline cycle checks and managed roots.
+- T017-114: result success values can be optional fixed arrays, with distinct
+  error, successful-null and successful-value states and `try?` collapse.
 - T017-113: match alternatives can bind the same names with the same types,
   including nested payloads and shared guards; mismatches reject.
 - T017-112: guarded match alternatives evaluate the guard once after the

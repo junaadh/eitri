@@ -3123,3 +3123,20 @@ arm. The 1001-sample release harness in the isolated workspace measured fresh
 module compile p50/p99 15.8/44.2 µs and source-to-result 16.1/45.3 µs on the
 general workload. Raw output and samples: `/private/tmp/eitri-t017-113-bench.txt`
 and `/private/tmp/eitri-t017-113-samples.csv`.
+
+### T017-114 optional fixed-array result successes
+
+Results preserve their error, successful-null and successful-array states;
+`try?` collapses the error and successful-null cases. The 1001-sample release
+harness in the isolated workspace measured fresh module compile p50/p99
+13.9/31.1 µs and source-to-result 14.2/31.9 µs on the general workload. Raw
+output and samples: `/private/tmp/eitri-t017-114-bench.txt` and
+`/private/tmp/eitri-t017-114-samples.csv`.
+
+### T017-115 optional fixed arrays of results
+
+Optional fixed arrays retain the presence tag and each result's error or
+success payload. The 1001-sample release harness in the isolated workspace
+measured fresh module compile p50/p99 15.2/22.8 µs and source-to-result
+15.6/23.6 µs on the general workload. Raw output and samples:
+`/private/tmp/eitri-t017-115-bench.txt` and `/private/tmp/eitri-t017-115-samples.csv`.

@@ -1079,6 +1079,25 @@ impl Parser<'_> {
         if self.at(T::QuestionBracket)
             && self.nth(1) == T::Int
             && self.nth(2) == T::RBracket
+            && self.nth(3) == T::Lt
+            && self.nth(4) == T::Ident
+            && self.nth(5) == T::Bang
+            && self.nth(6) == T::Ident
+            && self.nth(7) == T::Gt
+        {
+            self.bump();
+            let size = self.bump();
+            self.bump();
+            self.bump();
+            let error = self.bump();
+            self.bump();
+            let success = self.bump();
+            self.bump();
+            return Ok(TypeExpr::OptionalFixedResult(size, error, success));
+        }
+        if self.at(T::QuestionBracket)
+            && self.nth(1) == T::Int
+            && self.nth(2) == T::RBracket
             && self.nth(3) == T::Ident
         {
             self.bump();
@@ -1128,6 +1147,21 @@ impl Parser<'_> {
                 }
                 return Ok(TypeExpr::ResultNestedFixed(error, outer.unwrap(), element));
             }
+        }
+        if self.at(T::Ident)
+            && self.nth(1) == T::Bang
+            && self.nth(2) == T::QuestionBracket
+            && self.nth(3) == T::Int
+            && self.nth(4) == T::RBracket
+            && self.nth(5) == T::Ident
+        {
+            let error = self.bump();
+            self.bump();
+            self.bump();
+            let size = self.bump();
+            self.bump();
+            let element = self.bump();
+            return Ok(TypeExpr::ResultOptionalFixed(error, size, element));
         }
         if self.at(T::Ident)
             && self.nth(1) == T::Bang

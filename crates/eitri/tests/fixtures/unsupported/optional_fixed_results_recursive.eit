@@ -1,0 +1,2 @@
+enum Problem { Bad }
+struct Node { children: ?[1]<Problem!Node> }

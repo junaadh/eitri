@@ -1481,6 +1481,10 @@ impl Eval<'_> {
                 if let Some(pattern) = ast.match_bindings[arm.bindings].first() {
                     let payload = self.structs[payload as usize][0];
                     let present = match payload {
+                        Value::OptionalFixed(_, Some(value)) => {
+                            Some(self.structs[value as usize][0])
+                        }
+                        Value::OptionalFixed(_, None) => None,
                         Value::OptionalI64(value) => value.map(Value::Int),
                         Value::OptionalBool(value) => value.map(Value::Bool),
                         Value::OptionalString(value) => value.map(Value::String),
@@ -1680,6 +1684,7 @@ impl Eval<'_> {
                     return Ok(value);
                 }
                 Ok(match self.checked.types[e] {
+                    Ty::OptionalFixed(id) => Value::OptionalFixed(id, None),
                     Ty::OptionalString => Value::OptionalString(value.map(|v| {
                         if let Value::String(id) = v {
                             id

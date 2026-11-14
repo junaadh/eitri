@@ -1,0 +1,8 @@
+//! host: test
+import test from "test"
+enum Message { Text(value: string) }
+fn choose(ok: bool) -> Message!Message { if ok { return Message.Text("ok") }; return .Err(Message.Text("error")) }
+fn text(ok: bool) -> string {
+    return match choose(ok) { .Ok(value) | .Err(value) => match value { .Text(s) => s } }
+}
+test.check(text(true) == "ok" && text(false) == "error")

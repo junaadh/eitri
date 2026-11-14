@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+fn choose(ok: bool) -> Problem!string { if ok { return "yes" }; return .Err(Problem.Bad("no")) }
+struct Holder { values: ?[2]<Problem!string>, marker: i64 }
+let none: ?[2]<Problem!string> = null
+let some: ?[2]<Problem!string> = [choose(true), choose(false)]
+let holder = Holder { values: some, marker: 9 }
+test.check(none == null && holder.marker == 9)
+test.check(match holder.values { null => false, items => match items[0] { .Ok(s) => s == "yes", .Err => false } })
+test.check(match holder.values { null => false, items => match items[1] { .Err(.Bad(s)) => s == "no", .Ok => false } })
+fn copy(value: ?[2]<Problem!string>) -> ?[2]<Problem!string> { return value }
+test.check(copy(some) == some)
+test.check(copy(none) == null)

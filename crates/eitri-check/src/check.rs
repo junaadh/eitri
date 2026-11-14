@@ -610,9 +610,12 @@ impl<'i> Checker<'_, 'i> {
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
         match ty {
             TypeExpr::OptionalFixed(size, element)
+            | TypeExpr::OptionalFixedResult(size, _, element)
             | TypeExpr::OptionalNestedFixed(size, _, element) => {
                 let symbol = self.symbol(element);
-                let written = if let TypeExpr::OptionalNestedFixed(outer, inner, element) = ty {
+                let written = if let TypeExpr::OptionalFixedResult(size, error, success) = ty {
+                    TypeExpr::FixedResult(size, error, success)
+                } else if let TypeExpr::OptionalNestedFixed(outer, inner, element) = ty {
                     TypeExpr::FixedNested(outer, inner, element)
                 } else if symbol == eitri_base::sym::I64 {
                     TypeExpr::FixedI64(size)
@@ -642,10 +645,13 @@ impl<'i> Checker<'_, 'i> {
                 return Ty::OptionalFixed(index as u32);
             }
             TypeExpr::ResultFixed(error, size, element)
-            | TypeExpr::ResultNestedFixed(error, size, element) => {
+            | TypeExpr::ResultNestedFixed(error, size, element)
+            | TypeExpr::ResultOptionalFixed(error, size, element) => {
                 let error_ty = self.ty(TypeExpr::Named(error), false);
                 let symbol = self.symbol(element);
-                let written = if matches!(ty, TypeExpr::ResultNestedFixed(_, _, _)) {
+                let written = if matches!(ty, TypeExpr::ResultOptionalFixed(_, _, _)) {
+                    TypeExpr::OptionalFixed(size, element)
+                } else if matches!(ty, TypeExpr::ResultNestedFixed(_, _, _)) {
                     TypeExpr::FixedNested(size, TokenId::from_u32(size.as_u32() + 3), element)
                 } else if symbol == eitri_base::sym::I64 {
                     TypeExpr::FixedI64(size)
@@ -1113,21 +1119,7 @@ impl<'i> Checker<'_, 'i> {
                             | Ty::FixedClass(size, _) => u32::from(size).max(1),
                             Ty::FixedNested(size, id) => self.nested_width(size, id),
                             Ty::OptionalFixed(id) => {
-                                let inner = self.out.optional_fixed_types[id as usize];
-                                1 + match inner {
-                                    Ty::FixedI64(size)
-                                    | Ty::FixedString(size)
-                                    | Ty::FixedScalar(size, _)
-                                    | Ty::FixedClass(size, _) => u32::from(size).max(1),
-                                    Ty::FixedNested(size, id) => self.nested_width(size, id),
-                                    Ty::FixedStruct(size, id) => u32::from(size)
-                                        .saturating_mul(self.out.struct_widths[id])
-                                        .max(1),
-                                    Ty::FixedEnum(size, id) => u32::from(size)
-                                        .saturating_mul(self.out.enum_widths[id])
-                                        .max(1),
-                                    _ => 1,
-                                }
+                                1 + self.fixed_width(self.out.optional_fixed_types[id as usize])
                             }
                             Ty::FixedOptional(size, id) => {
                                 let inner = self.out.fixed_optional_types[id as usize];
@@ -1156,6 +1148,10 @@ impl<'i> Checker<'_, 'i> {
                                     | Ty::FixedString(size)
                                     | Ty::FixedScalar(size, _)
                                     | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                    Ty::OptionalFixed(id) => {
+                                        1 + self
+                                            .fixed_width(self.out.optional_fixed_types[id as usize])
+                                    }
                                     Ty::FixedNested(size, id) => self.nested_width(size, id),
                                     Ty::FixedStruct(size, id) => u32::from(size)
                                         .saturating_mul(self.out.struct_widths[id])
@@ -1296,21 +1292,7 @@ impl<'i> Checker<'_, 'i> {
                     | Ty::FixedClass(size, _) => u32::from(size).max(1),
                     Ty::FixedNested(size, id) => self.nested_width(size, id),
                     Ty::OptionalFixed(id) => {
-                        let inner = self.out.optional_fixed_types[id as usize];
-                        1 + match inner {
-                            Ty::FixedI64(size)
-                            | Ty::FixedString(size)
-                            | Ty::FixedScalar(size, _)
-                            | Ty::FixedClass(size, _) => u32::from(size).max(1),
-                            Ty::FixedNested(size, id) => self.nested_width(size, id),
-                            Ty::FixedStruct(size, id) => u32::from(size)
-                                .saturating_mul(self.out.struct_widths[id])
-                                .max(1),
-                            Ty::FixedEnum(size, id) => u32::from(size)
-                                .saturating_mul(self.out.enum_widths[id])
-                                .max(1),
-                            _ => 1,
-                        }
+                        1 + self.fixed_width(self.out.optional_fixed_types[id as usize])
                     }
                     Ty::FixedOptional(size, id) => {
                         let inner = self.out.fixed_optional_types[id as usize];
@@ -1337,6 +1319,9 @@ impl<'i> Checker<'_, 'i> {
                             | Ty::FixedString(size)
                             | Ty::FixedScalar(size, _)
                             | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                            Ty::OptionalFixed(id) => {
+                                1 + self.fixed_width(self.out.optional_fixed_types[id as usize])
+                            }
                             Ty::FixedNested(size, id) => self.nested_width(size, id),
                             Ty::FixedStruct(size, id) => u32::from(size)
                                 .saturating_mul(self.out.struct_widths[id])
@@ -1656,15 +1641,14 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 }
                 let child = fields[field];
-                let leaf = if let Ty::FixedNested(_, id) = child {
-                    let mut inner = self.out.nested_fixed_types[id as usize];
-                    while let Ty::FixedNested(_, id) = inner {
-                        inner = self.out.nested_fixed_types[id as usize];
-                    }
-                    inner
+                let mut leaf = if let Ty::OptionalFixed(id) = child {
+                    self.out.optional_fixed_types[id as usize]
                 } else {
                     child
                 };
+                while let Ty::FixedNested(_, id) = leaf {
+                    leaf = self.out.nested_fixed_types[id as usize];
+                }
                 let child_node = if let Ty::OptionalFixed(id) = leaf {
                     let mut inner = self.out.optional_fixed_types[id as usize];
                     while let Ty::FixedNested(_, id) = inner {
@@ -1682,7 +1666,11 @@ impl<'i> Checker<'_, 'i> {
                     [error, success]
                         .into_iter()
                         .filter_map(|ty| {
-                            let mut ty = ty;
+                            let mut ty = if let Ty::OptionalFixed(id) = ty {
+                                self.out.optional_fixed_types[id as usize]
+                            } else {
+                                ty
+                            };
                             while let Ty::FixedNested(_, id) = ty {
                                 ty = self.out.nested_fixed_types[id as usize];
                             }
@@ -1739,21 +1727,7 @@ impl<'i> Checker<'_, 'i> {
                         | Ty::FixedClass(size, _) => u32::from(size).max(1),
                         Ty::FixedNested(size, id) => self.nested_width(size, id),
                         Ty::OptionalFixed(id) => {
-                            let inner = self.out.optional_fixed_types[id as usize];
-                            1 + match inner {
-                                Ty::FixedI64(size)
-                                | Ty::FixedString(size)
-                                | Ty::FixedScalar(size, _)
-                                | Ty::FixedClass(size, _) => u32::from(size).max(1),
-                                Ty::FixedNested(size, id) => self.nested_width(size, id),
-                                Ty::FixedStruct(size, id) => u32::from(size)
-                                    .saturating_mul(self.out.struct_widths[id])
-                                    .max(1),
-                                Ty::FixedEnum(size, id) => u32::from(size)
-                                    .saturating_mul(self.out.enum_widths[id])
-                                    .max(1),
-                                _ => 1,
-                            }
+                            1 + self.fixed_width(self.out.optional_fixed_types[id as usize])
                         }
                         Ty::FixedOptional(size, id) => {
                             let inner = self.out.fixed_optional_types[id as usize];
@@ -1780,6 +1754,9 @@ impl<'i> Checker<'_, 'i> {
                                 | Ty::FixedString(size)
                                 | Ty::FixedScalar(size, _)
                                 | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                Ty::OptionalFixed(id) => {
+                                    1 + self.fixed_width(self.out.optional_fixed_types[id as usize])
+                                }
                                 Ty::FixedNested(size, id) => self.nested_width(size, id),
                                 Ty::FixedStruct(size, id) => u32::from(size)
                                     .saturating_mul(self.out.struct_widths[id])
@@ -2382,6 +2359,39 @@ impl<'i> Checker<'_, 'i> {
         Ty::FixedNested(size, index as u32)
     }
 
+    fn fixed_width(&self, ty: Ty) -> u32 {
+        match ty {
+            Ty::FixedI64(size)
+            | Ty::FixedString(size)
+            | Ty::FixedScalar(size, _)
+            | Ty::FixedClass(size, _) => u32::from(size).max(1),
+            Ty::FixedStruct(size, id) => u32::from(size)
+                .saturating_mul(self.out.struct_widths[id])
+                .max(1),
+            Ty::FixedEnum(size, id) => u32::from(size)
+                .saturating_mul(self.out.enum_widths[id])
+                .max(1),
+            Ty::FixedResult(size, id) => {
+                let (error, success) = self.out.result_types[id as usize];
+                let width = |ty| match ty {
+                    Ty::Struct(id) => self.out.struct_widths[id],
+                    Ty::Enum(id) => self.out.enum_widths[id],
+                    Ty::Void => 0,
+                    ty if ty.tagged_optional_inner().is_some() => 2,
+                    _ => 1,
+                };
+                u32::from(size)
+                    .saturating_mul(
+                        1u32.saturating_add(width(error))
+                            .saturating_add(width(success)),
+                    )
+                    .max(1)
+            }
+            Ty::FixedNested(size, id) => self.nested_width(size, id),
+            _ => 1,
+        }
+    }
+
     fn nested_width(&self, mut size: u16, mut id: u32) -> u32 {
         let mut factor = 1u32;
         loop {
@@ -2480,13 +2490,19 @@ impl<'i> Checker<'_, 'i> {
             _ => false,
         };
         let guidance = if let Some(id) = result_id.filter(|_| !shorthand) {
-            Some(self.out.result_types[id as usize].1)
+            let success = self.out.result_types[id as usize].1;
+            if matches!(self.input.ast.exprs[expr], Expr::FixedArray(_)) {
+                self.optional_inner(success).or(Some(success))
+            } else {
+                Some(success)
+            }
         } else {
             guidance
         };
         let found = self.expr(expr, guidance, true);
         if let Some(id) = result_id
-            && found.optional_of() == Some(self.out.result_types[id as usize].1)
+            && (found.optional_of() == Some(self.out.result_types[id as usize].1)
+                || self.optional_inner(self.out.result_types[id as usize].1) == Some(found))
         {
             self.out.optional_wrap[expr] = true;
             self.out.result_wrap[expr] = Some(id);
@@ -2675,7 +2691,7 @@ impl<'i> Checker<'_, 'i> {
                         let success = self.out.result_types[id as usize].1;
                         if let Some(optional) = success.optional_of() {
                             optional
-                        } else if success.optional_inner().is_some() {
+                        } else if self.optional_inner(success).is_some() {
                             success
                         } else {
                             self.report(
@@ -4109,7 +4125,7 @@ impl<'i> Checker<'_, 'i> {
                                                         != 0
                                                 })
                                             {
-                                                if payload.optional_inner().is_some() {
+                                                if self.optional_inner(payload).is_some() {
                                                     present[index] = true;
                                                 } else {
                                                     covered[index] = true;
@@ -4129,7 +4145,7 @@ impl<'i> Checker<'_, 'i> {
                                                 != 0
                                         });
                                     if full {
-                                        if payload.optional_inner().is_some() {
+                                        if self.optional_inner(payload).is_some() {
                                             present[index] = true;
                                         } else {
                                             covered[index] = true;
@@ -4152,7 +4168,7 @@ impl<'i> Checker<'_, 'i> {
                         }
                     } else if let Some(literal) = pattern.literal {
                         if matches!(self.ast().exprs[literal], Expr::Null(_))
-                            && payload.optional_inner().is_some()
+                            && self.optional_inner(payload).is_some()
                         {
                             self.value(literal, Some(payload));
                             if arm.guard.is_none() {
@@ -4166,7 +4182,7 @@ impl<'i> Checker<'_, 'i> {
                                 | Expr::Char(_)
                                 | Expr::String(_)
                         ) {
-                            let narrowed = payload.optional_inner().unwrap_or(payload);
+                            let narrowed = self.optional_inner(payload).unwrap_or(payload);
                             self.value(literal, Some(narrowed));
                             if arm.guard.is_none()
                                 && let Expr::Bool(value) = self.ast().exprs[literal]
@@ -4174,7 +4190,7 @@ impl<'i> Checker<'_, 'i> {
                             {
                                 booleans[index][usize::from(value)] = true;
                                 if booleans[index].iter().all(|seen| *seen) {
-                                    if payload.optional_inner().is_some() {
+                                    if self.optional_inner(payload).is_some() {
                                         present[index] = true;
                                     } else {
                                         covered[index] = true;
@@ -4191,11 +4207,11 @@ impl<'i> Checker<'_, 'i> {
                     } else if self.input.tokens.kind(pattern.name)
                         != eitri_syntax::TokenKind::Wildcard
                     {
-                        let narrowed = payload.optional_inner().unwrap_or(payload);
+                        let narrowed = self.optional_inner(payload).unwrap_or(payload);
                         let binding = self.new_binding(pattern.name, false, narrowed);
                         self.out.pattern_bindings[pattern.name] = Some(binding);
                         if arm.guard.is_none() {
-                            if payload.optional_inner().is_some() {
+                            if self.optional_inner(payload).is_some() {
                                 present[index] = true;
                             } else {
                                 covered[index] = true;

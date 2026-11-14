@@ -116,6 +116,12 @@ impl Printer<'_> {
     fn ty(&self, ty: TypeExpr) -> String {
         match ty {
             TypeExpr::Named(token) => self.token(token).to_owned(),
+            TypeExpr::ResultOptionalFixed(error, size, element) => format!(
+                "{}!?[{}]{}",
+                self.token(error),
+                self.token(size),
+                self.token(element)
+            ),
             TypeExpr::ResultNestedFixed(error, size, element) => format!(
                 "{}![{}]...{}",
                 self.token(error),
@@ -160,6 +166,12 @@ impl Printer<'_> {
                 self.token(inner),
                 self.token(error),
                 self.token(TokenId::from_u32(error.as_u32() + 2))
+            ),
+            TypeExpr::OptionalFixedResult(size, error, success) => format!(
+                "?[{}]<{}!{}>",
+                self.token(size),
+                self.token(error),
+                self.token(success)
             ),
             TypeExpr::OptionalNestedFixed(outer, inner, element) => format!(
                 "?[{}][{}]{}",

@@ -2,7 +2,7 @@
 
 The current implementation supports named `E!T` results in script functions
 and locals, implicit and explicit success, explicit errors, matching, equality,
-and `void` or fixed-array success, including fields of structs, classes, and enums. Optional
+and `void`, fixed-array, or optional fixed-array success, including fields of structs, classes, and enums. Optional
 results `?<E!T>` preserve null, success, and error states. Compound
 result type syntax, some result pattern coverage and host
 result signatures remain future work.
