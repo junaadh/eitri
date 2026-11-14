@@ -1,0 +1,3 @@
+enum Inner { Full(value: i64) }
+enum Outer { Wrap(item: Inner) }
+let n = match Outer.Wrap(item: Inner.Full(value: 1)) { .Wrap(.Full()) => 1, .Wrap(_) => 0 }

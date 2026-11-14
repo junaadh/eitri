@@ -2563,6 +2563,98 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         Ok(result)
     }
 
+    /// Pattern recursion follows the parser's bounded nesting depth; each
+    /// label lookup scans at most 256 fields.
+    fn match_payload(
+        &mut self,
+        subject: u32,
+        enum_id: eitri_syntax::ast::EnumId,
+        index: usize,
+        bindings: eitri_base::List<eitri_syntax::ast::MatchBinding>,
+        next: Label,
+        span: Span,
+    ) -> Lowered<()> {
+        let ast = self.input.ast;
+        let cases = &ast.enum_cases[ast.enums[enum_id].cases];
+        let types =
+            self.checked.enum_case_types[self.checked.enum_starts[enum_id] as usize + index];
+        let fields = ast.params(cases[index].fields);
+        for (position, pattern) in ast.match_bindings[bindings].iter().enumerate() {
+            let offset = pattern.label.map_or(position, |label| {
+                fields
+                    .iter()
+                    .position(|field| {
+                        self.input.tokens.symbol(field.name) == self.input.tokens.symbol(label)
+                    })
+                    .expect("checked field label")
+            });
+            if let Some(case) = pattern.nested_case {
+                let Ty::Enum(nested) = self.checked.param_types[types][offset] else {
+                    unreachable!()
+                };
+                let nested_cases = &ast.enum_cases[ast.enums[nested].cases];
+                let tag = nested_cases
+                    .iter()
+                    .position(|candidate| {
+                        self.input.tokens.symbol(candidate.name) == self.input.tokens.symbol(case)
+                    })
+                    .expect("checked nested case");
+                let constant = self.temp();
+                self.asm.load(constant, tag as u64, ValueType::I64, span)?;
+                let source = subject + self.enum_field_offset(enum_id, index, offset);
+                self.asm.branch_if(Cond::Ne, source, constant, next, span)?;
+                if let Some(children) = pattern.nested_bindings {
+                    self.match_payload(source, nested, tag, children, next, span)?;
+                }
+            } else if let Some(literal) = pattern.literal {
+                let ty = self.checked.param_types[types][offset];
+                let source = subject + self.enum_field_offset(enum_id, index, offset);
+                let source = if ty == Ty::String {
+                    let slot = self.temp();
+                    self.move_nullable(ty, source, slot, false, span)?;
+                    slot
+                } else {
+                    source
+                };
+                let value = self.expr(literal, None)?;
+                if ty == Ty::String {
+                    let cmp = self.temp();
+                    let zero = self.temp();
+                    self.asm.load(zero, 0, ValueType::I64, span)?;
+                    self.asm.emit(
+                        Op::StrCompare,
+                        Operands::abc(cmp.into(), source.into(), value.into()),
+                        span,
+                    )?;
+                    self.asm.branch_if(Cond::Ne, cmp, zero, next, span)?;
+                } else if ty.float() {
+                    let equal = self.temp();
+                    let op = if ty == Ty::F32 {
+                        Op::FcsetFeqF32
+                    } else {
+                        Op::FcsetFeqF64
+                    };
+                    self.asm.emit(
+                        op,
+                        Operands::abc(equal.into(), source.into(), value.into()),
+                        span,
+                    )?;
+                    self.asm.branch_test(Test::False, equal, next, span);
+                } else {
+                    self.asm.branch_if(Cond::Ne, source, value, next, span)?;
+                }
+            } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
+                let ty = self.checked.param_types[types][offset];
+                let target = self.top;
+                self.top += self.width(ty);
+                self.slots[binding] = target;
+                let source = subject + self.enum_field_offset(enum_id, index, offset);
+                self.move_nullable(ty, source, target, false, span)?;
+            }
+        }
+        Ok(())
+    }
+
     fn match_value(
         &mut self,
         id: eitri_syntax::ast::MatchId,
@@ -2622,81 +2714,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     self.asm.load(tag, index as u64, ValueType::I64, span)?;
                     self.asm.branch_if(Cond::Ne, subject, tag, next, span)?;
                 }
-                let types = self.checked.enum_case_types
-                    [self.checked.enum_starts[enum_id] as usize + index];
-                let fields = ast.params(cases[index].fields);
-                for (position, pattern) in ast.match_bindings[arm.bindings].iter().enumerate() {
-                    let offset = pattern.label.map_or(position, |label| {
-                        fields
-                            .iter()
-                            .position(|field| {
-                                self.input.tokens.symbol(field.name)
-                                    == self.input.tokens.symbol(label)
-                            })
-                            .expect("checked field label")
-                    });
-                    if let Some(case) = pattern.nested_case {
-                        let Ty::Enum(nested) = self.checked.param_types[types][offset] else {
-                            unreachable!()
-                        };
-                        let nested_cases = &ast.enum_cases[ast.enums[nested].cases];
-                        let tag = nested_cases
-                            .iter()
-                            .position(|candidate| {
-                                self.input.tokens.symbol(candidate.name)
-                                    == self.input.tokens.symbol(case)
-                            })
-                            .expect("checked nested case");
-                        let constant = self.temp();
-                        self.asm.load(constant, tag as u64, ValueType::I64, span)?;
-                        let source = subject + self.enum_field_offset(enum_id, index, offset);
-                        self.asm.branch_if(Cond::Ne, source, constant, next, span)?;
-                    } else if let Some(literal) = pattern.literal {
-                        let ty = self.checked.param_types[types][offset];
-                        let source = subject + self.enum_field_offset(enum_id, index, offset);
-                        let source = if ty == Ty::String {
-                            let slot = self.temp();
-                            self.move_nullable(ty, source, slot, false, span)?;
-                            slot
-                        } else {
-                            source
-                        };
-                        let value = self.expr(literal, None)?;
-                        if ty == Ty::String {
-                            let cmp = self.temp();
-                            let zero = self.temp();
-                            self.asm.load(zero, 0, ValueType::I64, span)?;
-                            self.asm.emit(
-                                Op::StrCompare,
-                                Operands::abc(cmp.into(), source.into(), value.into()),
-                                span,
-                            )?;
-                            self.asm.branch_if(Cond::Ne, cmp, zero, next, span)?;
-                        } else if ty.float() {
-                            let equal = self.temp();
-                            let op = if ty == Ty::F32 {
-                                Op::FcsetFeqF32
-                            } else {
-                                Op::FcsetFeqF64
-                            };
-                            self.asm.emit(
-                                op,
-                                Operands::abc(equal.into(), source.into(), value.into()),
-                                span,
-                            )?;
-                            self.asm.branch_test(Test::False, equal, next, span);
-                        } else {
-                            self.asm.branch_if(Cond::Ne, source, value, next, span)?;
-                        }
-                    } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
-                        let ty = self.checked.param_types[types][offset];
-                        let target = self.top;
-                        self.top += self.width(ty);
-                        self.slots[binding] = target;
-                        let source = subject + self.enum_field_offset(enum_id, index, offset);
-                        self.move_nullable(ty, source, target, false, span)?;
-                    }
-                }
+                self.match_payload(subject, enum_id, index, arm.bindings, next, span)?;
             }
             if let Some(token) = arm.catch_binding {
                 let binding = self.checked.pattern_bindings[token].expect("checked catch binding");

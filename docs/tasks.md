@@ -870,6 +870,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   type checking and partial-pattern exhaustiveness handling.
 - T017-30: field defaults can construct enums and fully initialized structs,
   preserving effects and managed roots at each construction site.
+- T017-31: nested enum payload patterns support recursive bindings, labels,
+  literals and guards, within the parser nesting bound.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

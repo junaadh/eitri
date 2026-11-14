@@ -1,0 +1,16 @@
+//! host: test
+import test from "test"
+enum Leaf { Empty, Data(text: string, count: i64) }
+enum Inner { None, Full(item: Leaf) }
+enum Outer { Empty, Wrap(inner: Inner, enabled: bool) }
+fn show(value: Outer) -> string {
+    return match value {
+        .Empty => "outer",
+        .Wrap(.Full(.Data(count: 3, text: text)), true) if text == "yes" => text,
+        .Wrap(_, _) => "other",
+    }
+}
+let yes = Outer.Wrap(inner: Inner.Full(item: Leaf.Data(text: "yes", count: 3)), enabled: true)
+let no = Outer.Wrap(inner: Inner.Full(item: Leaf.Data(text: "no", count: 3)), enabled: true)
+test.check(show(yes) == "yes")
+test.check(show(no) == "other")

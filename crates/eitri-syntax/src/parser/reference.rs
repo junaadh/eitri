@@ -384,6 +384,64 @@ impl Parser<'_> {
         Ok(Import { name, path })
     }
 
+    fn match_payload(&mut self) -> Parsed<eitri_base::List<crate::ast::MatchBinding>> {
+        self.enter()?;
+        let result = (|| {
+            let mut bindings = Vec::new();
+            while !self.at(T::RParen) {
+                let label = if self.at(T::Ident) && self.nth(1) == T::Colon {
+                    let label = self.bump();
+                    self.bump();
+                    Some(label)
+                } else {
+                    None
+                };
+                let literal = if matches!(
+                    self.kind(),
+                    T::Int | T::Float | T::Str | T::Char | T::True | T::False | T::Minus
+                ) {
+                    let name = self.token();
+                    Some((name, self.prefix(true)?))
+                } else {
+                    None
+                };
+                let nested_case = if self.eat(T::Dot).is_some() {
+                    Some(self.expect(T::Ident, "a case name")?)
+                } else {
+                    None
+                };
+                let nested_bindings = if nested_case.is_some() && self.eat(T::LParen).is_some() {
+                    Some(self.match_payload()?)
+                } else {
+                    None
+                };
+                let name = if let Some(name) = nested_case {
+                    name
+                } else if let Some((name, _)) = literal {
+                    name
+                } else if self.at(T::Wildcard) {
+                    self.bump()
+                } else {
+                    self.expect(T::Ident, "a binding")?
+                };
+                bindings.push(crate::ast::MatchBinding {
+                    label,
+                    name,
+                    literal: literal.map(|(_, expr)| expr),
+                    nested_case,
+                    nested_bindings,
+                });
+                if self.eat(T::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect(T::RParen, "`)`")?;
+            Ok(self.ast.match_bindings.push(&bindings))
+        })();
+        self.leave();
+        result
+    }
+
     fn match_expr(&mut self) -> Parsed<ExprId> {
         let keyword = self.bump();
         let subject = self.expr(true)?;
@@ -407,53 +465,12 @@ impl Parser<'_> {
                 self.expect(T::Dot, "a case pattern")?;
                 (Some(self.expect(T::Ident, "a case name")?), None, None)
             };
-            let mut bindings = Vec::new();
             let parenthesized = self.eat(T::LParen).is_some();
-            if parenthesized {
-                while !self.at(T::RParen) {
-                    let label = if self.at(T::Ident) && self.nth(1) == T::Colon {
-                        let label = self.bump();
-                        self.bump();
-                        Some(label)
-                    } else {
-                        None
-                    };
-                    let literal = if matches!(
-                        self.kind(),
-                        T::Int | T::Float | T::Str | T::Char | T::True | T::False | T::Minus
-                    ) {
-                        let name = self.token();
-                        Some((name, self.prefix(true)?))
-                    } else {
-                        None
-                    };
-                    let nested_case = if self.eat(T::Dot).is_some() {
-                        Some(self.expect(T::Ident, "a case name")?)
-                    } else {
-                        None
-                    };
-                    let name = if let Some(name) = nested_case {
-                        name
-                    } else if let Some((name, _)) = literal {
-                        name
-                    } else if self.at(T::Wildcard) {
-                        self.bump()
-                    } else {
-                        self.expect(T::Ident, "a binding")?
-                    };
-                    bindings.push(crate::ast::MatchBinding {
-                        label,
-                        name,
-                        literal: literal.map(|(_, expr)| expr),
-                        nested_case,
-                    });
-                    if self.eat(T::Comma).is_none() {
-                        break;
-                    }
-                }
-                self.expect(T::RParen, "`)`")?;
-            }
-            let bindings = self.ast.match_bindings.push(&bindings);
+            let bindings = if parenthesized {
+                self.match_payload()?
+            } else {
+                eitri_base::List::EMPTY
+            };
             let guard = if self.eat(T::If).is_some() {
                 Some(self.expr(false)?)
             } else {

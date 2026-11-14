@@ -2238,3 +2238,17 @@ p50/p99 8,542/16,700 ns, execution 209/458 ns, total 8,791/17,000 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 aggregate defaults. Samples: `/private/tmp/eitri-t017-30-samples.csv`; report:
 `/private/tmp/eitri-t017-30-bench.txt`.
+
+### T017-31 nested payload bindings
+
+Nested enum patterns recursively check and bind payloads, including labels and
+literals. Parsing, checking, lowering and the oracle follow the existing parser
+nesting limit; each label lookup scans at most 256 fields. A three-level fixture
+with a guard and managed strings runs under forced collection in both modes.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 22,200/62,700 ns, execution 583/1,167 ns, total 22,800/63,800 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+patterns and the entire run was unusually slow. Samples:
+`/private/tmp/eitri-t017-31-samples.csv`; report:
+`/private/tmp/eitri-t017-31-bench.txt`.

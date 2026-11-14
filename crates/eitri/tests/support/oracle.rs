@@ -622,6 +622,55 @@ impl Eval<'_> {
         self.locals[binding.index()] = Some(updated);
     }
 
+    fn match_payload(
+        &mut self,
+        host: &mut dyn Host,
+        enum_id: eitri_syntax::ast::EnumId,
+        case: u32,
+        payload: u32,
+        bindings: eitri_base::List<eitri_syntax::ast::MatchBinding>,
+    ) -> Flow<bool> {
+        let ast = self.ast;
+        let cases = &ast.enum_cases[ast.enums[enum_id].cases];
+        let fields = ast.params(cases[case as usize].fields);
+        for (position, pattern) in ast.match_bindings[bindings].iter().enumerate() {
+            let index = pattern.label.map_or(position, |label| {
+                fields
+                    .iter()
+                    .position(|field| self.tokens.symbol(field.name) == self.tokens.symbol(label))
+                    .expect("checked field label")
+            });
+            if let Some(expected) = pattern.nested_case {
+                let Value::Enum(nested, tag, nested_payload) =
+                    self.structs[payload as usize][index]
+                else {
+                    unreachable!()
+                };
+                let cases = &ast.enum_cases[ast.enums[nested].cases];
+                if self.tokens.symbol(cases[tag as usize].name) != self.tokens.symbol(expected) {
+                    return Ok(false);
+                }
+                if let Some(children) = pattern.nested_bindings
+                    && !self.match_payload(host, nested, tag, nested_payload, children)?
+                {
+                    return Ok(false);
+                }
+            } else if let Some(literal) = pattern.literal {
+                let expected = self.expr(host, literal)?;
+                let actual = self.structs[payload as usize][index];
+                if !self
+                    .binary_values(BinaryOp::Eq, actual, expected, ast.span(literal))?
+                    .bool()
+                {
+                    return Ok(false);
+                }
+            } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
+                self.locals[binding.index()] = Some(self.structs[payload as usize][index]);
+            }
+        }
+        Ok(true)
+    }
+
     fn read(&self, binding: BindingId) -> Value {
         self.locals[binding.index()].expect("the checker rejects use before initialization")
     }
@@ -1082,45 +1131,7 @@ impl Eval<'_> {
                             self.checked.pattern_bindings[token].expect("checked catch binding");
                         self.locals[binding.index()] = Some(Value::Enum(enum_id, case, payload));
                     }
-                    let fields = ast.params(cases[case as usize].fields);
-                    let mut matched = true;
-                    for (position, pattern) in ast.match_bindings[arm.bindings].iter().enumerate() {
-                        let index = pattern.label.map_or(position, |label| {
-                            fields
-                                .iter()
-                                .position(|field| {
-                                    self.tokens.symbol(field.name) == self.tokens.symbol(label)
-                                })
-                                .expect("checked field label")
-                        });
-                        if let Some(expected) = pattern.nested_case {
-                            let Value::Enum(nested, tag, _) = self.structs[payload as usize][index]
-                            else {
-                                unreachable!()
-                            };
-                            let cases = &ast.enum_cases[ast.enums[nested].cases];
-                            if self.tokens.symbol(cases[tag as usize].name)
-                                != self.tokens.symbol(expected)
-                            {
-                                matched = false;
-                                break;
-                            }
-                        } else if let Some(literal) = pattern.literal {
-                            let expected = self.expr(host, literal)?;
-                            let actual = self.structs[payload as usize][index];
-                            if !self
-                                .binary_values(BinaryOp::Eq, actual, expected, ast.span(literal))?
-                                .bool()
-                            {
-                                matched = false;
-                                break;
-                            }
-                        } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
-                            self.locals[binding.index()] =
-                                Some(self.structs[payload as usize][index]);
-                        }
-                    }
-                    if !matched {
+                    if !self.match_payload(host, enum_id, case, payload, arm.bindings)? {
                         continue;
                     }
                     if let Some(guard) = arm.guard

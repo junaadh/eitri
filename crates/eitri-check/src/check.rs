@@ -1914,6 +1914,126 @@ impl<'i> Checker<'_, 'i> {
         }
     }
 
+    /// Pattern nesting is bounded by the parser's nesting limit. Each level
+    /// scans at most 256 declared fields for each source pattern.
+    fn check_match_payload(
+        &mut self,
+        enum_id: eitri_syntax::ast::EnumId,
+        case_index: usize,
+        case: TokenId,
+        bindings_list: List<eitri_syntax::ast::MatchBinding>,
+        parenthesized: bool,
+    ) {
+        let fields = self
+            .ast()
+            .params(self.ast().enum_cases[self.ast().enums[enum_id].cases][case_index].fields);
+        let bindings = &self.ast().match_bindings[bindings_list];
+        if parenthesized && bindings.len() != fields.len() {
+            self.report(
+                Code::ArgumentCount,
+                "pattern payload arity mismatch",
+                self.token_span(case),
+            );
+        }
+        let types = self.out.enum_case_types[self.out.enum_starts[enum_id] as usize + case_index];
+        let mut seen = [false; 256];
+        let mut labeled = false;
+        for (i, pattern) in bindings.iter().enumerate() {
+            let index = if let Some(label) = pattern.label {
+                labeled = true;
+                match fields
+                    .iter()
+                    .take(256)
+                    .position(|field| self.symbol(field.name) == self.symbol(label))
+                {
+                    Some(index) => index,
+                    None => {
+                        self.report(
+                            Code::UnknownName,
+                            "unknown enum payload field",
+                            self.token_span(label),
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                if labeled {
+                    self.report(
+                        Code::TypeMismatch,
+                        "positional pattern follows a labeled pattern",
+                        self.token_span(pattern.name),
+                    );
+                }
+                i
+            };
+            if index < fields.len()
+                && index < seen.len()
+                && std::mem::replace(&mut seen[index], true)
+            {
+                self.report(
+                    Code::DuplicateName,
+                    "duplicate enum payload field pattern",
+                    self.token_span(pattern.label.unwrap_or(pattern.name)),
+                );
+            }
+            let ty = self.out.param_types[types]
+                .get(index)
+                .copied()
+                .unwrap_or(Ty::Error);
+            if let Some(case) = pattern.nested_case {
+                if let Ty::Enum(nested) = ty {
+                    let cases = &self.ast().enum_cases[self.ast().enums[nested].cases];
+                    if let Some(nested_index) = cases
+                        .iter()
+                        .take(256)
+                        .position(|candidate| self.symbol(candidate.name) == self.symbol(case))
+                    {
+                        if let Some(children) = pattern.nested_bindings {
+                            self.check_match_payload(nested, nested_index, case, children, true);
+                        }
+                    } else {
+                        self.report(
+                            Code::UnknownName,
+                            "unknown nested enum case",
+                            self.token_span(case),
+                        );
+                    }
+                } else if ty != Ty::Error {
+                    self.report(
+                        Code::TypeMismatch,
+                        "nested case pattern requires an enum payload",
+                        self.token_span(case),
+                    );
+                }
+                continue;
+            }
+            if let Some(literal) = pattern.literal {
+                if !matches!(
+                    self.ast().exprs[literal],
+                    Expr::Int { .. }
+                        | Expr::Float { .. }
+                        | Expr::Bool(_)
+                        | Expr::Char(_)
+                        | Expr::String(_)
+                ) {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: this literal pattern",
+                        self.span(literal),
+                    );
+                } else {
+                    self.value(literal, Some(ty));
+                }
+                continue;
+            }
+            if self.input.tokens.kind(pattern.name) == eitri_syntax::TokenKind::Wildcard {
+                continue;
+            }
+            let binding = self.new_binding(pattern.name, false, ty);
+            self.out.pattern_bindings[pattern.name] = Some(binding);
+        }
+    }
+
     fn match_expr(
         &mut self,
         expr: ExprId,
@@ -1965,108 +2085,7 @@ impl<'i> Checker<'_, 'i> {
                     {
                         covered[index] = true;
                     }
-                    let fields = self.ast().params(cases[index].fields);
-                    let bindings = &self.ast().match_bindings[arm.bindings];
-                    if arm.parenthesized && bindings.len() != fields.len() {
-                        self.report(
-                            Code::ArgumentCount,
-                            "pattern payload arity mismatch",
-                            self.token_span(case),
-                        );
-                    }
-                    let types =
-                        self.out.enum_case_types[self.out.enum_starts[enum_id] as usize + index];
-                    let mut seen = [false; 256];
-                    let mut labeled = false;
-                    for (i, pattern) in bindings.iter().enumerate() {
-                        let index = if let Some(label) = pattern.label {
-                            labeled = true;
-                            match fields
-                                .iter()
-                                .take(256)
-                                .position(|field| self.symbol(field.name) == self.symbol(label))
-                            {
-                                Some(index) => index,
-                                None => {
-                                    self.report(
-                                        Code::UnknownName,
-                                        "unknown enum payload field",
-                                        self.token_span(label),
-                                    );
-                                    continue;
-                                }
-                            }
-                        } else {
-                            if labeled {
-                                self.report(
-                                    Code::TypeMismatch,
-                                    "positional pattern follows a labeled pattern",
-                                    self.token_span(pattern.name),
-                                );
-                            }
-                            i
-                        };
-                        if index < fields.len()
-                            && index < seen.len()
-                            && std::mem::replace(&mut seen[index], true)
-                        {
-                            self.report(
-                                Code::DuplicateName,
-                                "duplicate enum payload field pattern",
-                                self.token_span(pattern.label.unwrap_or(pattern.name)),
-                            );
-                        }
-                        let ty = self.out.param_types[types]
-                            .get(index)
-                            .copied()
-                            .unwrap_or(Ty::Error);
-                        if let Some(case) = pattern.nested_case {
-                            if let Ty::Enum(nested) = ty {
-                                let cases = &self.ast().enum_cases[self.ast().enums[nested].cases];
-                                if !cases.iter().any(|candidate| {
-                                    self.symbol(candidate.name) == self.symbol(case)
-                                }) {
-                                    self.report(
-                                        Code::UnknownName,
-                                        "unknown nested enum case",
-                                        self.token_span(case),
-                                    );
-                                }
-                            } else if ty != Ty::Error {
-                                self.report(
-                                    Code::TypeMismatch,
-                                    "nested case pattern requires an enum payload",
-                                    self.token_span(case),
-                                );
-                            }
-                            continue;
-                        }
-                        if let Some(literal) = pattern.literal {
-                            if !matches!(
-                                self.ast().exprs[literal],
-                                Expr::Int { .. }
-                                    | Expr::Float { .. }
-                                    | Expr::Bool(_)
-                                    | Expr::Char(_)
-                                    | Expr::String(_)
-                            ) {
-                                self.report(
-                                    Code::Unsupported,
-                                    "not supported yet: this literal pattern",
-                                    self.span(literal),
-                                );
-                            } else {
-                                self.value(literal, Some(ty));
-                            }
-                            continue;
-                        }
-                        if self.input.tokens.kind(pattern.name) == eitri_syntax::TokenKind::Wildcard
-                        {
-                            continue;
-                        }
-                        let binding = self.new_binding(pattern.name, false, ty);
-                        self.out.pattern_bindings[pattern.name] = Some(binding);
-                    }
+                    self.check_match_payload(enum_id, index, case, arm.bindings, arm.parenthesized);
                 } else {
                     self.report(
                         Code::UnknownName,
