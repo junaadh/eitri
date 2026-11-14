@@ -566,6 +566,11 @@ impl Parser<'_> {
                 } else {
                     None
                 };
+                let nested_qualifier = if self.at(T::Ident) && self.nth(1) == T::Dot {
+                    Some(self.bump())
+                } else {
+                    None
+                };
                 let nested_case = if self.eat(T::Dot).is_some() {
                     Some(self.expect(T::Ident, "a case name")?)
                 } else {
@@ -590,6 +595,7 @@ impl Parser<'_> {
                     name,
                     literal: literal.map(|(_, expr)| expr),
                     nested_case,
+                    nested_qualifier,
                     nested_bindings,
                 });
                 if self.eat(T::Comma).is_none() {

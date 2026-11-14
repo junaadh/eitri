@@ -6,7 +6,7 @@ enum Outer { Empty, Wrap(inner: Inner, enabled: bool) }
 fn show(value: Outer) -> string {
     return match value {
         .Empty => "outer",
-        .Wrap(.Full(.Data(count: 3, text: text)), true) if text == "yes" => text,
+        .Wrap(Inner.Full(Leaf.Data(count: 3, text: text)), true) if text == "yes" => text,
         .Wrap(_, _) => "other",
     }
 }

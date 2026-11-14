@@ -2252,3 +2252,30 @@ retained context memory was 30,683 B. This scalar workload does not exercise
 patterns and the entire run was unusually slow. Samples:
 `/private/tmp/eitri-t017-31-samples.csv`; report:
 `/private/tmp/eitri-t017-31-bench.txt`.
+
+### T017-32 finite payload coverage
+
+The checker recognizes complete alternatives over one boolean or nested-enum
+payload field. Up to 32 case/field groups use fixed stack storage per match;
+when the limit prevents a decision, a limit diagnostic is emitted. Guards do
+not count. An unreachable self-loop provides a valid verifier target for the
+impossible fallthrough of a final partial arm. Both interpreters and lowerers
+cover the finite cases under forced collection.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 8,375/10,400 ns, execution 209/292 ns, total 8,583/10,700 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+patterns. Samples: `/private/tmp/eitri-t017-32-samples.csv`; report:
+`/private/tmp/eitri-t017-32-bench.txt`.
+
+### T017-33 qualified nested patterns
+
+Nested case patterns accept type qualifiers and validate each against the
+payload's enum. Existing recursive pattern lowering and root handling apply.
+The three-level fixture runs with forced collection on both execution paths.
+
+The same T011 command and environment measured reused `module` compile
+p50/p99 9,125/15,800 ns, execution 250/375 ns, total 9,375/16,200 ns;
+retained context memory was 30,683 B. This scalar workload does not exercise
+patterns. Samples: `/private/tmp/eitri-t017-33-samples.csv`; report:
+`/private/tmp/eitri-t017-33-bench.txt`.

@@ -872,6 +872,10 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   preserving effects and managed roots at each construction site.
 - T017-31: nested enum payload patterns support recursive bindings, labels,
   literals and guards, within the parser nesting bound.
+- T017-32: exhaustiveness recognizes complete sets of boolean and nested enum
+  payload alternatives for up to 32 single-field pattern groups per match.
+- T017-33: nested enum case patterns accept qualifiers and reject qualifiers
+  that do not match the payload type.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

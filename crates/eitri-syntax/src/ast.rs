@@ -234,6 +234,7 @@ pub struct MatchBinding {
     pub name: TokenId,
     pub literal: Option<ExprId>,
     pub nested_case: Option<TokenId>,
+    pub nested_qualifier: Option<TokenId>,
     pub nested_bindings: Option<List<MatchBinding>>,
 }
 

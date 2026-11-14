@@ -1,0 +1,2 @@
+enum Switch { Set(enabled: bool) }
+let n = match Switch.Set(enabled: true) { .Set(true) => 1, .Set(false) if false => 0 }

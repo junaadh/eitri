@@ -1,0 +1,15 @@
+//! host: test
+import test from "test"
+enum Switch { Set(enabled: bool) }
+enum Inner { Empty, Full(text: string) }
+enum Outer { Wrap(item: Inner) }
+fn toggle(value: Switch) -> i64 {
+    match value { .Set(true) => { return 1 }, .Set(false) => { return 0 } }
+}
+fn classify(value: Outer) -> i64 {
+    return match value { .Wrap(.Empty) => 1, .Wrap(.Full(text)) => 2 }
+}
+test.emit(toggle(Switch.Set(enabled: true)))
+test.emit(toggle(Switch.Set(enabled: false)))
+test.emit(classify(Outer.Wrap(item: Inner.Empty)))
+test.emit(classify(Outer.Wrap(item: Inner.Full(text: "alive"))))

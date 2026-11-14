@@ -1,0 +1,4 @@
+enum Inner { Data }
+enum Wrong { Data }
+enum Outer { Wrap(item: Inner) }
+let n = match Outer.Wrap(item: Inner.Data) { .Wrap(Wrong.Data) => 1, .Wrap(_) => 0 }

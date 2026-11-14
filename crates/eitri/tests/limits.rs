@@ -210,3 +210,27 @@ fn enum_struct_inline_cycles_are_rejected() {
     let source = "struct A { value: B }\nenum B { Next(value: A), End }\n";
     assert!(run(source).starts_with("error[E0301]"));
 }
+
+#[test]
+fn finite_pattern_groups_are_bounded() {
+    let mut source = String::from("enum Many {\n");
+    for i in 0..33 {
+        writeln!(source, "C{i}(value: bool),").unwrap();
+    }
+    source.push_str("}\nfn inspect(value: Many) -> i64 { return match value {\n");
+    for i in 0..33 {
+        writeln!(source, ".C{i}(true) => 1, .C{i}(false) => 0,").unwrap();
+    }
+    source.push_str("} }\n");
+    let mut context = eitri::Context::new();
+    let diagnostics = match context.compile(&source) {
+        Err(diagnostics) => diagnostics,
+        Ok(_) => panic!("group limit must reject before execution"),
+    };
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("more than 32 finite pattern groups")),
+        "{diagnostics:?}"
+    );
+}

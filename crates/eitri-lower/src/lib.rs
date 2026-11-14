@@ -2687,14 +2687,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let cases = &ast.enum_cases[ast.enums[enum_id].cases];
         let end = self.asm.label();
         let all_arms = &ast.match_arms[node.arms];
-        // A final partial arm is unreachable: preceding complete arms must
-        // already be exhaustive, as guards and literal patterns do not cover a case.
-        let arms = if all_arms.last().is_some_and(|arm| {
-            arm.guard.is_some()
-                || ast.match_bindings[arm.bindings]
-                    .iter()
-                    .any(|pattern| pattern.literal.is_some() || pattern.nested_case.is_some())
-        }) {
+        // A final guarded arm is unreachable: preceding unguarded arms must
+        // already be exhaustive because guards never contribute coverage.
+        let arms = if all_arms.last().is_some_and(|arm| arm.guard.is_some()) {
             &all_arms[..all_arms.len() - 1]
         } else {
             all_arms
@@ -2751,10 +2746,19 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
             let terminal =
                 matches!(arm.body, eitri_syntax::ast::MatchBody::Block(block) if self.ends(block));
-            if !terminal && arm_index + 1 != arms.len() {
+            let last_partial = arm_index + 1 == arms.len()
+                && ast.match_bindings[arm.bindings]
+                    .iter()
+                    .any(|pattern| pattern.literal.is_some() || pattern.nested_case.is_some());
+            if !terminal && (arm_index + 1 != arms.len() || last_partial) {
                 self.asm.jump(end, span);
             }
             self.asm.bind(next)?;
+            if last_partial {
+                // Exhaustiveness makes this edge unreachable for a valid enum.
+                // Keep a real target for the verifier even when all arms return.
+                self.asm.jump(next, span);
+            }
             self.top = mark;
         }
         self.asm.bind(end)?;

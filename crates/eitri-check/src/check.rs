@@ -1982,6 +1982,15 @@ impl<'i> Checker<'_, 'i> {
                 .unwrap_or(Ty::Error);
             if let Some(case) = pattern.nested_case {
                 if let Ty::Enum(nested) = ty {
+                    if let Some(qualifier) = pattern.nested_qualifier
+                        && self.symbol(qualifier) != self.symbol(self.ast().enums[nested].name)
+                    {
+                        self.report(
+                            Code::TypeMismatch,
+                            "nested enum pattern qualifier does not match payload",
+                            self.token_span(qualifier),
+                        );
+                    }
                     let cases = &self.ast().enum_cases[self.ast().enums[nested].cases];
                     if let Some(nested_index) = cases
                         .iter()
@@ -2034,6 +2043,65 @@ impl<'i> Checker<'_, 'i> {
         }
     }
 
+    /// Recognize a single finite restriction, keeping coverage storage bounded
+    /// to 256 cases and 256 values per case. Other shapes remain conservative.
+    fn finite_case_pattern(
+        &self,
+        enum_id: eitri_syntax::ast::EnumId,
+        case_index: usize,
+        bindings: List<eitri_syntax::ast::MatchBinding>,
+    ) -> Option<(usize, usize, usize)> {
+        let ast = self.input.ast;
+        let case = ast.enum_cases[ast.enums[enum_id].cases][case_index];
+        let fields = ast.params(case.fields);
+        let types = self.out.enum_case_types[self.out.enum_starts[enum_id] as usize + case_index];
+        let mut restriction = None;
+        for (position, pattern) in ast.match_bindings[bindings].iter().enumerate() {
+            let field = match pattern.label {
+                Some(label) => fields
+                    .iter()
+                    .take(256)
+                    .position(|field| self.symbol(field.name) == self.symbol(label))?,
+                None => position,
+            };
+            let ty = *self.out.param_types[types].get(field)?;
+            let value = if let Some(literal) = pattern.literal {
+                match (ty, ast.exprs[literal]) {
+                    (Ty::Bool, Expr::Bool(value)) => Some((usize::from(value), 2)),
+                    _ => return None,
+                }
+            } else if let Some(name) = pattern.nested_case {
+                let Ty::Enum(nested) = ty else { return None };
+                let cases = &ast.enum_cases[ast.enums[nested].cases];
+                if cases.is_empty() || cases.len() > 256 {
+                    return None;
+                }
+                if let Some(children) = pattern.nested_bindings
+                    && ast.match_bindings[children]
+                        .iter()
+                        .any(|child| child.literal.is_some() || child.nested_case.is_some())
+                {
+                    return None;
+                }
+                Some((
+                    cases
+                        .iter()
+                        .position(|case| self.symbol(case.name) == self.symbol(name))?,
+                    cases.len(),
+                ))
+            } else {
+                None
+            };
+            if let Some((value, count)) = value {
+                if restriction.is_some() {
+                    return None;
+                }
+                restriction = Some((field, value, count));
+            }
+        }
+        restriction
+    }
+
     fn match_expr(
         &mut self,
         expr: ExprId,
@@ -2058,6 +2126,10 @@ impl<'i> Checker<'_, 'i> {
             return Ty::Error;
         }
         let mut covered = [false; 256];
+        // Sparse, stack-bounded tracking avoids 8 KiB for every nested match.
+        // At most 32 case/field groups are tracked in one match.
+        let mut finite = [(usize::MAX, usize::MAX, [0u64; 4]); 32];
+        let mut finite_limit = false;
         let mut fallback = false;
         let mut result = expected;
         for arm in &self.ast().match_arms[node.arms] {
@@ -2086,6 +2158,26 @@ impl<'i> Checker<'_, 'i> {
                         covered[index] = true;
                     }
                     self.check_match_payload(enum_id, index, case, arm.bindings, arm.parenthesized);
+                    if arm.guard.is_none()
+                        && let Some((field, value, count)) =
+                            self.finite_case_pattern(enum_id, index, arm.bindings)
+                    {
+                        let group = finite
+                            .iter()
+                            .position(|(case, tracked, _)| *case == index && *tracked == field)
+                            .or_else(|| finite.iter().position(|(case, _, _)| *case == usize::MAX));
+                        if let Some(group) = group {
+                            let (case, tracked, bits) = &mut finite[group];
+                            *case = index;
+                            *tracked = field;
+                            bits[value / 64] |= 1u64 << (value % 64);
+                            if (0..count).all(|n| bits[n / 64] & (1u64 << (n % 64)) != 0) {
+                                covered[index] = true;
+                            }
+                        } else {
+                            finite_limit = true;
+                        }
+                    }
                 } else {
                     self.report(
                         Code::UnknownName,
@@ -2136,7 +2228,15 @@ impl<'i> Checker<'_, 'i> {
             self.restore(mark);
         }
         if cases.len() > 256 || (!fallback && covered[..cases.len()].iter().any(|seen| !seen)) {
-            self.report(Code::TypeMismatch, "non-exhaustive match", self.span(expr));
+            if finite_limit {
+                self.report(
+                    Code::Limit,
+                    "implementation limit: more than 32 finite pattern groups",
+                    self.span(expr),
+                );
+            } else {
+                self.report(Code::TypeMismatch, "non-exhaustive match", self.span(expr));
+            }
         }
         if used {
             result.unwrap_or(Ty::Error)
