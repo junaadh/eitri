@@ -1,0 +1,6 @@
+//! host: test
+import test from "test"
+struct Point { x: i64 }
+struct Config { label: string = "x=${Point { x: 7 }.x}" }
+let value = Config {}
+test.check(value.label == "x=7")

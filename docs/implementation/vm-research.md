@@ -2759,3 +2759,16 @@ Field defaults can read members and index fixed arrays of constructed values.
 The 1001-sample release harness measured fresh module compile p50/p99
 13.8/17.2 µs and source-to-result 14.1/17.7 µs on the general workload. Raw
 samples: `/private/tmp/eitri-t017-67-samples.csv`.
+
+### T017-68 conditional field defaults
+
+Conditional defaults support expression-only branches. The 1001-sample release
+harness measured fresh module compile p50/p99 14.7/45.9 µs and source-to-result
+15.0/49.5 µs on the general workload. Raw samples: `/private/tmp/eitri-t017-68-samples.csv`.
+
+### T017-69 interpolated field defaults
+
+Field defaults support interpolation of checked scalar and aggregate-field
+expressions. The 1001-sample release harness measured fresh module compile
+p50/p99 13.5/23.4 µs and source-to-result 13.9/24.3 µs on the general workload.
+Raw samples: `/private/tmp/eitri-t017-69-samples.csv`.

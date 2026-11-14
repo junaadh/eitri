@@ -1164,8 +1164,10 @@ impl<'i> Checker<'_, 'i> {
                 | Expr::Float { .. }
                 | Expr::Char(_)
                 | Expr::String(_)
+                | Expr::StringPart(_)
                 | Expr::Bool(_)
                 | Expr::Null(_) => {}
+                Expr::Interpolation(parts) => self.spine.extend_from_slice(ast.args(parts)),
                 Expr::FixedArray(elements) => self.spine.extend_from_slice(ast.args(elements)),
                 Expr::Index { base, index } => {
                     self.spine.push(base);

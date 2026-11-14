@@ -807,6 +807,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-69: string interpolation runs in field defaults, including aggregate
+  field expressions and forced collection.
 - T017-68: conditional field defaults evaluate the selected branch, including
   managed string results and else-if expressions.
 - T017-67: field defaults can read fields and index fixed arrays from
