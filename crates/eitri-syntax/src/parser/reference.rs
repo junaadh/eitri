@@ -757,6 +757,18 @@ impl Parser<'_> {
     }
 
     fn type_expr(&mut self) -> Parsed<TypeExpr> {
+        if self.at(T::LBracket)
+            && self.nth(1) == T::Int
+            && self.nth(2) == T::RBracket
+            && self.nth(3) == T::Ident
+            && self.tokens.symbol(TokenId::from_u32(self.pos + 3)) == sym::I64
+        {
+            self.bump();
+            let size = self.bump();
+            self.bump();
+            self.bump();
+            return Ok(TypeExpr::FixedI64(size));
+        }
         let mut optional_tokens = 0;
         while matches!(self.nth(optional_tokens), T::Question | T::QuestionQuestion) {
             optional_tokens += 1;
@@ -1462,6 +1474,28 @@ impl Parser<'_> {
 
     /// Report an unsupported primary at the current token and skip it,
     /// with its group if it opens one.
+    fn fixed_array(&mut self) -> Parsed<ExprId> {
+        let open = self.bump();
+        let mark = self.exprs.len();
+        let result = (|| {
+            while !self.at(T::RBracket) {
+                let element = self.expr(false)?;
+                self.exprs.push(element);
+                if self.eat(T::Comma).is_none() {
+                    break;
+                }
+            }
+            let close = self.expect(T::RBracket, "`]`")?;
+            let elements = self.ast.expr_lists.push_drain(self.exprs, mark);
+            Ok(self.ast.expr(
+                Expr::FixedArray(elements),
+                self.span_of(open).to(self.span_of(close)),
+            ))
+        })();
+        self.exprs.truncate(mark);
+        result
+    }
+
     fn unsupported_primary(&mut self, feature: &str) -> ExprId {
         let span = self.current_span();
         self.unsupported(span, feature);
@@ -1520,7 +1554,7 @@ impl Parser<'_> {
                 self.bump();
                 self.ast.expr(Expr::SelfValue(token), span)
             }
-            T::LBracket => self.unsupported_primary("array literals"),
+            T::LBracket => self.fixed_array()?,
             // In a statement header, `{` where an operand belongs is a
             // missing operand (`if x > {` mid-edit), not a block expression;
             // leave the block for the statement to skip.

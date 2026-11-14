@@ -35,8 +35,9 @@ this chapter is the language contract for those features.
 
 Indirect enum cases and whole-enum `@indirect` declarations can construct and
 match recursive payloads. Each indirect payload allocates a traced record.
-Aggregate equality is currently rejected in modules containing indirect cases;
-indirect payload layouts are limited to 256 slots and shape IDs to 255.
+Equality compares indirect payloads structurally while retaining class identity
+and floating-point comparison semantics. Indirect payload layouts are limited
+to 256 slots and shape IDs to 255.
 
 ## Declaration identity across contexts
 

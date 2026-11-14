@@ -3679,22 +3679,6 @@ impl<'i> Checker<'_, 'i> {
             let Expr::Binary { op, rhs, .. } = ast.exprs[node] else {
                 unreachable!()
             };
-            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
-                && matches!(
-                    lhs_ty,
-                    Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalStruct(_) | Ty::OptionalEnum(_)
-                )
-                && ast
-                    .enums
-                    .iter()
-                    .any(|decl| ast.enum_cases[decl.cases].iter().any(|case| case.indirect))
-            {
-                self.report(
-                    Code::Unsupported,
-                    "not supported yet: aggregate equality in modules with indirect enum payloads",
-                    self.span(node),
-                );
-            }
             let valid = valid_operand(op, lhs_ty);
             if !valid && lhs_ty == Ty::Void && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
                 self.report(

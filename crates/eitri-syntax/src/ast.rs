@@ -88,6 +88,7 @@ pub enum Expr {
     StringPart(Span),
     /// Alternating literal fragments and expressions in source order.
     Interpolation(List<ExprId>),
+    FixedArray(List<ExprId>),
     Bool(bool),
     Null(TokenId),
     /// A name, resolved by the checker.
@@ -163,6 +164,7 @@ pub enum TypeExpr {
     OptionalBool(TokenId),
     OptionalScalar(TokenId),
     OptionalNamed(TokenId),
+    FixedI64(TokenId),
     /// Unsupported, already reported.
     Error,
 }

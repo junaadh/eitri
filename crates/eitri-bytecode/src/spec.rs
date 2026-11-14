@@ -366,6 +366,7 @@ pub enum Sem {
     RecordGet,
     RecordSet,
     RecordEq,
+    RecordDeepEq,
     RecordNull,
     RecordWrap,
     RecordUnwrap,
@@ -733,6 +734,7 @@ ops! {
     RecordWrap = "RECORD.WRAP", "RECORD", Abc, [Dst, Src, None], Sem::RecordWrap, NONE, true, None;
     RecordUnwrap = "RECORD.UNWRAP", "RECORD", Abc, [Dst, Src, None], Sem::RecordUnwrap, FAULT, true, None;
     RecordEq = "RECORD.EQ", "RECORD", Abc, [Dst, Src, Src], Sem::RecordEq, NONE, true, None;
+    RecordDeepEq = "RECORD.DEEP.EQ", "RECORD", Abc, [Dst, Src, Src], Sem::RecordDeepEq, FAULT, true, MayGrowVm;
 
 }
 

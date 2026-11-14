@@ -2607,3 +2607,20 @@ execution 291/667 ns, total 11.0/26.6 µs; retained context was 31,047 B.
 This scalar benchmark does not exercise indirect payloads. Samples:
 `/private/tmp/eitri-t017-55-samples.csv`; report:
 `/private/tmp/eitri-t017-55-bench.txt`.
+
+### T017-56 indirect payload equality
+
+Indirect records compare structurally using an iterative, budgeted worklist;
+class fields compare by identity, strings by content, and floats by IEEE
+comparison. Scratch allocation is charged to the active memory budget and
+released after comparison. The fixture covers separately allocated equal and
+unequal lists, signed zero, NaN, and class identity under forced collection on
+both interpreters and lowerers. Runtime is proportional to visited payload
+pairs and edges until the execution budget is exhausted.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 9,417/23,800 ns,
+execution 250/292 ns, total 9,667/24,100 ns; 48 allocations (5,088 B), 3,184 B
+metadata and 31,047 B retained context. This scalar benchmark does not exercise
+indirect equality. Samples: `/private/tmp/eitri-t017-56-samples.csv`; report:
+`/private/tmp/eitri-t017-56-bench.txt`.

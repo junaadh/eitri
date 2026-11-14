@@ -1308,7 +1308,7 @@ fn transfer(
                 read(state, pc, b, Some(ty))?;
             }
         }
-        Sem::RecordEq => {
+        Sem::RecordEq | Sem::RecordDeepEq => {
             let ty = read(state, pc, b, None)?;
             if !matches!(ty, ValueType::Record(_) | ValueType::NullableRecord(_)) {
                 return Err(error(

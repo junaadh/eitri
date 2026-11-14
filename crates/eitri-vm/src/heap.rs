@@ -446,6 +446,89 @@ impl Heap {
         }
     }
 
+    /// Compare immutable indirect boxes by contents, keeping class references
+    /// as identity. Work and scratch are bounded by the execution and memory budgets.
+    pub fn equal_records(
+        &self,
+        left: Option<HeapRef>,
+        right: Option<HeapRef>,
+        shapes: &[Box<[eitri_bytecode::ValueType]>],
+        class_count: u32,
+        budget: &mut u64,
+        memory: &mut Option<eitri_base::MemoryBudget>,
+    ) -> Result<bool, super::FaultKind> {
+        let mut pending = Vec::new();
+        let result = (|| {
+            super::reserve_vm(&mut pending, 1, memory)?;
+            pending.push((left, right));
+            while let Some((left, right)) = pending.pop() {
+                if *budget == 0 {
+                    return Err(super::FaultKind::Budget);
+                }
+                *budget -= 1;
+                let (left, right) = match (left, right) {
+                    (None, None) => continue,
+                    (Some(left), Some(right)) => (left, right),
+                    _ => return Ok(false),
+                };
+                let left_shape = self
+                    .record_shape(left)
+                    .ok_or(super::FaultKind::InvalidEnumPayload)?;
+                if self.record_shape(right) != Some(left_shape) {
+                    return Ok(false);
+                }
+                let shape = shapes
+                    .get(left_shape as usize)
+                    .ok_or(super::FaultKind::InvalidEnumPayload)?;
+                let left_fields = self
+                    .record(left)
+                    .ok_or(super::FaultKind::InvalidEnumPayload)?;
+                let right_fields = self
+                    .record(right)
+                    .ok_or(super::FaultKind::InvalidEnumPayload)?;
+                if left_fields.len() != shape.len() || right_fields.len() != shape.len() {
+                    return Err(super::FaultKind::InvalidEnumPayload);
+                }
+                for ((left, right), ty) in left_fields.iter().zip(right_fields).zip(shape.iter()) {
+                    use eitri_bytecode::ValueType;
+                    let equal = match ty {
+                        ValueType::String | ValueType::NullableString => {
+                            match (left.reference, right.reference) {
+                                (None, None) => true,
+                                (Some(a), Some(b)) => self.string(a) == self.string(b),
+                                _ => false,
+                            }
+                        }
+                        ValueType::Record(id) | ValueType::NullableRecord(id)
+                            if *id >= class_count =>
+                        {
+                            super::reserve_vm(&mut pending, 1, memory)?;
+                            pending.push((left.reference, right.reference));
+                            true
+                        }
+                        ValueType::Record(_) | ValueType::NullableRecord(_) => {
+                            left.reference == right.reference
+                        }
+                        ValueType::F32 => {
+                            f32::from_bits(left.word as u32) == f32::from_bits(right.word as u32)
+                        }
+                        ValueType::F64 => f64::from_bits(left.word) == f64::from_bits(right.word),
+                        _ => left.word == right.word,
+                    };
+                    if !equal {
+                        return Ok(false);
+                    }
+                }
+            }
+            Ok(true)
+        })();
+        super::release_vm(
+            pending.capacity() * size_of::<(Option<HeapRef>, Option<HeapRef>)>(),
+            memory,
+        );
+        result
+    }
+
     /// Add a host-owned collector root; slots are generation-checked and
     /// recycled. A live token's unique allocation also identifies its context.
     pub fn retain_string(

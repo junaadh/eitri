@@ -466,7 +466,11 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
             functions: &signatures,
             hosts: &hosts,
             record_shapes: &record_shapes,
-            record_class_count: 0,
+            record_class_count: if has_classes {
+                ast.structs.len() as u32
+            } else {
+                0
+            },
         };
         for function in functions.as_mut_slice() {
             let mut pc = 0;
@@ -3295,9 +3299,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     )?;
                     self.asm.branch_if(Cond::Ne, temp, zero, fail, span)?;
                 }
-                ValueType::Record(_) | ValueType::NullableRecord(_) => {
+                ValueType::Record(id) | ValueType::NullableRecord(id) => {
                     self.asm.emit(
-                        Op::RecordEq,
+                        if id as usize >= self.input.ast.structs.len() {
+                            Op::RecordDeepEq
+                        } else {
+                            Op::RecordEq
+                        },
                         Operands::abc(temp.into(), left.into(), right.into()),
                         span,
                     )?;

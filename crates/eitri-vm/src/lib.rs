@@ -1279,6 +1279,7 @@ fn record_operation(
     slots: &mut [u64],
     state: StringTransformState<'_>,
     (memory_limit, force_gc): (usize, bool),
+    budget: &mut u64,
     (functions, id, base, start): (&IndexVec<FunctionId, Function>, FunctionId, usize, usize),
 ) -> Result<(), FaultKind> {
     let (heap, references, host_roots, frames, memory) = state;
@@ -1379,6 +1380,16 @@ fn record_operation(
                 .ok_or(FaultKind::InvalidEnumPayload)? = value;
         }
         Op::RecordEq => slots[a] = u64::from(references[base + b] == references[base + c]),
+        Op::RecordDeepEq => {
+            slots[a] = u64::from(heap.equal_records(
+                references[base + b],
+                references[base + c],
+                &function.record_shapes,
+                function.record_class_count,
+                budget,
+                memory,
+            )?)
+        }
         _ => unreachable!(),
     }
     Ok(())
@@ -1629,6 +1640,7 @@ fn execute(
                     | Op::RecordGet
                     | Op::RecordSet
                     | Op::RecordEq
+                    | Op::RecordDeepEq
                     | Op::RecordNull
                     | Op::RecordWrap
                     | Op::RecordUnwrap => {
@@ -1638,6 +1650,7 @@ fn execute(
                             s,
                             (m.heap, m.references, m.host_roots, m.frames, m.memory),
                             (m.memory_limit, m.force_gc),
+                            &mut budget,
                             (functions, id, base, start),
                         )
                         .map_err(|kind| fault(&m.frames[floor..], kind, id, start))?;

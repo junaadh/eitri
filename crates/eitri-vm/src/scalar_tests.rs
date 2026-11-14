@@ -266,7 +266,8 @@ fn noncanonical_literals_and_conversion_descriptors_are_rejected() {
                 &Callees {
                     functions: &signatures,
                     hosts: &[],
-                    record_shapes: &[]
+                    record_shapes: &[],
+                    record_class_count: 0,
                 }
             )
             .is_err()
@@ -308,7 +309,8 @@ fn noncanonical_literals_and_conversion_descriptors_are_rejected() {
                     &Callees {
                         functions: &signatures,
                         hosts: &[],
-                        record_shapes: &[]
+                        record_shapes: &[],
+                        record_class_count: 0,
                     }
                 )
                 .is_err()

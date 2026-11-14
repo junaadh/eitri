@@ -322,7 +322,7 @@ impl Context {
             functions: &signatures,
             hosts: &hosts,
             record_shapes: &record_shapes,
-            record_class_count: 0,
+            record_class_count: functions.iter().next().map_or(0, |f| f.record_class_count),
         };
         // Validate the retained artifact before any rewrites. Unsupported
         // metadata is preserved verbatim instead of silently regenerated.
@@ -750,7 +750,7 @@ impl Context {
             functions: &signatures,
             hosts: &registered,
             record_shapes: &record_shapes,
-            record_class_count: 0,
+            record_class_count: functions.iter().next().map_or(0, |f| f.record_class_count),
         };
         let managed = functions.iter().any(|f| {
             let mut pc = 0;

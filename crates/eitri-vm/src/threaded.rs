@@ -425,6 +425,14 @@ fn managed_op(
             *field = value;
             Ok(None)
         }
+        Op::RecordDeepEq => Ok(Some(u64::from(st.m.heap.equal_records(
+            st.m.references[st.base + b],
+            st.m.references[st.base + c],
+            &st.function.record_shapes,
+            st.function.record_class_count,
+            &mut st.m.budget,
+            st.m.memory,
+        )?))),
         Op::RecordEq => Ok(Some(u64::from(
             st.m.references[st.base + b] == st.m.references[st.base + c],
         ))),
@@ -806,6 +814,7 @@ managed_handler!(record_unwrap, Op::RecordUnwrap);
 managed_handler!(record_get, Op::RecordGet);
 managed_handler!(record_set, Op::RecordSet);
 managed_handler!(record_eq, Op::RecordEq);
+managed_handler!(record_deep_eq, Op::RecordDeepEq);
 managed_handler!(str_new, Op::StrNew);
 managed_handler!(str_len, Op::StrLen);
 managed_handler!(str_concat, Op::StrConcat);
@@ -964,6 +973,7 @@ extern "rust-preserve-none" fn wide(
                 | Op::RecordGet
                 | Op::RecordSet
                 | Op::RecordEq
+                | Op::RecordDeepEq
                 | Op::StrNew
                 | Op::StrLen
                 | Op::StrConcat
@@ -1399,6 +1409,7 @@ static TABLE: [Handler; 256] = {
     table[Op::RecordGet as usize] = record_get;
     table[Op::RecordSet as usize] = record_set;
     table[Op::RecordEq as usize] = record_eq;
+    table[Op::RecordDeepEq as usize] = record_deep_eq;
     table[Op::StrNew as usize] = str_new;
     table[Op::StrLen as usize] = str_len;
     table[Op::StrConcat as usize] = str_concat;
