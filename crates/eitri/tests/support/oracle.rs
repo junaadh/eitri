@@ -209,6 +209,8 @@ enum Value {
     OptionalI64(Option<i64>),
     OptionalBool(Option<bool>),
     OptionalScalar(Ty, Option<u64>),
+    OptionalStruct(eitri_syntax::ast::StructId, Option<u32>),
+    OptionalEnum(eitri_syntax::ast::EnumId, Option<(u32, u32)>),
     Struct(eitri_syntax::ast::StructId, u32),
     Enum(eitri_syntax::ast::EnumId, u32, u32),
     Void,
@@ -253,6 +255,8 @@ impl Value {
             Self::OptionalI64(_) => Ty::OptionalI64,
             Self::OptionalBool(_) => Ty::OptionalBool,
             Self::OptionalScalar(ty, _) => ty,
+            Self::OptionalStruct(id, _) => Ty::OptionalStruct(id),
+            Self::OptionalEnum(id, _) => Ty::OptionalEnum(id),
             Self::Struct(id, _) => Ty::Struct(id),
             Self::Enum(id, _, _) => Ty::Enum(id),
             Self::Scalar(ty, _) => ty,
@@ -306,6 +310,8 @@ impl Value {
             | Value::OptionalI64(_)
             | Value::OptionalBool(_)
             | Value::OptionalScalar(_, _)
+            | Value::OptionalStruct(_, _)
+            | Value::OptionalEnum(_, _)
             | Value::Struct(_, _)
             | Value::Enum(_, _, _)
             | Value::Void => {
@@ -656,10 +662,12 @@ impl Eval<'_> {
                     .expect("checked field label")
             });
             if let Some(expected) = pattern.nested_case {
-                let Value::Enum(nested, tag, nested_payload) =
-                    self.structs[payload as usize][index]
-                else {
-                    unreachable!()
+                let value = self.structs[payload as usize][index];
+                let (nested, tag, nested_payload) = match value {
+                    Value::Enum(id, tag, payload)
+                    | Value::OptionalEnum(id, Some((tag, payload))) => (id, tag, payload),
+                    Value::OptionalEnum(_, None) => return Ok(false),
+                    _ => unreachable!(),
                 };
                 let cases = &ast.enum_cases[ast.enums[nested].cases];
                 if self.tokens.symbol(cases[tag as usize].name) != self.tokens.symbol(expected) {
@@ -678,6 +686,8 @@ impl Eval<'_> {
                             | Value::OptionalI64(None)
                             | Value::OptionalBool(None)
                             | Value::OptionalScalar(_, None)
+                            | Value::OptionalStruct(_, None)
+                            | Value::OptionalEnum(_, None)
                     ) {
                         return Ok(false);
                     }
@@ -691,10 +701,14 @@ impl Eval<'_> {
                     Value::OptionalScalar(ty, Some(value)) => {
                         Value::from_word(ty.tagged_optional_inner().unwrap(), value)
                     }
+                    Value::OptionalStruct(id, Some(value)) => Value::Struct(id, value),
+                    Value::OptionalEnum(id, Some((tag, value))) => Value::Enum(id, tag, value),
                     Value::OptionalI64(None)
                     | Value::OptionalString(None)
                     | Value::OptionalBool(None)
-                    | Value::OptionalScalar(_, None) => return Ok(false),
+                    | Value::OptionalScalar(_, None)
+                    | Value::OptionalStruct(_, None)
+                    | Value::OptionalEnum(_, None) => return Ok(false),
                     value => value,
                 };
                 if !self
@@ -711,10 +725,14 @@ impl Eval<'_> {
                     Value::OptionalScalar(ty, Some(value)) => {
                         Value::from_word(ty.tagged_optional_inner().unwrap(), value)
                     }
+                    Value::OptionalStruct(id, Some(value)) => Value::Struct(id, value),
+                    Value::OptionalEnum(id, Some((tag, value))) => Value::Enum(id, tag, value),
                     Value::OptionalI64(None)
                     | Value::OptionalString(None)
                     | Value::OptionalBool(None)
-                    | Value::OptionalScalar(_, None) => return Ok(false),
+                    | Value::OptionalScalar(_, None)
+                    | Value::OptionalStruct(_, None)
+                    | Value::OptionalEnum(_, None) => return Ok(false),
                     value => value,
                 };
                 self.locals[binding.index()] = Some(value);
@@ -747,6 +765,15 @@ impl Eval<'_> {
                 unreachable!()
             };
             return Ok(Value::OptionalI64(Some(value)));
+        }
+        if self.checked.optional_wrap[e]
+            && matches!(self.checked.types[e], Ty::Struct(_) | Ty::Enum(_))
+        {
+            return Ok(match self.expr_inner(host, e)? {
+                Value::Struct(id, value) => Value::OptionalStruct(id, Some(value)),
+                Value::Enum(id, tag, value) => Value::OptionalEnum(id, Some((tag, value))),
+                _ => unreachable!(),
+            });
         }
         if self.checked.optional_wrap[e]
             && self.checked.types[e].optional_of().is_some()
@@ -885,6 +912,18 @@ impl Eval<'_> {
             Expr::Null(_) if self.checked.types[e] == Ty::OptionalI64 => {
                 Ok(Value::OptionalI64(None))
             }
+            Expr::Null(_) if matches!(self.checked.types[e], Ty::OptionalStruct(_)) => {
+                let Ty::OptionalStruct(id) = self.checked.types[e] else {
+                    unreachable!()
+                };
+                Ok(Value::OptionalStruct(id, None))
+            }
+            Expr::Null(_) if matches!(self.checked.types[e], Ty::OptionalEnum(_)) => {
+                let Ty::OptionalEnum(id) = self.checked.types[e] else {
+                    unreachable!()
+                };
+                Ok(Value::OptionalEnum(id, None))
+            }
             Expr::Null(_) if self.checked.types[e].tagged_optional_inner().is_some() => {
                 Ok(Value::OptionalScalar(self.checked.types[e], None))
             }
@@ -945,6 +984,22 @@ impl Eval<'_> {
                                 Ok(Value::OptionalI64(Some(value)))
                             }
                             Some(value) => Ok(Value::Int(value)),
+                            None => self.expr(host, rhs),
+                        }
+                    } else if let Value::OptionalStruct(id, value) = value {
+                        match value {
+                            Some(value) if self.checked.types[e] == Ty::OptionalStruct(id) => {
+                                Ok(Value::OptionalStruct(id, Some(value)))
+                            }
+                            Some(value) => Ok(Value::Struct(id, value)),
+                            None => self.expr(host, rhs),
+                        }
+                    } else if let Value::OptionalEnum(id, value) = value {
+                        match value {
+                            Some(value) if self.checked.types[e] == Ty::OptionalEnum(id) => {
+                                Ok(Value::OptionalEnum(id, Some(value)))
+                            }
+                            Some((tag, value)) => Ok(Value::Enum(id, tag, value)),
                             None => self.expr(host, rhs),
                         }
                     } else if let Value::OptionalScalar(ty, value) = value {
@@ -1269,6 +1324,13 @@ impl Eval<'_> {
                             Value::OptionalScalar(ty, Some(value)) => {
                                 Some(Value::from_word(ty.tagged_optional_inner().unwrap(), value))
                             }
+                            Value::OptionalStruct(id, Some(value)) => {
+                                Some(Value::Struct(id, value))
+                            }
+                            Value::OptionalEnum(id, Some((tag, value))) => {
+                                Some(Value::Enum(id, tag, value))
+                            }
+                            Value::OptionalStruct(_, None) | Value::OptionalEnum(_, None) => None,
                             Value::OptionalI64(None)
                             | Value::OptionalBool(None)
                             | Value::OptionalString(None)
@@ -1407,6 +1469,15 @@ impl Eval<'_> {
                             .zip(self.structs[ib as usize].iter().copied()),
                     );
                 }
+                (Value::OptionalStruct(a, Some(left)), Value::OptionalStruct(b, Some(right)))
+                    if a == b =>
+                {
+                    pending.push((Value::Struct(a, left), Value::Struct(b, right)))
+                }
+                (
+                    Value::OptionalEnum(a, Some((lt, left))),
+                    Value::OptionalEnum(b, Some((rt, right))),
+                ) if a == b => pending.push((Value::Enum(a, lt, left), Value::Enum(b, rt, right))),
                 (Value::String(a), Value::String(b))
                     if self.strings[a as usize] == self.strings[b as usize] => {}
                 (Value::OptionalString(Some(a)), Value::OptionalString(Some(b)))
@@ -1439,6 +1510,14 @@ impl Eval<'_> {
         use BinaryOp::*;
         let ty = a.ty();
         if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+            let equal = self.aggregate_equal(a, b);
+            return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
+        }
+        if matches!(
+            (a, b),
+            (Value::OptionalStruct(_, _), Value::OptionalStruct(_, _))
+                | (Value::OptionalEnum(_, _), Value::OptionalEnum(_, _))
+        ) {
             let equal = self.aggregate_equal(a, b);
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
         }

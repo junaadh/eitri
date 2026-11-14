@@ -246,7 +246,8 @@ fn value_type(
     if let TypeExpr::OptionalString(token)
     | TypeExpr::OptionalI64(token)
     | TypeExpr::OptionalBool(token)
-    | TypeExpr::OptionalScalar(token) = ty
+    | TypeExpr::OptionalScalar(token)
+    | TypeExpr::OptionalNamed(token) = ty
     {
         diagnostics.push(error(
             Code::Unsupported,

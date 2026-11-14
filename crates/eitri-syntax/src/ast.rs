@@ -162,6 +162,7 @@ pub enum TypeExpr {
     OptionalI64(TokenId),
     OptionalBool(TokenId),
     OptionalScalar(TokenId),
+    OptionalNamed(TokenId),
     /// Unsupported, already reported.
     Error,
 }

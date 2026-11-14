@@ -1,0 +1,21 @@
+//! host: test
+import test from "test"
+struct Item { count: i64, text: string }
+enum Choice { None, Value(text: string) }
+struct Wrapper { item: ?Item, choice: ?Choice }
+fn use_item(item: ?Item) -> i64 { return match item { null => -1, value => value.count } }
+let original = Item { count: 7, text: "alive" }
+let value: ?Item = original
+let none: ?Item = null
+let wrapper = Wrapper { item: value, choice: Choice.Value("enum") }
+test.check(use_item(original) == 7 && use_item(null) == -1)
+test.check((wrapper.item ?? Item { count: 0, text: "other" }) == original)
+test.check(none == null && value != null && value == original)
+test.check(match wrapper.item { null => false, item => item.text == "alive" })
+let fallback: ?Item = none ?? value
+test.check((fallback ?? original) == original)
+let choice: ?Choice = Choice.Value("enum")
+test.check(wrapper.choice == choice && choice != null)
+enum Container { Wrapped(item: ?Item) }
+test.check(match Container.Wrapped(original) { .Wrapped(item) => item.text == "alive", .Wrapped(null) => false })
+test.check(match Container.Wrapped(null) { .Wrapped(item) => false, .Wrapped(null) => true })

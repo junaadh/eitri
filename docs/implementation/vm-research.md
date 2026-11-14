@@ -2467,3 +2467,17 @@ execution 416/542 ns, total 16.4/20.7 µs; retained context memory was
 30,898 B. This benchmark does not exercise matching, and this run was slower
 than the preceding runs. Samples: `/private/tmp/eitri-t017-46-samples.csv`;
 report: `/private/tmp/eitri-t017-46-bench.txt`.
+
+### T017-47 optional aggregates
+
+Optional structs and enums use an inline presence tag followed by their full
+payload, with nullable managed slots in the payload. Calls, comparisons,
+coalescing and optional payload patterns run on both interpreters and lowerers
+under forced collection. Inline cycles through an optional remain invalid.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 10.0/10.2 µs,
+execution 250/292 ns, total 10.2/10.5 µs; retained context memory was
+30,898 B. This benchmark does not exercise optional aggregates. Samples:
+`/private/tmp/eitri-t017-47-samples.csv`; report:
+`/private/tmp/eitri-t017-47-bench.txt`.

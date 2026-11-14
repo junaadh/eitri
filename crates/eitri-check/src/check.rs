@@ -582,6 +582,10 @@ impl<'i> Checker<'_, 'i> {
             TypeExpr::OptionalString(_) => return Ty::OptionalString,
             TypeExpr::OptionalI64(_) => return Ty::OptionalI64,
             TypeExpr::OptionalBool(_) => return Ty::OptionalBool,
+            TypeExpr::OptionalNamed(token) => {
+                let inner = self.ty(TypeExpr::Named(token), false);
+                return inner.optional_of().unwrap_or(Ty::Error);
+            }
             TypeExpr::OptionalScalar(token) => {
                 return match type_name(self.symbol(token)) {
                     TypeName::Supported(inner) => inner.optional_of().unwrap_or(Ty::Error),
@@ -898,6 +902,8 @@ impl<'i> Checker<'_, 'i> {
                     Ty::Void => 0,
                     Ty::Struct(id) => self.out.struct_widths[id],
                     Ty::Enum(id) => self.out.enum_widths[id],
+                    Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                    Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
                     ty if ty.tagged_optional_inner().is_some() => 2,
                     _ => 1,
                 })
@@ -1102,7 +1108,11 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 }
                 let child = fields[field];
-                let child_index = match child {
+                let child_node = child
+                    .tagged_optional_inner()
+                    .filter(|ty| matches!(ty, Ty::Struct(_) | Ty::Enum(_)))
+                    .unwrap_or(child);
+                let child_index = match child_node {
                     Ty::Struct(id) => Some(id.index()),
                     Ty::Enum(id) => Some(structs + id.index()),
                     _ => None,
@@ -1111,8 +1121,12 @@ impl<'i> Checker<'_, 'i> {
                     && self.struct_states[child_index] == 0
                 {
                     self.struct_states[child_index] = 1;
-                    self.struct_stack
-                        .push((child, 0, 0, u32::from(matches!(child, Ty::Enum(_)))));
+                    self.struct_stack.push((
+                        child_node,
+                        0,
+                        0,
+                        u32::from(matches!(child_node, Ty::Enum(_))),
+                    ));
                     continue;
                 }
                 let field_width = if let Some(child_index) = child_index
@@ -1128,6 +1142,8 @@ impl<'i> Checker<'_, 'i> {
                     match child {
                         Ty::Struct(id) => self.out.struct_widths[id],
                         Ty::Enum(id) => self.out.enum_widths[id],
+                        Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                        Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
                         ty if ty.tagged_optional_inner().is_some() => 2,
                         _ => 1,
                     }
@@ -1526,7 +1542,12 @@ impl<'i> Checker<'_, 'i> {
     fn value(&mut self, expr: ExprId, expected: Option<Ty>) -> Ty {
         let guidance = if matches!(
             self.input.ast.exprs[expr],
-            Expr::Int { .. } | Expr::Float { .. }
+            Expr::Int { .. }
+                | Expr::Float { .. }
+                | Expr::StructLiteral { .. }
+                | Expr::EnumShorthand(_)
+                | Expr::Call { .. }
+                | Expr::NamedCall { .. }
         ) {
             expected.and_then(Ty::tagged_optional_inner).or(expected)
         } else {
@@ -2140,7 +2161,7 @@ impl<'i> Checker<'_, 'i> {
                 .copied()
                 .unwrap_or(Ty::Error);
             if let Some(case) = pattern.nested_case {
-                if let Ty::Enum(nested) = ty {
+                if let Ty::Enum(nested) | Ty::OptionalEnum(nested) = ty {
                     if let Some(qualifier) = pattern.nested_qualifier
                         && self.symbol(qualifier) != self.symbol(self.ast().enums[nested].name)
                     {
@@ -2285,6 +2306,14 @@ impl<'i> Checker<'_, 'i> {
                         mask[0] = 1;
                         Some(3)
                     }
+                    (Ty::OptionalEnum(id), Expr::Null(_)) => {
+                        let count = ast.enum_cases[ast.enums[id].cases].len() + 1;
+                        if count > 256 {
+                            return None;
+                        }
+                        mask[0] = 1;
+                        Some(count)
+                    }
                     (ty, Expr::Null(_))
                         if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() =>
                     {
@@ -2294,9 +2323,13 @@ impl<'i> Checker<'_, 'i> {
                     _ => return None,
                 }
             } else if let Some(name) = pattern.nested_case {
-                let Ty::Enum(nested) = ty else { return None };
+                let (nested, extra) = match ty {
+                    Ty::Enum(id) => (id, 0),
+                    Ty::OptionalEnum(id) => (id, 1),
+                    _ => return None,
+                };
                 let cases = &ast.enum_cases[ast.enums[nested].cases];
-                if cases.is_empty() || cases.len() > 256 {
+                if cases.is_empty() || cases.len() + extra > 256 {
                     return None;
                 }
                 let nested_index = cases
@@ -2307,13 +2340,24 @@ impl<'i> Checker<'_, 'i> {
                 {
                     return None;
                 }
-                mask[nested_index / 64] = 1u64 << (nested_index % 64);
-                Some(cases.len())
+                let bit = nested_index + extra;
+                mask[bit / 64] = 1u64 << (bit % 64);
+                Some(cases.len() + extra)
             } else if self.input.tokens.kind(pattern.name) != eitri_syntax::TokenKind::Wildcard {
                 match ty {
                     Ty::OptionalBool => {
                         mask[0] = 0b110;
                         Some(3)
+                    }
+                    Ty::OptionalEnum(id) => {
+                        let count = ast.enum_cases[ast.enums[id].cases].len() + 1;
+                        if count > 256 {
+                            return None;
+                        }
+                        for bit in 1..count {
+                            mask[bit / 64] |= 1u64 << (bit % 64);
+                        }
+                        Some(count)
                     }
                     ty if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() => {
                         mask[0] = 0b10;

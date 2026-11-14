@@ -692,6 +692,8 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         match ty {
             Ty::Struct(id) => self.checked.struct_widths[id],
             Ty::Enum(id) => self.checked.enum_widths[id],
+            Ty::OptionalStruct(id) => 1 + self.checked.struct_widths[id],
+            Ty::OptionalEnum(id) => 1 + self.checked.enum_widths[id],
             ty if ty.tagged_optional_inner().is_some() => 2,
             _ => 1,
         }
@@ -708,8 +710,8 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         output: &mut Vec<ValueType>,
     ) -> Lowered<()> {
         if let Some(inner) = ty.tagged_optional_inner() {
-            output.extend([ValueType::Bool, value_type(inner)]);
-            return Ok(());
+            output.push(ValueType::Bool);
+            return self.flatten_with_nullable(inner, true, output);
         }
         if !matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
             output.push(if nullable && ty == Ty::String {
@@ -750,10 +752,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                 }
                 Ty::String if nullable => output.push(ValueType::NullableString),
-                ty if ty.tagged_optional_inner().is_some() => output.extend([
-                    ValueType::Bool,
-                    value_type(ty.tagged_optional_inner().unwrap()),
-                ]),
+                ty if ty.tagged_optional_inner().is_some() => {
+                    output.push(ValueType::Bool);
+                    pending.push((ty.tagged_optional_inner().unwrap(), true));
+                }
                 _ => output.push(value_type(next)),
             }
         }
@@ -1398,14 +1400,20 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             return Ok(target);
         }
         if self.checked.optional_wrap[e] && self.checked.types[e] != Ty::String {
+            let inner = self.checked.types[e];
             let target = if let Some(dst) = dst {
                 dst
             } else {
                 let slot = self.top;
-                self.top += 2;
+                self.top += 1 + self.width(inner);
                 slot
             };
-            self.expr_inner(e, Some(target + 1))?;
+            if matches!(inner, Ty::Struct(_) | Ty::Enum(_)) {
+                let source = self.expr_inner(e, None)?;
+                self.move_nullable(inner, source, target + 1, true, self.input.ast.span(e))?;
+            } else {
+                self.expr_inner(e, Some(target + 1))?;
+            }
             self.asm
                 .load(target, 1, ValueType::Bool, self.input.ast.span(e))?;
             return Ok(target);
@@ -1526,16 +1534,24 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         dst
                     } else {
                         let slot = self.top;
-                        self.top += 2;
+                        self.top += self.width(checked.types[e]);
                         slot
                     };
-                    self.asm.load(slot, 0, ValueType::Bool, span)?;
-                    self.asm.load(
-                        slot + 1,
-                        0,
-                        value_type(checked.types[e].tagged_optional_inner().unwrap()),
-                        span,
-                    )?;
+                    let mut layout = self
+                        .asm
+                        .temporary_vec(self.width(checked.types[e]) as usize)?;
+                    self.flatten_type(checked.types[e], &mut layout)?;
+                    for (offset, ty) in layout.into_iter().enumerate() {
+                        if ty == ValueType::NullableString {
+                            self.asm.emit(
+                                Op::NullableNull,
+                                Operands::abc((slot + offset as u32).into(), 0, 0),
+                                span,
+                            )?;
+                        } else {
+                            self.asm.load(slot + offset as u32, 0, ty, span)?;
+                        }
+                    }
                     Ok(slot)
                 } else {
                     let slot = self.dst(dst);
@@ -2105,12 +2121,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             node = rhs;
         }
         let count = self.stack.len() - mark;
-        let slot = if self.checked.types[root].tagged_optional_inner().is_some() {
+        let slot = if self.checked.types[root].tagged_optional_inner().is_some()
+            || matches!(self.checked.types[root], Ty::Struct(_) | Ty::Enum(_))
+        {
             if let Some(dst) = dst {
                 dst
             } else {
                 let slot = self.top;
-                self.top += 2;
+                self.top += self.width(self.checked.types[root]);
                 slot
             }
         } else {
@@ -2131,22 +2149,24 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 self.asm
                     .branch_test(Test::False, found, next, ast.span(operand));
                 if self.checked.types[root].tagged_optional_inner().is_some() {
-                    self.asm.emit(
-                        Op::Mov,
-                        Operands::abc(slot.into(), found.into(), 0),
-                        ast.span(operand),
-                    )?;
-                    self.asm.emit(
-                        Op::Mov,
-                        Operands::abc((slot + 1).into(), (found + 1).into(), 0),
-                        ast.span(operand),
-                    )?;
+                    for offset in 0..self.width(self.checked.types[root]) {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc((slot + offset).into(), (found + offset).into(), 0),
+                            ast.span(operand),
+                        )?;
+                    }
                 } else {
-                    self.asm.emit(
-                        Op::Mov,
-                        Operands::abc(slot.into(), (found + 1).into(), 0),
-                        ast.span(operand),
-                    )?;
+                    let inner = self.checked.types[root];
+                    if matches!(inner, Ty::Struct(_) | Ty::Enum(_)) {
+                        self.move_nullable(inner, found + 1, slot, false, ast.span(operand))?;
+                    } else {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc(slot.into(), (found + 1).into(), 0),
+                            ast.span(operand),
+                        )?;
+                    }
                 }
             } else if matches!(self.checked.types[root], Ty::String | Ty::OptionalString) {
                 let null = self.temp();
@@ -2643,7 +2663,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 .iter()
                 .map(|&arg| {
                     if checked.optional_wrap[arg] && checked.types[arg] != Ty::String {
-                        2
+                        1 + self.width(checked.types[arg])
                     } else {
                         self.width(checked.types[arg])
                     }
@@ -2674,7 +2694,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             self.expr(arg, Some(first + offset))?;
             self.top = save;
             offset += if checked.optional_wrap[arg] && checked.types[arg] != Ty::String {
-                2
+                1 + self.width(checked.types[arg])
             } else {
                 self.width(checked.types[arg])
             };
@@ -2859,7 +2879,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         match ty {
             ty if ty.tagged_optional_inner().is_some() => {
                 self.asm.branch_test(Test::False, source, next, span);
-                Ok(source + 1)
+                let inner = ty.tagged_optional_inner().unwrap();
+                if matches!(inner, Ty::Struct(_) | Ty::Enum(_)) {
+                    let value = self.top;
+                    self.top += self.width(inner);
+                    self.move_nullable(inner, source + 1, value, false, span)?;
+                    Ok(value)
+                } else {
+                    Ok(source + 1)
+                }
             }
             Ty::OptionalString => {
                 let null = self.temp();
@@ -2910,8 +2938,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     .expect("checked field label")
             });
             if let Some(case) = pattern.nested_case {
-                let Ty::Enum(nested) = self.checked.param_types[types][offset] else {
-                    unreachable!()
+                let payload_ty = self.checked.param_types[types][offset];
+                let nested = match payload_ty {
+                    Ty::Enum(id) | Ty::OptionalEnum(id) => id,
+                    _ => unreachable!(),
                 };
                 let nested_cases = &ast.enum_cases[ast.enums[nested].cases];
                 let tag = nested_cases
@@ -2923,6 +2953,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let constant = self.temp();
                 self.asm.load(constant, tag as u64, ValueType::I64, span)?;
                 let source = subject + self.enum_field_offset(enum_id, index, offset);
+                let source = self.match_present(source, payload_ty, next, span)?;
                 self.asm.branch_if(Cond::Ne, source, constant, next, span)?;
                 if let Some(children) = pattern.nested_bindings {
                     self.match_payload(source, nested, tag, children, next, span)?;
@@ -2998,11 +3029,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 self.top += self.width(narrowed);
                 self.slots[binding] = target;
                 if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() {
-                    self.asm.emit(
-                        Op::Mov,
-                        Operands::abc(target.into(), source.into(), 0),
-                        span,
-                    )?;
+                    for offset in 0..self.width(narrowed) {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc((target + offset).into(), (source + offset).into(), 0),
+                            span,
+                        )?;
+                    }
                 } else {
                     self.move_nullable(ty, source, target, false, span)?;
                 }
@@ -3095,11 +3128,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 self.top += self.width(narrowed);
                 self.slots[binding] = target;
                 if inner.is_some() {
-                    self.asm.emit(
-                        Op::Mov,
-                        Operands::abc(target.into(), source.into(), 0),
-                        span,
-                    )?;
+                    for offset in 0..self.width(narrowed) {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc((target + offset).into(), (source + offset).into(), 0),
+                            span,
+                        )?;
+                    }
                 } else {
                     self.move_nullable(subject_ty, source, target, false, span)?;
                 }

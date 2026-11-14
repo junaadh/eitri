@@ -178,6 +178,8 @@ impl Dumper<'_> {
             Ty::OptionalF32 => "'?f32'",
             Ty::OptionalF64 => "'?f64'",
             Ty::OptionalChar => "'?char'",
+            Ty::OptionalStruct(_) => "'?struct'",
+            Ty::OptionalEnum(_) => "'?enum'",
             Ty::Struct(_) => "'struct'",
             Ty::Enum(_) => "'enum'",
             Ty::FindOffset => "'?i64'",
@@ -207,6 +209,8 @@ impl Dumper<'_> {
             Ty::OptionalF32 => "?f32",
             Ty::OptionalF64 => "?f64",
             Ty::OptionalChar => "?char",
+            Ty::OptionalStruct(_) => "?struct",
+            Ty::OptionalEnum(_) => "?enum",
             Ty::Struct(_) => "struct",
             Ty::Enum(_) => "enum",
             Ty::FindOffset => "?i64",
@@ -236,7 +240,8 @@ impl Dumper<'_> {
             TypeExpr::OptionalString(token)
             | TypeExpr::OptionalI64(token)
             | TypeExpr::OptionalBool(token)
-            | TypeExpr::OptionalScalar(token) => {
+            | TypeExpr::OptionalScalar(token)
+            | TypeExpr::OptionalNamed(token) => {
                 self.paint(TYPE, &format!("'?{}'", self.token(token)))
             }
             TypeExpr::Error => self.paint(TYPE, "'<error>'"),
@@ -345,7 +350,8 @@ impl Dumper<'_> {
                     | TypeExpr::OptionalString(token)
                     | TypeExpr::OptionalI64(token)
                     | TypeExpr::OptionalBool(token)
-                    | TypeExpr::OptionalScalar(token) => tokens.span(token),
+                    | TypeExpr::OptionalScalar(token)
+                    | TypeExpr::OptionalNamed(token) => tokens.span(token),
                     TypeExpr::Error => tokens.span(param.name),
                 };
                 let range = self.range(tokens.span(param.name).to(end));

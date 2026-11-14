@@ -119,7 +119,8 @@ impl Printer<'_> {
             TypeExpr::OptionalString(token)
             | TypeExpr::OptionalI64(token)
             | TypeExpr::OptionalBool(token)
-            | TypeExpr::OptionalScalar(token) => {
+            | TypeExpr::OptionalScalar(token)
+            | TypeExpr::OptionalNamed(token) => {
                 format!("?{}", self.token(token))
             }
             TypeExpr::Error => "<error>".into(),

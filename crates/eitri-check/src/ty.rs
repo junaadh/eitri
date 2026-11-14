@@ -24,6 +24,8 @@ pub enum Ty {
     OptionalF32,
     OptionalF64,
     OptionalChar,
+    OptionalStruct(eitri_syntax::ast::StructId),
+    OptionalEnum(eitri_syntax::ast::EnumId),
     Struct(eitri_syntax::ast::StructId),
     Enum(eitri_syntax::ast::EnumId),
     /// A find result: null or a nonnegative UTF-8 byte offset.
@@ -47,7 +49,9 @@ impl Ty {
             Self::Char => S::Char,
             Self::Bool => S::Bool,
             Self::String => return Some(TypeDesc::String),
-            Self::Struct(_) | Self::Enum(_) => return None,
+            Self::Struct(_) | Self::Enum(_) | Self::OptionalStruct(_) | Self::OptionalEnum(_) => {
+                return None;
+            }
             Self::FindOffset
             | Self::OptionalString
             | Self::OptionalI64
@@ -75,6 +79,8 @@ impl Ty {
             Self::OptionalF32 => Self::F32,
             Self::OptionalF64 => Self::F64,
             Self::OptionalChar => Self::Char,
+            Self::OptionalStruct(id) => Self::Struct(id),
+            Self::OptionalEnum(id) => Self::Enum(id),
             _ => return None,
         })
     }
@@ -90,6 +96,8 @@ impl Ty {
             Self::F32 => Self::OptionalF32,
             Self::F64 => Self::OptionalF64,
             Self::Char => Self::OptionalChar,
+            Self::Struct(id) => Self::OptionalStruct(id),
+            Self::Enum(id) => Self::OptionalEnum(id),
             _ => return None,
         })
     }
@@ -133,6 +141,8 @@ impl Ty {
             Ty::OptionalF32 => "`?f32`",
             Ty::OptionalF64 => "`?f64`",
             Ty::OptionalChar => "`?char`",
+            Ty::OptionalStruct(_) => "an optional struct",
+            Ty::OptionalEnum(_) => "an optional enum",
             Ty::Struct(_) => "a struct",
             Ty::Enum(_) => "an enum",
             Ty::FindOffset => "`?i64`",

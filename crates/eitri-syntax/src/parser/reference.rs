@@ -751,7 +751,15 @@ impl Parser<'_> {
                     | eitri_base::sym::F32
                     | eitri_base::sym::F64
                     | eitri_base::sym::CHAR
-            ) {
+            ) || (!symbol.is_type_name()
+                && !self.text[self
+                    .span_of(TokenId::from_u32(self.pos + optional_tokens))
+                    .range()]
+                .strip_prefix(['i', 'u', 'f'])
+                .is_some_and(|digits| {
+                    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+                }))
+            {
                 for _ in 0..optional_tokens {
                     self.bump();
                 }
@@ -762,8 +770,10 @@ impl Parser<'_> {
                     TypeExpr::OptionalI64(token)
                 } else if symbol == eitri_base::sym::BOOL {
                     TypeExpr::OptionalBool(token)
-                } else {
+                } else if symbol.is_type_name() {
                     TypeExpr::OptionalScalar(token)
+                } else {
+                    TypeExpr::OptionalNamed(token)
                 });
             }
         }
