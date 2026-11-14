@@ -243,7 +243,8 @@ fn value_type(
     interner: &Interner,
     diagnostics: &mut Diagnostics,
 ) -> Ty {
-    if let TypeExpr::ResultNamed(token, _)
+    if let TypeExpr::ResultFixed(token, _, _)
+    | TypeExpr::ResultNamed(token, _)
     | TypeExpr::ResultOptional(token, _)
     | TypeExpr::OptionalResultNamed(token, _)
     | TypeExpr::OptionalResultOptional(token, _) = ty

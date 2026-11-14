@@ -592,6 +592,37 @@ impl<'i> Checker<'_, 'i> {
     /// A written type; `void` only where `allow_void`.
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
         match ty {
+            TypeExpr::ResultFixed(error, size, element) => {
+                let error_ty = self.ty(TypeExpr::Named(error), false);
+                let symbol = self.symbol(element);
+                let written = if symbol == eitri_base::sym::I64 {
+                    TypeExpr::FixedI64(size)
+                } else if symbol == eitri_base::sym::STRING {
+                    TypeExpr::FixedString(size)
+                } else if symbol.is_type_name() {
+                    TypeExpr::FixedScalar(size, element)
+                } else {
+                    TypeExpr::FixedNamed(size, element)
+                };
+                let success_ty = self.ty(written, false);
+                if error_ty == Ty::Error || success_ty == Ty::Error {
+                    return Ty::Error;
+                }
+                let pair = (error_ty, success_ty);
+                let index = if let Some(index) = self
+                    .out
+                    .result_types
+                    .iter()
+                    .position(|&existing| existing == pair)
+                {
+                    index
+                } else {
+                    let index = self.out.result_types.len();
+                    self.out.result_types.push(pair);
+                    index
+                };
+                return Ty::Result(index as u32);
+            }
             TypeExpr::OptionalResultNamed(error, success)
             | TypeExpr::OptionalResultOptional(error, success) => {
                 let inner = self.ty(
@@ -968,6 +999,16 @@ impl<'i> Checker<'_, 'i> {
                                 let width = |ty| match ty {
                                     Ty::Struct(id) => self.out.struct_widths[id],
                                     Ty::Enum(id) => self.out.enum_widths[id],
+                                    Ty::FixedI64(size)
+                                    | Ty::FixedString(size)
+                                    | Ty::FixedScalar(size, _)
+                                    | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                    Ty::FixedStruct(size, id) => u32::from(size)
+                                        .saturating_mul(self.out.struct_widths[id])
+                                        .max(1),
+                                    Ty::FixedEnum(size, id) => u32::from(size)
+                                        .saturating_mul(self.out.enum_widths[id])
+                                        .max(1),
                                     Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
                                     Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
                                     ty if ty.tagged_optional_inner().is_some() => 2,
@@ -1110,6 +1151,16 @@ impl<'i> Checker<'_, 'i> {
                         let width = |ty| match ty {
                             Ty::Struct(id) => self.out.struct_widths[id],
                             Ty::Enum(id) => self.out.enum_widths[id],
+                            Ty::FixedI64(size)
+                            | Ty::FixedString(size)
+                            | Ty::FixedScalar(size, _)
+                            | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                            Ty::FixedStruct(size, id) => u32::from(size)
+                                .saturating_mul(self.out.struct_widths[id])
+                                .max(1),
+                            Ty::FixedEnum(size, id) => u32::from(size)
+                                .saturating_mul(self.out.enum_widths[id])
+                                .max(1),
                             Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
                             Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
                             ty if ty.tagged_optional_inner().is_some() => 2,
@@ -1376,6 +1427,7 @@ impl<'i> Checker<'_, 'i> {
                         [error, success]
                             .into_iter()
                             .filter_map(|ty| {
+                                let ty = ty.fixed_inner().map_or(ty, |(_, inner)| inner);
                                 let ty = ty.tagged_optional_inner().unwrap_or(ty);
                                 let index = match ty {
                                     Ty::Struct(id) => id.index(),
@@ -1437,6 +1489,16 @@ impl<'i> Checker<'_, 'i> {
                             let width = |ty| match ty {
                                 Ty::Struct(id) => self.out.struct_widths[id],
                                 Ty::Enum(id) => self.out.enum_widths[id],
+                                Ty::FixedI64(size)
+                                | Ty::FixedString(size)
+                                | Ty::FixedScalar(size, _)
+                                | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                Ty::FixedStruct(size, id) => u32::from(size)
+                                    .saturating_mul(self.out.struct_widths[id])
+                                    .max(1),
+                                Ty::FixedEnum(size, id) => u32::from(size)
+                                    .saturating_mul(self.out.enum_widths[id])
+                                    .max(1),
                                 Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
                                 Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
                                 ty if ty.tagged_optional_inner().is_some() => 2,

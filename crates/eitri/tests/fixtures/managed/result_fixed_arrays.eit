@@ -1,0 +1,25 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+fn values(ok: bool) -> Problem![2]string {
+    if ok { return ["one", "two"] }
+    return .Err(Problem.Bad("no"))
+}
+fn relay(ok: bool) -> Problem![2]string { return try values(ok) }
+test.check(match relay(true) { .Ok(items) => items[0] == "one" && items[1] == "two", .Err => false })
+test.check(match relay(false) { .Ok => false, .Err(.Bad(text)) => text == "no" })
+struct Holder { value: Problem![2]string, marker: i64 }
+let holder = Holder { value: relay(true), marker: 9 }
+test.check(holder.marker == 9 && match holder.value { .Ok(items) => items[1] == "two", .Err => false })
+struct Item { text: string }
+struct Before { value: Problem![2]Item, marker: i64 }
+fn objects() -> Problem![2]Item { return [Item { text: "a" }, Item { text: "b" }] }
+let before = Before { value: objects(), marker: 7 }
+test.check(before.marker == 7 && match before.value { .Ok(items) => items[1].text == "b", .Err => false })
+fn empty() -> Problem![0]string { return [] }
+test.check(match empty() { .Ok(items) => items == items, .Err => false })
+struct Forward { value: Problem![2]Later, marker: i64 }
+struct Later { name: string, count: i64 }
+fn later() -> Problem![2]Later { return [Later { name: "a", count: 1 }, Later { name: "b", count: 2 }] }
+let forward = Forward { value: later(), marker: 55 }
+test.check(forward.marker == 55 && match forward.value { .Ok(items) => items[1].name == "b" && items[1].count == 2, .Err => false })
