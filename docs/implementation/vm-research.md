@@ -2294,3 +2294,17 @@ execution 250/375 ns, total 9,750/14,000 ns; retained context memory was
 30,683 B. This scalar workload does not exercise defaults. Samples:
 `/private/tmp/eitri-t017-34-samples.csv`; report:
 `/private/tmp/eitri-t017-34-bench.txt`.
+
+### T017-35 positional enum construction
+
+Enum cases accept positional payload arguments, including expected-type
+shorthand nested in arguments. Arguments execute in source order; arity and
+type mismatches reject before execution. Both interpreters and lowerers cover
+managed values under forced collection.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 8,667/10,400 ns,
+execution 209/291 ns, total 8,875/10,700 ns; retained context memory was
+30,683 B. This scalar workload does not exercise enum constructors. Samples:
+`/private/tmp/eitri-t017-35-samples.csv`; report:
+`/private/tmp/eitri-t017-35-bench.txt`.

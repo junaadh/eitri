@@ -692,6 +692,11 @@ impl Eval<'_> {
                     values[index] = self.expr(host, arg.value)?;
                 }
             }
+            if let Expr::Call { args, .. } = self.ast.exprs[e] {
+                for (index, &arg) in self.ast.args(args).iter().enumerate() {
+                    values[index] = self.expr(host, arg)?;
+                }
+            }
             let index = self.structs.len() as u32;
             self.structs.push(values);
             return Ok(Value::Enum(id, case, index));

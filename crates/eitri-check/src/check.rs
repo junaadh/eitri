@@ -976,7 +976,10 @@ impl<'i> Checker<'_, 'i> {
                     self.spine.push(rhs);
                 }
                 Expr::Call { callee, args }
-                    if matches!(ast.exprs[callee], Expr::Name(_) | Expr::Member { .. }) =>
+                    if matches!(
+                        ast.exprs[callee],
+                        Expr::Name(_) | Expr::Member { .. } | Expr::EnumShorthand(_)
+                    ) =>
                 {
                     self.spine.extend_from_slice(ast.args(args))
                 }
@@ -1609,7 +1612,7 @@ impl<'i> Checker<'_, 'i> {
             }
             Expr::Name(token) => self.name(expr, token),
             Expr::StructLiteral { name, fields } => self.struct_literal(expr, name, fields),
-            Expr::EnumShorthand(name) => self.enum_value(expr, None, name, expected, None),
+            Expr::EnumShorthand(name) => self.enum_value(expr, None, name, expected, None, None),
             Expr::NamedCall { callee, args } => self.enum_named_call(expr, callee, args, expected),
             Expr::Member { base, name } => {
                 if let Expr::Name(token) = self.ast().exprs[base]
@@ -1619,7 +1622,7 @@ impl<'i> Checker<'_, 'i> {
                         .copied()
                         .flatten()
                 {
-                    self.enum_value(expr, Some(id), name, expected, None)
+                    self.enum_value(expr, Some(id), name, expected, None, None)
                 } else {
                     self.member_value(expr, base, name)
                 }
@@ -1656,7 +1659,7 @@ impl<'i> Checker<'_, 'i> {
                 ..
             } => self.coalesce(expr),
             Expr::Binary { .. } => self.binary_chain(expr, expected),
-            Expr::Call { callee, args } => self.call(expr, callee, args),
+            Expr::Call { callee, args } => self.call(expr, callee, args, expected),
             Expr::If(id) => self.if_expr(expr, id, expected, used),
             Expr::Match(id) => self.match_expr(expr, id, expected, used),
             Expr::Error => Ty::Error,
@@ -2238,6 +2241,7 @@ impl<'i> Checker<'_, 'i> {
         name: TokenId,
         expected: Option<Ty>,
         args: Option<List<eitri_syntax::ast::FieldInit>>,
+        positional: Option<List<ExprId>>,
     ) -> Ty {
         let id = owner.or(match expected {
             Some(Ty::Enum(id)) => Some(id),
@@ -2293,6 +2297,23 @@ impl<'i> Checker<'_, 'i> {
                 }
             }
         }
+        if let Some(positional) = positional {
+            let args = self.ast().args(positional);
+            if args.len() > fields.len() {
+                self.report(
+                    Code::ArgumentCount,
+                    "too many enum payload arguments",
+                    self.span(expr),
+                );
+            }
+            for (index, &arg) in args.iter().enumerate() {
+                let expected = self.out.param_types[types].get(index).copied();
+                self.value(arg, expected);
+                if index < fields.len() {
+                    seen[index] = true;
+                }
+            }
+        }
         if fields.len() > 256 || seen[..fields.len()].iter().any(|seen| !seen) {
             self.report(
                 Code::ArgumentCount,
@@ -2312,7 +2333,9 @@ impl<'i> Checker<'_, 'i> {
         expected: Option<Ty>,
     ) -> Ty {
         match self.ast().exprs[callee] {
-            Expr::EnumShorthand(name) => self.enum_value(expr, None, name, expected, Some(args)),
+            Expr::EnumShorthand(name) => {
+                self.enum_value(expr, None, name, expected, Some(args), None)
+            }
             Expr::Member { base, name } => {
                 if let Expr::Name(token) = self.ast().exprs[base]
                     && let Some(id) = self
@@ -2321,7 +2344,7 @@ impl<'i> Checker<'_, 'i> {
                         .copied()
                         .flatten()
                 {
-                    self.enum_value(expr, Some(id), name, expected, Some(args))
+                    self.enum_value(expr, Some(id), name, expected, Some(args), None)
                 } else {
                     self.report(
                         Code::Unsupported,
@@ -2493,8 +2516,35 @@ impl<'i> Checker<'_, 'i> {
         Ty::Error
     }
 
-    fn call(&mut self, expr: ExprId, callee: ExprId, args: List<ExprId>) -> Ty {
+    fn call(
+        &mut self,
+        expr: ExprId,
+        callee: ExprId,
+        args: List<ExprId>,
+        expected: Option<Ty>,
+    ) -> Ty {
         let ast = self.input.ast;
+        match ast.exprs[callee] {
+            Expr::EnumShorthand(name) => {
+                return self.enum_value(expr, None, name, expected, None, Some(args));
+            }
+            Expr::Member { base, name } => {
+                if let Expr::Name(owner) = ast.exprs[base]
+                    && let Some(id) = self
+                        .enum_names
+                        .get(self.symbol(owner).index())
+                        .copied()
+                        .flatten()
+                    && ast.enum_cases[ast.enums[id].cases]
+                        .iter()
+                        .take(256)
+                        .any(|case| self.symbol(case.name) == self.symbol(name))
+                {
+                    return self.enum_value(expr, Some(id), name, expected, None, Some(args));
+                }
+            }
+            _ => {}
+        }
         if matches!(ast.exprs[callee], Expr::Name(token) if self.symbol(token).is_type_name()) {
             return self.conversion(expr, callee, ast.args(args), true);
         }

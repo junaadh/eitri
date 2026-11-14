@@ -1,0 +1,10 @@
+//! host: test
+import test from "test"
+struct Text { value: string }
+enum Inner { Empty, Data(item: Text, number: i64) }
+enum Outer { Nothing, Wrap(item: Inner) }
+fn make(item: Outer) -> Outer { return item }
+let first: Outer = .Wrap(.Data(Text { value: "hello" }, test.id(7)))
+let second = make(Outer.Wrap(Inner.Data(Text { value: "hello" }, 7)))
+test.check(first == second)
+test.check(match first { .Nothing => false, .Wrap(.Data(item, n)) => item.value == "hello" && n == 7, .Wrap(_) => false })

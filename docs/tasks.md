@@ -878,6 +878,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   that do not match the payload type.
 - T017-34: nested implicit struct defaults execute, with bounded compile-time
   expansion and recursive defaults rejected at the limit.
+- T017-35: enum payload constructors accept positional arguments and nested
+  shorthand where expected types are known, with arity checks.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

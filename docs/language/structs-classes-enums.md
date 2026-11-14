@@ -17,7 +17,7 @@ on the receiver and retain its mutability rules. Literal, arithmetic and call de
 defaults can construct enums and structs, including nested defaults. Expansion
 is limited to 16 nested defaults and 65,536 total defaults per function;
 captured names remain unsupported.
-Enums with payloads, construction and exhaustive case matching with positional
+Enums support labeled or positional payload construction, and exhaustive case matching with positional
 bindings execute on both interpreters. Structs and enums can contain each other,
 with inline cycles rejected. Richer patterns remain future work. The rest of
 this chapter is the language contract for those features.

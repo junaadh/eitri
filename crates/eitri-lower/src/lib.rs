@@ -1402,6 +1402,22 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     self.top = end;
                 }
             }
+            if let Expr::Call { args, .. } = ast.exprs[e] {
+                let types =
+                    checked.enum_case_types[checked.enum_starts[id] as usize + case as usize];
+                for (index, &arg) in ast.args(args).iter().enumerate() {
+                    let ty = checked.param_types[types][index];
+                    let value = self.expr(arg, None)?;
+                    self.move_nullable(
+                        ty,
+                        value,
+                        slot + self.enum_field_offset(id, case as usize, index),
+                        true,
+                        span,
+                    )?;
+                    self.top = end;
+                }
+            }
             return Ok(slot);
         }
         match ast.exprs[e] {

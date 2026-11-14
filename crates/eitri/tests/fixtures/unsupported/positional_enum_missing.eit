@@ -1,0 +1,2 @@
+enum E { Data(value: i64) }
+let item = E.Data()
