@@ -3203,6 +3203,12 @@ impl<'i> Checker<'_, 'i> {
             return Some(Ty::String);
         }
         if let Expr::Call { callee, .. } = self.ast().exprs[expr]
+            && let Expr::Name(name) = self.ast().exprs[callee]
+            && let Some(Name::Function(function)) = self.lookup(self.symbol(name))
+        {
+            return Some(self.out.signatures[function].ret);
+        }
+        if let Expr::Call { callee, .. } = self.ast().exprs[expr]
             && let Expr::Member { base, name } = self.ast().exprs[callee]
             && self.spelling(name) == "find"
             && self.hint_at(base, depth + 1) == Some(Ty::String)
@@ -3251,6 +3257,24 @@ impl<'i> Checker<'_, 'i> {
         };
         let guidance = if matches!(first_op, BinaryOp::And | BinaryOp::Or) {
             Some(Ty::Bool)
+        } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
+            && matches!(
+                self.hint(first_rhs),
+                Some(Ty::OptionalString | Ty::OptionalI64)
+            )
+        {
+            self.hint(first_rhs)
+        } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
+            && matches!(ast.exprs[first_rhs], Expr::Null(_))
+            && matches!(self.hint(leftmost), Some(Ty::I64 | Ty::FindOffset))
+        {
+            Some(Ty::OptionalI64)
+        } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
+            && matches!(ast.exprs[first_rhs], Expr::Null(_))
+            && (self.hint(leftmost) == Some(Ty::String)
+                || matches!(ast.exprs[leftmost], Expr::Null(_)))
+        {
+            Some(Ty::OptionalString)
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
             && ((matches!(ast.exprs[leftmost], Expr::Null(_))
                 && matches!(ast.exprs[first_rhs], Expr::Int { .. }))

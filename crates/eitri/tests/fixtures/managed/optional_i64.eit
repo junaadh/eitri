@@ -18,3 +18,6 @@ fn choose(flag: bool) -> ?i64 { return if flag { 42 } else { null } }
 let chosen = choose(true)
 let neither: ?i64 = null ?? null
 test.check(42 == chosen && neither == null && (choose(false) ?? 9) == 9)
+let plain = -1
+test.check(plain == present.value && present.value == plain)
+test.check(plain != null && null == null)

@@ -2383,3 +2383,17 @@ execution 209/542 ns, total 8,667/29,200 ns; retained context memory was
 30,898 B. The scalar workload does not exercise find conversion and the p99
 was noisy. Samples: `/private/tmp/eitri-t017-40-samples.csv`; report:
 `/private/tmp/eitri-t017-40-bench.txt`.
+
+### T017-41 optional equality inference
+
+Equality uses implicit optional conversions for ordinary string or i64
+bindings on either side and permits null-only equality. The resulting code
+uses the same nullable or tagged comparisons; managed cases run under forced
+collection on both interpreters and lowerers.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 8,417/10,400 ns,
+execution 209/292 ns, total 8,625/10,600 ns; retained context memory was
+30,898 B. This scalar workload does not exercise optionals. Samples:
+`/private/tmp/eitri-t017-41-samples.csv`; report:
+`/private/tmp/eitri-t017-41-bench.txt`.

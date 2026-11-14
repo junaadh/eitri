@@ -891,6 +891,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   Optional payload bindings and literals match only present values.
 - T017-40: string `find` results convert to `?i64` and participate in optional
   equality and mixed coalescing without losing the full i64 value range.
+- T017-41: optional equality infers conversions for ordinary scalar bindings
+  on either side, including null-only comparisons.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 
