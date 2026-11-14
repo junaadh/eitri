@@ -2752,3 +2752,10 @@ Fixed-array defaults are checked and evaluated at each construction site.
 The 1001-sample release harness reported fresh module compile p50/p99
 13.8/44.9 µs and source-to-result 14.2/46.5 µs, for its general workload.
 Raw samples: `/private/tmp/eitri-t017-66-samples.csv`.
+
+### T017-67 computed field defaults
+
+Field defaults can read members and index fixed arrays of constructed values.
+The 1001-sample release harness measured fresh module compile p50/p99
+13.8/17.2 µs and source-to-result 14.1/17.7 µs on the general workload. Raw
+samples: `/private/tmp/eitri-t017-67-samples.csv`.

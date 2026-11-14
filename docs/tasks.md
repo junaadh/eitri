@@ -807,6 +807,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-68: conditional field defaults evaluate the selected branch, including
+  managed string results and else-if expressions.
 - T017-67: field defaults can read fields and index fixed arrays from
   constructed values, with managed values traced during evaluation.
 - T017-66: fixed-array field defaults evaluate at each construction, including

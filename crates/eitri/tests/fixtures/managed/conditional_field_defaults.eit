@@ -1,0 +1,9 @@
+//! host: test
+import test from "test"
+fn enabled() -> bool { return true }
+struct Config { name: string = if enabled() { "enabled" } else { "disabled" } }
+let config = Config {}
+test.check(config.name == "enabled")
+struct Other { name: string = if false { "wrong" } else if enabled() { "chosen" } else { "wrong" } }
+let other = Other {}
+test.check(other.name == "chosen")

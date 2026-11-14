@@ -1171,6 +1171,26 @@ impl<'i> Checker<'_, 'i> {
                     self.spine.push(base);
                     self.spine.push(index);
                 }
+                Expr::If(id) => {
+                    let branch = ast.ifs[id];
+                    self.spine.push(branch.condition);
+                    let mut blocks = [Some(branch.then), None];
+                    match branch.otherwise {
+                        Else::Block(block) => blocks[1] = Some(block),
+                        Else::If(expr) => self.spine.push(expr),
+                        Else::None => {}
+                    }
+                    for block in blocks.into_iter().flatten() {
+                        for &stmt in ast.block(block) {
+                            if let Stmt::Expr(expr) = ast.stmts[stmt] {
+                                self.spine.push(expr);
+                            } else {
+                                self.spine.clear();
+                                return false;
+                            }
+                        }
+                    }
+                }
                 Expr::Unary { operand, .. } => self.spine.push(operand),
                 Expr::Binary { lhs, rhs, .. } => {
                     self.spine.push(lhs);
