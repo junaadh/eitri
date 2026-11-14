@@ -622,7 +622,17 @@ impl Parser<'_> {
             self.expect(T::LBrace, "`{`")?;
             self.skip_separators();
             while !self.at(T::RBrace) && !self.at(T::Eof) {
-                let (case, qualifier, catch_binding) = if self.eat(T::Wildcard).is_some() {
+                let literal = if matches!(
+                    self.kind(),
+                    T::Int | T::Float | T::Str | T::Char | T::True | T::False | T::Minus | T::Null
+                ) {
+                    Some(self.prefix(true)?)
+                } else {
+                    None
+                };
+                let (case, qualifier, catch_binding) = if literal.is_some() {
+                    (None, None, None)
+                } else if self.eat(T::Wildcard).is_some() {
                     (None, None, None)
                 } else if self.at(T::Ident) && self.nth(1) == T::Dot {
                     let qualifier = self.bump();
@@ -656,6 +666,7 @@ impl Parser<'_> {
                     crate::ast::MatchBody::Expr(self.expr(false)?)
                 };
                 self.match_arms.push(crate::ast::MatchArm {
+                    literal,
                     case,
                     qualifier,
                     catch_binding,
@@ -917,7 +928,15 @@ impl Parser<'_> {
                 .symbol(TokenId::from_u32(self.pos + optional_tokens));
             if matches!(
                 symbol,
-                eitri_base::sym::STRING | eitri_base::sym::I64 | eitri_base::sym::BOOL
+                eitri_base::sym::STRING
+                    | eitri_base::sym::I64
+                    | eitri_base::sym::BOOL
+                    | eitri_base::sym::I8
+                    | eitri_base::sym::U8
+                    | eitri_base::sym::U64
+                    | eitri_base::sym::F32
+                    | eitri_base::sym::F64
+                    | eitri_base::sym::CHAR
             ) {
                 for _ in 0..optional_tokens {
                     self.bump();
@@ -927,8 +946,10 @@ impl Parser<'_> {
                     TypeExpr::OptionalString(token)
                 } else if symbol == eitri_base::sym::I64 {
                     TypeExpr::OptionalI64(token)
-                } else {
+                } else if symbol == eitri_base::sym::BOOL {
                     TypeExpr::OptionalBool(token)
+                } else {
+                    TypeExpr::OptionalScalar(token)
                 });
             }
         }

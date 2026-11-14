@@ -582,6 +582,12 @@ impl<'i> Checker<'_, 'i> {
             TypeExpr::OptionalString(_) => return Ty::OptionalString,
             TypeExpr::OptionalI64(_) => return Ty::OptionalI64,
             TypeExpr::OptionalBool(_) => return Ty::OptionalBool,
+            TypeExpr::OptionalScalar(token) => {
+                return match type_name(self.symbol(token)) {
+                    TypeName::Supported(inner) => inner.optional_of().unwrap_or(Ty::Error),
+                    _ => Ty::Error,
+                };
+            }
             _ => {}
         }
         let TypeExpr::Named(token) = ty else {
@@ -892,7 +898,7 @@ impl<'i> Checker<'_, 'i> {
                     Ty::Void => 0,
                     Ty::Struct(id) => self.out.struct_widths[id],
                     Ty::Enum(id) => self.out.enum_widths[id],
-                    Ty::OptionalI64 | Ty::OptionalBool => 2,
+                    ty if ty.tagged_optional_inner().is_some() => 2,
                     _ => 1,
                 })
                 .fold(0u32, u32::saturating_add);
@@ -1122,7 +1128,7 @@ impl<'i> Checker<'_, 'i> {
                     match child {
                         Ty::Struct(id) => self.out.struct_widths[id],
                         Ty::Enum(id) => self.out.enum_widths[id],
-                        Ty::OptionalI64 | Ty::OptionalBool => 2,
+                        ty if ty.tagged_optional_inner().is_some() => 2,
                         _ => 1,
                     }
                 };
@@ -1518,15 +1524,21 @@ impl<'i> Checker<'_, 'i> {
     /// Check `expr` as a value against `expected`, reporting a mismatch at
     /// its span. Returns its own type.
     fn value(&mut self, expr: ExprId, expected: Option<Ty>) -> Ty {
-        let found = self.expr(expr, expected, true);
-        if matches!(
-            (expected, found),
-            (Some(Ty::OptionalString), Ty::String)
-                | (Some(Ty::OptionalI64), Ty::I64 | Ty::FindOffset)
-                | (Some(Ty::OptionalBool), Ty::Bool)
+        let guidance = if matches!(
+            self.input.ast.exprs[expr],
+            Expr::Int { .. } | Expr::Float { .. }
         ) {
+            expected.and_then(Ty::tagged_optional_inner).or(expected)
+        } else {
+            expected
+        };
+        let found = self.expr(expr, guidance, true);
+        if let Some(expected) = expected
+            && (found.optional_of() == Some(expected)
+                || (expected == Ty::OptionalI64 && found == Ty::FindOffset))
+        {
             self.out.optional_wrap[expr] = true;
-            return expected.unwrap();
+            return expected;
         }
         // Compare first: the span is only needed for the rare mismatch. An
         // `if`'s branches were held to `expected` and reported their own
@@ -1622,10 +1634,9 @@ impl<'i> Checker<'_, 'i> {
             Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
             Expr::Bool(_) => Ty::Bool,
             Expr::Null(token) => {
-                if matches!(
-                    expected,
-                    Some(Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool)
-                ) {
+                if expected.is_some_and(|ty| {
+                    ty == Ty::OptionalString || ty.tagged_optional_inner().is_some()
+                }) {
                     expected.unwrap()
                 } else {
                     self.report(
@@ -1723,24 +1734,28 @@ impl<'i> Checker<'_, 'i> {
         {
             tail = rhs;
         }
-        let context = if matches!(expected, Some(Ty::String | Ty::OptionalString))
-            || matches!(self.ast().exprs[tail], Expr::String(_))
-            || matches!(self.hint(tail), Some(Ty::String | Ty::OptionalString))
-        {
-            Some(Ty::OptionalString)
-        } else if matches!(expected, Some(Ty::I64 | Ty::OptionalI64))
-            || matches!(self.ast().exprs[tail], Expr::Int { .. })
-            || matches!(self.hint(tail), Some(Ty::I64 | Ty::OptionalI64))
-        {
-            Some(Ty::OptionalI64)
-        } else if matches!(expected, Some(Ty::Bool | Ty::OptionalBool))
-            || matches!(self.ast().exprs[tail], Expr::Bool(_))
-            || matches!(self.hint(tail), Some(Ty::Bool | Ty::OptionalBool))
-        {
-            Some(Ty::OptionalBool)
-        } else {
-            None
-        };
+        let context = expected
+            .and_then(|ty| {
+                if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() {
+                    Some(ty)
+                } else {
+                    ty.optional_of()
+                }
+            })
+            .or_else(|| match self.ast().exprs[tail] {
+                Expr::String(_) => Some(Ty::OptionalString),
+                Expr::Int { .. } => Some(Ty::OptionalI64),
+                Expr::Float { .. } => Some(Ty::OptionalF64),
+                Expr::Bool(_) => Some(Ty::OptionalBool),
+                Expr::Char(_) => Some(Ty::OptionalChar),
+                _ => self.hint(tail).and_then(|ty| {
+                    if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() {
+                        Some(ty)
+                    } else {
+                        ty.optional_of()
+                    }
+                }),
+            });
         let mut node = root;
         let mut source_kind = None;
         while let Expr::Binary {
@@ -1769,14 +1784,9 @@ impl<'i> Checker<'_, 'i> {
                 }
                 source_kind = Some(Ty::OptionalI64);
             }
-            if !matches!(
-                found,
-                Ty::FindOffset
-                    | Ty::OptionalString
-                    | Ty::OptionalI64
-                    | Ty::OptionalBool
-                    | Ty::Error
-            ) {
+            if !matches!(found, Ty::FindOffset | Ty::OptionalString | Ty::Error)
+                && found.tagged_optional_inner().is_none()
+            {
                 self.report(
                     Code::TypeMismatch,
                     "left operand of `??` must be optional",
@@ -1795,21 +1805,21 @@ impl<'i> Checker<'_, 'i> {
         }
         let source_kind = source_kind.unwrap_or(Ty::Error);
         let result = match source_kind {
-            Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool => {
-                let hint = if matches!(self.ast().exprs[node], Expr::Null(_)) {
-                    Some(source_kind)
-                } else {
-                    None
+            kind if kind == Ty::OptionalString || kind.tagged_optional_inner().is_some() => {
+                let hint = match self.ast().exprs[node] {
+                    Expr::Null(_) => Some(source_kind),
+                    Expr::Int { .. } | Expr::Float { .. } => source_kind.tagged_optional_inner(),
+                    _ => None,
                 };
                 let mut found = self.value(node, hint);
                 if source_kind == Ty::OptionalI64 && found == Ty::FindOffset {
                     self.out.optional_wrap[node] = true;
                     found = Ty::OptionalI64;
                 }
-                let inner = match source_kind {
-                    Ty::OptionalString => Ty::String,
-                    Ty::OptionalBool => Ty::Bool,
-                    _ => Ty::I64,
+                let inner = if source_kind == Ty::OptionalString {
+                    Ty::String
+                } else {
+                    source_kind.tagged_optional_inner().unwrap()
                 };
                 if found != inner && found != source_kind && found != Ty::Error {
                     self.mismatch(found, inner, self.span(node));
@@ -2165,11 +2175,10 @@ impl<'i> Checker<'_, 'i> {
                 }
                 continue;
             }
-            let narrowed = match ty {
-                Ty::OptionalString => Ty::String,
-                Ty::OptionalI64 => Ty::I64,
-                Ty::OptionalBool => Ty::Bool,
-                _ => ty,
+            let narrowed = if ty == Ty::OptionalString {
+                Ty::String
+            } else {
+                ty.tagged_optional_inner().unwrap_or(ty)
             };
             if let Some(literal) = pattern.literal {
                 if matches!(self.ast().exprs[literal], Expr::Null(_)) {
@@ -2229,10 +2238,10 @@ impl<'i> Checker<'_, 'i> {
                 },
                 None => position,
             };
-            if matches!(
-                self.out.param_types[types].get(index),
-                Some(Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool)
-            ) {
+            if self.out.param_types[types]
+                .get(index)
+                .is_some_and(|ty| *ty == Ty::OptionalString || ty.tagged_optional_inner().is_some())
+            {
                 return false;
             }
         }
@@ -2276,7 +2285,9 @@ impl<'i> Checker<'_, 'i> {
                         mask[0] = 1;
                         Some(3)
                     }
-                    (Ty::OptionalString | Ty::OptionalI64, Expr::Null(_)) => {
+                    (ty, Expr::Null(_))
+                        if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() =>
+                    {
                         mask[0] = 1;
                         Some(2)
                     }
@@ -2304,7 +2315,7 @@ impl<'i> Checker<'_, 'i> {
                         mask[0] = 0b110;
                         Some(3)
                     }
-                    Ty::OptionalString | Ty::OptionalI64 => {
+                    ty if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() => {
                         mask[0] = 0b10;
                         Some(2)
                     }
@@ -3252,6 +3263,19 @@ impl<'i> Checker<'_, 'i> {
         if matches!(self.ast().exprs[expr], Expr::String(_)) {
             return Some(Ty::String);
         }
+        if let Expr::Binary {
+            op: BinaryOp::Coalesce,
+            lhs,
+            ..
+        } = self.ast().exprs[expr]
+        {
+            let ty = self.hint_at(lhs, depth + 1)?;
+            return if ty == Ty::OptionalString {
+                Some(Ty::String)
+            } else {
+                ty.tagged_optional_inner()
+            };
+        }
         if let Expr::Call { callee, .. } = self.ast().exprs[expr]
             && let Expr::Name(name) = self.ast().exprs[callee]
             && let Some(Name::Function(function)) = self.lookup(self.symbol(name))
@@ -3308,10 +3332,9 @@ impl<'i> Checker<'_, 'i> {
         let guidance = if matches!(first_op, BinaryOp::And | BinaryOp::Or) {
             Some(Ty::Bool)
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
-            && matches!(
-                self.hint(first_rhs),
-                Some(Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool)
-            )
+            && self
+                .hint(first_rhs)
+                .is_some_and(|ty| ty == Ty::OptionalString || ty.tagged_optional_inner().is_some())
         {
             self.hint(first_rhs)
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
@@ -3369,10 +3392,9 @@ impl<'i> Checker<'_, 'i> {
         } else {
             guidance
         };
-        let mut lhs_ty = if matches!(
-            guidance,
-            Some(Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool)
-        ) {
+        let mut lhs_ty = if guidance
+            .is_some_and(|ty| ty == Ty::OptionalString || ty.tagged_optional_inner().is_some())
+        {
             self.value(leftmost, guidance)
         } else {
             self.expr(leftmost, guidance, true)

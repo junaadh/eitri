@@ -208,6 +208,7 @@ enum Value {
     OptionalString(Option<u32>),
     OptionalI64(Option<i64>),
     OptionalBool(Option<bool>),
+    OptionalScalar(Ty, Option<u64>),
     Struct(eitri_syntax::ast::StructId, u32),
     Enum(eitri_syntax::ast::EnumId, u32, u32),
     Void,
@@ -251,6 +252,7 @@ impl Value {
             Self::OptionalString(_) => Ty::OptionalString,
             Self::OptionalI64(_) => Ty::OptionalI64,
             Self::OptionalBool(_) => Ty::OptionalBool,
+            Self::OptionalScalar(ty, _) => ty,
             Self::Struct(id, _) => Ty::Struct(id),
             Self::Enum(id, _, _) => Ty::Enum(id),
             Self::Scalar(ty, _) => ty,
@@ -303,6 +305,7 @@ impl Value {
             | Value::OptionalString(_)
             | Value::OptionalI64(_)
             | Value::OptionalBool(_)
+            | Value::OptionalScalar(_, _)
             | Value::Struct(_, _)
             | Value::Enum(_, _, _)
             | Value::Void => {
@@ -674,6 +677,7 @@ impl Eval<'_> {
                         Value::OptionalString(None)
                             | Value::OptionalI64(None)
                             | Value::OptionalBool(None)
+                            | Value::OptionalScalar(_, None)
                     ) {
                         return Ok(false);
                     }
@@ -684,9 +688,13 @@ impl Eval<'_> {
                     Value::OptionalI64(Some(value)) => Value::Int(value),
                     Value::OptionalBool(Some(value)) => Value::Bool(value),
                     Value::OptionalString(Some(value)) => Value::String(value),
+                    Value::OptionalScalar(ty, Some(value)) => {
+                        Value::from_word(ty.tagged_optional_inner().unwrap(), value)
+                    }
                     Value::OptionalI64(None)
                     | Value::OptionalString(None)
-                    | Value::OptionalBool(None) => return Ok(false),
+                    | Value::OptionalBool(None)
+                    | Value::OptionalScalar(_, None) => return Ok(false),
                     value => value,
                 };
                 if !self
@@ -700,9 +708,13 @@ impl Eval<'_> {
                     Value::OptionalI64(Some(value)) => Value::Int(value),
                     Value::OptionalBool(Some(value)) => Value::Bool(value),
                     Value::OptionalString(Some(value)) => Value::String(value),
+                    Value::OptionalScalar(ty, Some(value)) => {
+                        Value::from_word(ty.tagged_optional_inner().unwrap(), value)
+                    }
                     Value::OptionalI64(None)
                     | Value::OptionalString(None)
-                    | Value::OptionalBool(None) => return Ok(false),
+                    | Value::OptionalBool(None)
+                    | Value::OptionalScalar(_, None) => return Ok(false),
                     value => value,
                 };
                 self.locals[binding.index()] = Some(value);
@@ -735,6 +747,16 @@ impl Eval<'_> {
                 unreachable!()
             };
             return Ok(Value::OptionalI64(Some(value)));
+        }
+        if self.checked.optional_wrap[e]
+            && self.checked.types[e].optional_of().is_some()
+            && self.checked.types[e] != Ty::String
+        {
+            let value = self.expr_inner(host, e)?;
+            return Ok(Value::OptionalScalar(
+                value.ty().optional_of().unwrap(),
+                Some(value.word()),
+            ));
         }
         if self.checked.optional_wrap[e] {
             let Value::String(value) = self.expr_inner(host, e)? else {
@@ -863,6 +885,9 @@ impl Eval<'_> {
             Expr::Null(_) if self.checked.types[e] == Ty::OptionalI64 => {
                 Ok(Value::OptionalI64(None))
             }
+            Expr::Null(_) if self.checked.types[e].tagged_optional_inner().is_some() => {
+                Ok(Value::OptionalScalar(self.checked.types[e], None))
+            }
             Expr::Null(_) => Ok(Value::OptionalString(None)),
             Expr::SelfValue(_) | Expr::Name(_) => match self.checked.resolutions[e] {
                 Res::Binding(binding) => Ok(self.read(binding)),
@@ -920,6 +945,16 @@ impl Eval<'_> {
                                 Ok(Value::OptionalI64(Some(value)))
                             }
                             Some(value) => Ok(Value::Int(value)),
+                            None => self.expr(host, rhs),
+                        }
+                    } else if let Value::OptionalScalar(ty, value) = value {
+                        match value {
+                            Some(value) if self.checked.types[e] == ty => {
+                                Ok(Value::OptionalScalar(ty, Some(value)))
+                            }
+                            Some(value) => {
+                                Ok(Value::from_word(ty.tagged_optional_inner().unwrap(), value))
+                            }
                             None => self.expr(host, rhs),
                         }
                     } else if let Value::OptionalString(value) = value {
@@ -1319,6 +1354,22 @@ impl Eval<'_> {
                     if self.strings[a as usize] == self.strings[b as usize] => {}
                 (Value::OptionalString(Some(a)), Value::OptionalString(Some(b)))
                     if self.strings[a as usize] == self.strings[b as usize] => {}
+                (Value::OptionalScalar(ty, left), Value::OptionalScalar(other, right))
+                    if ty == other =>
+                {
+                    match (left, right) {
+                        (None, None) => {}
+                        (Some(a), Some(b))
+                            if ty.tagged_optional_inner().unwrap().float()
+                                && Value::from_word(ty.tagged_optional_inner().unwrap(), a)
+                                    .float()
+                                    == Value::from_word(ty.tagged_optional_inner().unwrap(), b)
+                                        .float() => {}
+                        (Some(a), Some(b))
+                            if !ty.tagged_optional_inner().unwrap().float() && a == b => {}
+                        _ => return false,
+                    }
+                }
                 (a, b) if a.ty().float() && a.ty() == b.ty() && a.float() == b.float() => {}
                 (a, b) if !a.ty().float() && a == b => {}
                 _ => return false,
@@ -1331,6 +1382,10 @@ impl Eval<'_> {
         use BinaryOp::*;
         let ty = a.ty();
         if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+            let equal = self.aggregate_equal(a, b);
+            return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
+        }
+        if let (Value::OptionalScalar(_, _), Value::OptionalScalar(_, _)) = (a, b) {
             let equal = self.aggregate_equal(a, b);
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
         }

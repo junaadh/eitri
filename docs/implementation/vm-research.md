@@ -2426,3 +2426,16 @@ execution 208/250 ns, total 8,666/10,400 ns; retained context memory was
 30,898 B. This scalar workload does not exercise patterns. Samples:
 `/private/tmp/eitri-t017-43-samples.csv`; report:
 `/private/tmp/eitri-t017-43-bench.txt`.
+
+### T017-44 remaining scalar optionals
+
+Tagged optionals now cover the supported narrow and unsigned integers, floats,
+and characters, including aggregate fields, calls, null patterns and coalescing.
+The scalar fixture runs under forced collection in both interpreters and lowerers.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 9,042/9,709 ns,
+execution 209/292 ns, total 9,291/9,959 ns; retained context memory was
+30,898 B. This scalar workload does not exercise optionals. Samples:
+`/private/tmp/eitri-t017-44-samples.csv`; report:
+`/private/tmp/eitri-t017-44-bench.txt`.

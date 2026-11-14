@@ -1,0 +1,23 @@
+//! host: test
+import test from "test"
+struct Values { small: ?i8, byte: ?u8, wide: ?u64, single: ?f32, double: ?f64, letter: ?char, text: string }
+enum Choice { Value(item: ?u8) }
+fn identity(value: ?u8) -> ?u8 { return value }
+let values = Values { small: -128, byte: 255, wide: 18446744073709551615, single: 1.5, double: 2.5, letter: 'x', text: "root" }
+let empty = Values { small: null, byte: null, wide: null, single: null, double: null, letter: null, text: "empty" }
+test.check((values.small ?? 0) == -128 && (values.byte ?? 0) == 255)
+test.check((values.wide ?? 0) == 18446744073709551615 && (values.letter ?? 'a') == 'x')
+test.check((values.single ?? 0.0) == 1.5 && (values.double ?? 0.0) == 2.5)
+test.check(empty.byte == null && identity(values.byte) == values.byte)
+let picked: ?u8 = empty.byte ?? values.byte
+test.check((picked ?? 0) == 255)
+test.check(match Choice.Value(values.byte) { .Value(x) => x == 255, .Value(null) => false })
+test.check(match Choice.Value(null) { .Value(x) => false, .Value(null) => true })
+test.check(values == Values { small: -128, byte: 255, wide: 18446744073709551615, single: 1.5, double: 2.5, letter: 'x', text: "root" })
+let zero: ?f64 = 0.0
+let negative_zero: ?f64 = -0.0
+let nan: ?f64 = 0.0 / 0.0
+test.check(zero == negative_zero && nan != nan)
+var changed: ?u8 = null
+changed = 255
+test.check((changed ?? 0) == 255)

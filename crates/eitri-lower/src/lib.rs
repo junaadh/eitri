@@ -170,7 +170,7 @@ pub fn value_type(ty: Ty) -> ValueType {
         Ty::String => ValueType::String,
         Ty::OptionalString => ValueType::NullableString,
         Ty::FindOffset => ValueType::I64,
-        Ty::Void | Ty::Error | Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalI64 | Ty::OptionalBool => {
+        _ => {
             unreachable!("checked code has only value types here")
         }
     }
@@ -651,19 +651,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             std::str::from_utf8(bytes).expect("identifier UTF-8")
         });
         let mut function = self.asm.finish(name, signature)?;
-        function.reentry_safe = !matches!(
-            types.ret,
-            Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool
-        ) && !parameter_types.iter().any(|ty| {
-            matches!(
-                ty,
-                Ty::Struct(_)
-                    | Ty::Enum(_)
-                    | Ty::OptionalString
-                    | Ty::OptionalI64
-                    | Ty::OptionalBool
-            )
-        });
+        function.reentry_safe =
+            !matches!(types.ret, Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalString)
+                && types.ret.tagged_optional_inner().is_none()
+                && !parameter_types.iter().any(|ty| {
+                    (matches!(ty, Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalString)
+                        || ty.tagged_optional_inner().is_some())
+                });
         Ok(function)
     }
 
@@ -698,7 +692,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         match ty {
             Ty::Struct(id) => self.checked.struct_widths[id],
             Ty::Enum(id) => self.checked.enum_widths[id],
-            Ty::OptionalI64 | Ty::OptionalBool => 2,
+            ty if ty.tagged_optional_inner().is_some() => 2,
             _ => 1,
         }
     }
@@ -713,15 +707,8 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         nullable: bool,
         output: &mut Vec<ValueType>,
     ) -> Lowered<()> {
-        if matches!(ty, Ty::OptionalI64 | Ty::OptionalBool) {
-            output.extend([
-                ValueType::Bool,
-                if ty == Ty::OptionalBool {
-                    ValueType::Bool
-                } else {
-                    ValueType::I64
-                },
-            ]);
+        if let Some(inner) = ty.tagged_optional_inner() {
+            output.extend([ValueType::Bool, value_type(inner)]);
             return Ok(());
         }
         if !matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
@@ -763,8 +750,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                 }
                 Ty::String if nullable => output.push(ValueType::NullableString),
-                Ty::OptionalI64 => output.extend([ValueType::Bool, ValueType::I64]),
-                Ty::OptionalBool => output.extend([ValueType::Bool, ValueType::Bool]),
+                ty if ty.tagged_optional_inner().is_some() => output.extend([
+                    ValueType::Bool,
+                    value_type(ty.tagged_optional_inner().unwrap()),
+                ]),
                 _ => output.push(value_type(next)),
             }
         }
@@ -966,10 +955,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 };
                 match op {
                     AssignOp::Set => {
-                        if matches!(
-                            ty,
-                            Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalI64 | Ty::OptionalBool
-                        ) {
+                        if matches!(ty, Ty::Struct(_) | Ty::Enum(_))
+                            || ty.tagged_optional_inner().is_some()
+                        {
                             let source = self.expr(value, None)?;
                             if source != slot {
                                 for offset in 0..self.width(ty) {
@@ -1016,10 +1004,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let slot = self.field_address(target, binding);
                 match op {
                     AssignOp::Set => {
-                        if matches!(
-                            checked.types[target],
-                            Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalI64 | Ty::OptionalBool
-                        ) {
+                        if (matches!(checked.types[target], Ty::Struct(_) | Ty::Enum(_))
+                            || checked.types[target].tagged_optional_inner().is_some())
+                        {
                             let source = self.expr(value, None)?;
                             if source != slot {
                                 let width = self.width(checked.types[target]);
@@ -1410,7 +1397,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             self.asm.bind(done)?;
             return Ok(target);
         }
-        if self.checked.optional_wrap[e] && matches!(self.checked.types[e], Ty::I64 | Ty::Bool) {
+        if self.checked.optional_wrap[e] && self.checked.types[e] != Ty::String {
             let target = if let Some(dst) = dst {
                 dst
             } else {
@@ -1534,7 +1521,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
             Expr::Interpolation(parts) => self.interpolation(e, parts, dst),
             Expr::Null(_) => {
-                if matches!(checked.types[e], Ty::OptionalI64 | Ty::OptionalBool) {
+                if checked.types[e].tagged_optional_inner().is_some() {
                     let slot = if let Some(dst) = dst {
                         dst
                     } else {
@@ -1546,11 +1533,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     self.asm.load(
                         slot + 1,
                         0,
-                        if checked.types[e] == Ty::OptionalBool {
-                            ValueType::Bool
-                        } else {
-                            ValueType::I64
-                        },
+                        value_type(checked.types[e].tagged_optional_inner().unwrap()),
                         span,
                     )?;
                     Ok(slot)
@@ -1672,10 +1655,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     unreachable!()
                 };
                 let source = self.expr(base, None)? + self.field_offset(id, index);
-                if matches!(
-                    checked.types[e],
-                    Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalI64 | Ty::OptionalBool
-                ) {
+                if (matches!(checked.types[e], Ty::Struct(_) | Ty::Enum(_))
+                    || checked.types[e].tagged_optional_inner().is_some())
+                {
                     let width = self.width(checked.types[e]);
                     let target = match dst {
                         Some(d) => d,
@@ -1725,10 +1707,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                     _ => unreachable!("checked value names resolve to bindings or fields"),
                 };
-                if matches!(
-                    checked.types[e],
-                    Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalI64 | Ty::OptionalBool
-                ) {
+                if (matches!(checked.types[e], Ty::Struct(_) | Ty::Enum(_))
+                    || checked.types[e].tagged_optional_inner().is_some())
+                {
                     let width = self.width(checked.types[e]);
                     let target = match dst {
                         Some(d) => d,
@@ -1884,20 +1865,18 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 op: BinaryOp::Eq | BinaryOp::NotEq,
                 lhs,
                 rhs,
-            } if matches!(
-                checked.types[lhs],
-                Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalI64 | Ty::OptionalBool
-            ) || (checked.optional_wrap[lhs]
-                && matches!(checked.types[lhs], Ty::I64 | Ty::FindOffset | Ty::Bool)) =>
+            } if (matches!(checked.types[lhs], Ty::Struct(_) | Ty::Enum(_))
+                || checked.types[lhs].tagged_optional_inner().is_some())
+                || (checked.optional_wrap[lhs] && checked.types[lhs] != Ty::String) =>
             {
                 self.aggregate_equality(
                     lhs,
                     rhs,
                     if checked.optional_wrap[lhs] {
-                        if checked.types[lhs] == Ty::Bool {
-                            Ty::OptionalBool
-                        } else {
+                        if checked.types[lhs] == Ty::FindOffset {
                             Ty::OptionalI64
+                        } else {
+                            checked.types[lhs].optional_of().unwrap()
                         }
                     } else {
                         checked.types[lhs]
@@ -2126,7 +2105,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             node = rhs;
         }
         let count = self.stack.len() - mark;
-        let slot = if matches!(self.checked.types[root], Ty::OptionalI64 | Ty::OptionalBool) {
+        let slot = if self.checked.types[root].tagged_optional_inner().is_some() {
             if let Some(dst) = dst {
                 dst
             } else {
@@ -2143,15 +2122,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             let operand = self.stack[mark + index];
             let found = self.expr(operand, None)?;
             let next = self.asm.label();
-            if matches!(
-                self.checked.types[operand],
-                Ty::OptionalI64 | Ty::OptionalBool
-            ) || (self.checked.types[operand] == Ty::FindOffset
-                && self.checked.optional_wrap[operand])
+            if self.checked.types[operand]
+                .tagged_optional_inner()
+                .is_some()
+                || (self.checked.types[operand] == Ty::FindOffset
+                    && self.checked.optional_wrap[operand])
             {
                 self.asm
                     .branch_test(Test::False, found, next, ast.span(operand));
-                if matches!(self.checked.types[root], Ty::OptionalI64 | Ty::OptionalBool) {
+                if self.checked.types[root].tagged_optional_inner().is_some() {
                     self.asm.emit(
                         Op::Mov,
                         Operands::abc(slot.into(), found.into(), 0),
@@ -2859,16 +2838,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         })
                         .expect("checked field label")
                 });
-                matches!(
-                    self.checked.param_types[types][offset],
-                    Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool
-                )
+                self.checked.param_types[types][offset] == Ty::OptionalString
+                    || self.checked.param_types[types][offset]
+                        .tagged_optional_inner()
+                        .is_some()
             })
     }
 
     fn match_present(&mut self, source: u32, ty: Ty, next: Label, span: Span) -> Lowered<u32> {
         match ty {
-            Ty::OptionalI64 | Ty::OptionalBool => {
+            ty if ty.tagged_optional_inner().is_some() => {
                 self.asm.branch_test(Test::False, source, next, span);
                 Ok(source + 1)
             }
@@ -2961,8 +2940,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let source = self.match_present(source, ty, next, span)?;
                 let inner = match ty {
                     Ty::OptionalString => Ty::String,
-                    Ty::OptionalI64 => Ty::I64,
-                    Ty::OptionalBool => Ty::Bool,
+                    ty if ty.tagged_optional_inner().is_some() => {
+                        ty.tagged_optional_inner().unwrap()
+                    }
                     _ => ty,
                 };
                 let source = if ty == Ty::String {
@@ -3007,7 +2987,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let narrowed = self.checked.bindings[binding].ty;
                 self.top += self.width(narrowed);
                 self.slots[binding] = target;
-                if matches!(ty, Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool) {
+                if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() {
                     self.asm.emit(
                         Op::Mov,
                         Operands::abc(target.into(), source.into(), 0),

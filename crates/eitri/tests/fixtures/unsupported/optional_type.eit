@@ -1,2 +1,2 @@
-fn f(x: ?u8) -> void {
+fn f(x: ?i32) -> void {
 }

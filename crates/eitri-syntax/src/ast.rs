@@ -161,6 +161,7 @@ pub enum TypeExpr {
     OptionalString(TokenId),
     OptionalI64(TokenId),
     OptionalBool(TokenId),
+    OptionalScalar(TokenId),
     /// Unsupported, already reported.
     Error,
 }
@@ -245,6 +246,7 @@ pub struct MatchBinding {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MatchArm {
+    pub literal: Option<ExprId>,
     pub case: Option<TokenId>,
     pub qualifier: Option<TokenId>,
     pub catch_binding: Option<TokenId>,

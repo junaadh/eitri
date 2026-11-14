@@ -172,6 +172,12 @@ impl Dumper<'_> {
             Ty::OptionalString => "'?string'",
             Ty::OptionalI64 => "'?i64'",
             Ty::OptionalBool => "'?bool'",
+            Ty::OptionalI8 => "'?i8'",
+            Ty::OptionalU8 => "'?u8'",
+            Ty::OptionalU64 => "'?u64'",
+            Ty::OptionalF32 => "'?f32'",
+            Ty::OptionalF64 => "'?f64'",
+            Ty::OptionalChar => "'?char'",
             Ty::Struct(_) => "'struct'",
             Ty::Enum(_) => "'enum'",
             Ty::FindOffset => "'?i64'",
@@ -195,6 +201,12 @@ impl Dumper<'_> {
             Ty::OptionalString => "?string",
             Ty::OptionalI64 => "?i64",
             Ty::OptionalBool => "?bool",
+            Ty::OptionalI8 => "?i8",
+            Ty::OptionalU8 => "?u8",
+            Ty::OptionalU64 => "?u64",
+            Ty::OptionalF32 => "?f32",
+            Ty::OptionalF64 => "?f64",
+            Ty::OptionalChar => "?char",
             Ty::Struct(_) => "struct",
             Ty::Enum(_) => "enum",
             Ty::FindOffset => "?i64",
@@ -223,7 +235,8 @@ impl Dumper<'_> {
             TypeExpr::Named(token) => self.paint(TYPE, &format!("'{}'", self.token(token))),
             TypeExpr::OptionalString(token)
             | TypeExpr::OptionalI64(token)
-            | TypeExpr::OptionalBool(token) => {
+            | TypeExpr::OptionalBool(token)
+            | TypeExpr::OptionalScalar(token) => {
                 self.paint(TYPE, &format!("'?{}'", self.token(token)))
             }
             TypeExpr::Error => self.paint(TYPE, "'<error>'"),
@@ -331,7 +344,8 @@ impl Dumper<'_> {
                     TypeExpr::Named(token)
                     | TypeExpr::OptionalString(token)
                     | TypeExpr::OptionalI64(token)
-                    | TypeExpr::OptionalBool(token) => tokens.span(token),
+                    | TypeExpr::OptionalBool(token)
+                    | TypeExpr::OptionalScalar(token) => tokens.span(token),
                     TypeExpr::Error => tokens.span(param.name),
                 };
                 let range = self.range(tokens.span(param.name).to(end));

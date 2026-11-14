@@ -1,6 +1,7 @@
 # Optionals
 
-The current implementation supports `?string`, `?i64` and `?bool`, including
+The current implementation supports optional strings, booleans, integers, floats,
+and characters, including
 collapsed repeated optional markers, `null`, implicit conversion, equality,
 and `??` with matching scalar or optional fallbacks. These values can be stored
 in structs and enum payloads and passed through script calls; optional host
