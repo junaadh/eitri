@@ -1,0 +1,24 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+fn load(ok: bool) -> Problem!string {
+    if ok { return "yes" }
+    return .Err(Problem.Bad("bad"))
+}
+let success = load(true) else problem => match problem { .Bad(text) => text }
+let failure = load(false) else problem => match problem { .Bad(text) => text }
+test.check(success == "yes" && failure == "bad")
+let discarded = load(false) else _ => "fallback"
+test.check(discarded == "fallback")
+fn fallback() -> string { test.emit(1); return "fallback" }
+let kept = load(true) else _ => fallback()
+test.check(kept == "yes")
+let recovered = load(false) else _ => fallback()
+test.check(recovered == "fallback")
+struct Data { text: string }
+fn object(ok: bool) -> Problem!Data {
+    if ok { return Data { text: "object" } }
+    return .Err(Problem.Bad("bad"))
+}
+let selected = object(false) else problem => Data { text: match problem { .Bad(text) => text } }
+test.check(selected.text == "bad")

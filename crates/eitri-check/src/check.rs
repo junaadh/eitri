@@ -72,6 +72,7 @@ pub enum Res {
     EnumCase(eitri_syntax::ast::EnumId, u32),
     ResultCase(u32, bool),
     TryResult(u32),
+    RecoverResult(u32),
     Field(u32),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
@@ -2332,6 +2333,43 @@ impl<'i> Checker<'_, 'i> {
                     );
                 }
                 Ty::Char
+            }
+            Expr::Recover {
+                operand,
+                binding,
+                fallback,
+            } => {
+                let source = self.value(operand, None);
+                if let Ty::Result(id) = source {
+                    let (error, success) = self.out.result_types[id as usize];
+                    if success == Ty::Void {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: recovery of void",
+                            self.span(expr),
+                        );
+                        Ty::Error
+                    } else {
+                        let mark = self.mark();
+                        if self.input.tokens.kind(binding) != eitri_syntax::TokenKind::Wildcard {
+                            let id = self.new_binding(binding, false, error);
+                            self.out.pattern_bindings[binding] = Some(id);
+                        }
+                        self.value(fallback, Some(success));
+                        self.restore(mark);
+                        self.out.resolutions[expr] = Res::RecoverResult(id);
+                        success
+                    }
+                } else {
+                    if source != Ty::Error {
+                        self.report(
+                            Code::TypeMismatch,
+                            "else recovery requires a result",
+                            self.span(expr),
+                        );
+                    }
+                    Ty::Error
+                }
             }
             Expr::TryOptional(operand) => {
                 let source = self.value(operand, None);

@@ -807,6 +807,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-90: expression-form result recovery with `else` binds the error and
+  evaluates fallback only on failure, including managed payloads.
 - T017-89: writes into struct elements of fixed arrays preserve sibling
   fields, read-only restrictions, bounds faults and managed roots.
 - T017-88: two-index writes update nested fixed arrays in locals, structs

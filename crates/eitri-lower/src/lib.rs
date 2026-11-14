@@ -2709,6 +2709,39 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             return Ok(slot);
         }
         match ast.exprs[e] {
+            Expr::Recover {
+                operand,
+                binding,
+                fallback,
+            } => {
+                let Res::RecoverResult(id) = checked.resolutions[e] else {
+                    unreachable!("checked recovery")
+                };
+                let (error, success) = checked.result_types[id as usize];
+                let target = if let Some(dst) = dst {
+                    dst
+                } else {
+                    let slot = self.top;
+                    self.top += self.width(success);
+                    slot
+                };
+                let source = self.expr(operand, None)?;
+                let failure = self.asm.label();
+                let done = self.asm.label();
+                self.asm.branch_imm(Cond::Eq, source, 0, failure, span)?;
+                self.move_nullable(success, source + 1 + self.width(error), target, false, span)?;
+                self.asm.jump(done, span);
+                self.asm.bind(failure)?;
+                if let Some(binding) = checked.pattern_bindings[binding] {
+                    let error_slot = self.top;
+                    self.top += self.width(error);
+                    self.slots[binding] = error_slot;
+                    self.move_nullable(error, source + 1, error_slot, false, span)?;
+                }
+                self.expr(fallback, Some(target))?;
+                self.asm.bind(done)?;
+                Ok(target)
+            }
             Expr::TryOptional(operand) => {
                 let Ty::Result(id) = checked.types[operand] else {
                     unreachable!("checked result")

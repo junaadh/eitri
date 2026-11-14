@@ -305,6 +305,16 @@ impl Printer<'_> {
             ),
             Expr::SelfValue(token) | Expr::Name(token) => self.token(token).to_owned(),
             Expr::Member { base, name } => format!("{}.{}", self.expr(base), self.token(name)),
+            Expr::Recover {
+                operand,
+                binding,
+                fallback,
+            } => format!(
+                "(recover {} {} {})",
+                self.expr(operand),
+                self.token(binding),
+                self.expr(fallback)
+            ),
             Expr::Try(operand) => format!("(try {})", self.expr(operand)),
             Expr::TryOptional(operand) => format!("(try? {})", self.expr(operand)),
             Expr::Unary { op, operand } => format!("({op:?} {})", self.expr(operand)),
@@ -504,10 +514,6 @@ fn unsupported_features_are_reported_once_and_dropped() {
         (
             "let x = a?.b",
             "E0001 9..11 not supported yet: optional chaining",
-        ),
-        (
-            "let x = f() else e => 0",
-            "E0001 12..16 not supported yet: `else` recovery",
         ),
         (
             "if let x = y {\n}",

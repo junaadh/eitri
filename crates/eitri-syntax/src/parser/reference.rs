@@ -1518,15 +1518,23 @@ impl Parser<'_> {
                     let span = Span::new(start.start, self.last_end());
                     expr = self.error(span);
                 }
-                // `f() else e => fallback`
                 T::Else
                     if matches!(self.nth(1), T::Ident | T::Wildcard)
                         && self.nth(2) == T::FatArrow =>
                 {
-                    self.unsupported(self.current_span(), "`else` recovery");
-                    self.skip_statement();
-                    let span = Span::new(start.start, self.last_end());
-                    return Ok(self.error(span));
+                    self.bump();
+                    let binding = self.bump();
+                    self.bump();
+                    let fallback = self.expr(false)?;
+                    let span = start.to(self.ast.span(fallback));
+                    return Ok(self.ast.expr(
+                        Expr::Recover {
+                            operand: expr,
+                            binding,
+                            fallback,
+                        },
+                        span,
+                    ));
                 }
                 _ => return Ok(expr),
             }

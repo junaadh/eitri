@@ -2923,3 +2923,10 @@ only the targeted field. The 1001-sample release harness in the isolated
 workspace measured fresh module compile p50/p99 12.0/17.4 µs and source-to-result
 12.3/17.7 µs on the general workload. Raw samples:
 `/private/tmp/eitri-t017-89-samples.csv`.
+
+### T017-90 expression-form result recovery
+
+Recovery branches on the result tag and evaluates the fallback only on error.
+The 1001-sample release harness in the isolated workspace measured fresh module
+compile p50/p99 13.7/20.4 µs and source-to-result 14.0/20.8 µs on the general
+workload. Raw samples: `/private/tmp/eitri-t017-90-samples.csv`.

@@ -1615,6 +1615,24 @@ impl Eval<'_> {
             return Ok(Value::Enum(id, case, index));
         }
         match self.ast.exprs[e] {
+            Expr::Recover {
+                operand,
+                binding,
+                fallback,
+            } => {
+                let Value::Result(_, is_ok, payload) = self.expr(host, operand)? else {
+                    unreachable!("checked recovery")
+                };
+                let value = self.structs[payload as usize][0];
+                if is_ok {
+                    Ok(value)
+                } else {
+                    if let Some(binding) = self.checked.pattern_bindings[binding] {
+                        self.locals[binding.index()] = Some(value);
+                    }
+                    self.expr(host, fallback)
+                }
+            }
             Expr::TryOptional(operand) => {
                 let Value::Result(_, is_ok, payload) = self.expr(host, operand)? else {
                     unreachable!("checked result")

@@ -109,6 +109,11 @@ pub enum Expr {
         name: TokenId,
     },
     Try(ExprId),
+    Recover {
+        operand: ExprId,
+        binding: TokenId,
+        fallback: ExprId,
+    },
     TryOptional(ExprId),
     Unary {
         op: UnaryOp,

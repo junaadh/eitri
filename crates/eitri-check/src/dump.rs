@@ -714,6 +714,12 @@ impl Dumper<'_> {
                     vec![base],
                 )
             }
+            Expr::Recover {
+                operand, fallback, ..
+            } => (
+                format!("{} {range} {ty}", self.paint(STMT, "Recover")),
+                vec![Node::Expr(operand), Node::Expr(fallback)],
+            ),
             Expr::TryOptional(operand) => (
                 format!("{} {range} {ty}", self.paint(STMT, "TryOptional")),
                 vec![Node::Expr(operand)],

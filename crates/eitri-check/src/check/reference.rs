@@ -749,7 +749,11 @@ impl<'i> Checker<'_, 'i> {
                 }
                 Ty::Error
             }
-            Expr::Index { .. } | Expr::FixedArray(_) | Expr::Try(_) | Expr::Error => Ty::Error,
+            Expr::Index { .. }
+            | Expr::FixedArray(_)
+            | Expr::Recover { .. }
+            | Expr::Try(_)
+            | Expr::Error => Ty::Error,
         };
         self.out.types[expr] = ty;
         ty
