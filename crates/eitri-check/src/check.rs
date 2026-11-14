@@ -1991,9 +1991,17 @@ impl<'i> Checker<'_, 'i> {
                 };
                 let mut root = base;
                 let mut through_class = matches!(self.out.types[base], Ty::Class(_));
-                while let Expr::Member { base, .. } = self.ast().exprs[root] {
-                    through_class |= matches!(self.out.types[base], Ty::Class(_));
-                    root = base;
+                loop {
+                    match self.ast().exprs[root] {
+                        Expr::Member { base, .. } => {
+                            through_class |= matches!(self.out.types[base], Ty::Class(_));
+                            root = base;
+                        }
+                        Expr::Index { base, .. } => {
+                            root = base;
+                        }
+                        _ => break,
+                    }
                 }
                 if let Res::SelfField(binding, _) = self.out.resolutions[root] {
                     through_class |= matches!(self.out.bindings[binding].ty, Ty::Class(_));

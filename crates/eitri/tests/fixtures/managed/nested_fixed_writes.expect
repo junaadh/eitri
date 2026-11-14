@@ -5,4 +5,6 @@ effect: test.emit(1)
 effect: test.emit(2)
 effect: test.emit(3)
 effect: test.check(true)
+effect: test.check(true)
+effect: test.check(true)
 ok

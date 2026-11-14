@@ -2915,3 +2915,11 @@ preserving source-order effects and sibling changes. The 1001-sample release
 harness in the isolated workspace measured fresh module compile p50/p99
 13.6/19.9 µs and source-to-result 14.0/20.2 µs on the general workload. Raw
 samples: `/private/tmp/eitri-t017-88-samples.csv`.
+
+### T017-89 indexed struct field writes
+
+Writes refresh the selected inline element after evaluating the RHS and update
+only the targeted field. The 1001-sample release harness in the isolated
+workspace measured fresh module compile p50/p99 12.0/17.4 µs and source-to-result
+12.3/17.7 µs on the general workload. Raw samples:
+`/private/tmp/eitri-t017-89-samples.csv`.

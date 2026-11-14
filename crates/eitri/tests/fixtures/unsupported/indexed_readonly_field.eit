@@ -1,0 +1,3 @@
+struct Item { let value: i64 }
+var items: [1]Item = [Item { value: 1 }]
+items[0].value = 2

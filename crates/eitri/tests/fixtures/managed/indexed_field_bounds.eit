@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+struct Item { value: i64 }
+fn index() -> i64 { test.emit(1); return 2 }
+fn replacement() -> i64 { test.emit(2); return 9 }
+var items: [1]Item = [Item { value: 1 }]
+items[index()].value = replacement()

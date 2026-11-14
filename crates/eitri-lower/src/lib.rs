@@ -1476,6 +1476,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 op,
                 value,
                 span,
+            } if self.indexed_struct_root(target).is_some() => {
+                self.assign_indexed_field(id, target, op, value, span)?;
+            }
+            Stmt::AssignField {
+                target,
+                op,
+                value,
+                span,
             } if self.class_field_root(target).is_some()
                 && !matches!(ast.exprs[target], Expr::Member { base, .. } if matches!(checked.types[base], Ty::Class(_))) =>
             {
@@ -1804,6 +1812,222 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     }
 
     /// An expression statement: its value, if any, is dropped.
+    fn indexed_struct_root(&self, mut target: ExprId) -> Option<ExprId> {
+        while let Expr::Member { base, .. } = self.input.ast.exprs[target] {
+            if matches!(self.checked.types[base], Ty::Class(_)) {
+                return None;
+            }
+            target = base;
+        }
+        matches!(self.input.ast.exprs[target], Expr::Index { .. }).then_some(target)
+    }
+
+    fn assign_indexed_field(
+        &mut self,
+        id: StmtId,
+        target: ExprId,
+        op: AssignOp,
+        value: ExprId,
+        span: Span,
+    ) -> Lowered<()> {
+        let ast = self.input.ast;
+        let indexed = self.indexed_struct_root(target).unwrap();
+        let Expr::Index { base, index } = ast.exprs[indexed] else {
+            unreachable!()
+        };
+        let (size, element) = self.fixed_inner(self.checked.types[base]).unwrap();
+        let binding = self.checked.stmt_bindings[id].expect("checked binding");
+        let class_root = self.class_field_root(base);
+        let object = if let Some((base, implicit, _, _, _)) = class_root {
+            let slot = self.temp();
+            if let Some(base) = base {
+                self.expr(base, Some(slot))?;
+            } else {
+                self.asm.emit(
+                    Op::Mov,
+                    Operands::abc(slot.into(), self.slots[implicit.unwrap()].into(), 0),
+                    span,
+                )?;
+            }
+            Some(slot)
+        } else {
+            None
+        };
+        let destination = if class_root.is_none() {
+            self.field_address(base, binding)
+        } else {
+            0
+        };
+        let window = self.top;
+        self.top += 1 + u32::from(size).max(1);
+        self.expr(index, Some(window))?;
+        if size == 0 {
+            self.empty_array_fault(ast.span(indexed))?;
+            return Ok(());
+        }
+        let width = self.width(element);
+        let source = if let Some((_, _, owner, field, root)) = class_root {
+            self.class_read_field(
+                object.unwrap(),
+                owner,
+                field,
+                self.checked.types[root],
+                None,
+                span,
+            )? + self.class_nested_offset(base, root)
+        } else {
+            destination
+        };
+        let element_slot = self.top;
+        self.top += width;
+        for field in 0..width {
+            for item in 0..u32::from(size) {
+                self.asm.emit(
+                    Op::Mov,
+                    Operands::abc(
+                        (window + 1 + item).into(),
+                        (source + item * width + field).into(),
+                        0,
+                    ),
+                    span,
+                )?;
+            }
+            self.asm.emit(
+                Op::FixedGet,
+                Operands::abc(
+                    (element_slot + field).into(),
+                    window.into(),
+                    (size - 1).into(),
+                ),
+                ast.span(indexed),
+            )?;
+        }
+        let mut cursor = target;
+        let mut offset = 0;
+        while cursor != indexed {
+            let Expr::Member { base, .. } = ast.exprs[cursor] else {
+                unreachable!()
+            };
+            let Ty::Struct(owner) = self.checked.types[base] else {
+                unreachable!()
+            };
+            let Res::Field(field) = self.checked.resolutions[cursor] else {
+                unreachable!()
+            };
+            offset += self.field_offset(owner, field);
+            cursor = base;
+        }
+        let rhs = self.expr(value, None)?;
+        let result = if let AssignOp::Compound(binary) = op {
+            let result = self.temp();
+            self.operate(
+                binary,
+                self.checked.types[target],
+                result,
+                element_slot + offset,
+                rhs,
+                span,
+            )?;
+            result
+        } else {
+            rhs
+        };
+        let container = if let Some((_, _, owner, field, root)) = class_root {
+            Some(self.class_read_field(
+                object.unwrap(),
+                owner,
+                field,
+                self.checked.types[root],
+                None,
+                span,
+            )?)
+        } else {
+            None
+        };
+        let refreshed = if let Some((_, _, _, _, root)) = class_root {
+            container.unwrap() + self.class_nested_offset(base, root)
+        } else {
+            destination
+        };
+        for field in 0..width {
+            for item in 0..u32::from(size) {
+                self.asm.emit(
+                    Op::Mov,
+                    Operands::abc(
+                        (window + 1 + item).into(),
+                        (refreshed + item * width + field).into(),
+                        0,
+                    ),
+                    span,
+                )?;
+            }
+            self.asm.emit(
+                Op::FixedGet,
+                Operands::abc(
+                    (element_slot + field).into(),
+                    window.into(),
+                    (size - 1).into(),
+                ),
+                ast.span(indexed),
+            )?;
+        }
+        for part in 0..self.width(self.checked.types[target]) {
+            self.asm.emit(
+                Op::Mov,
+                Operands::abc(
+                    (element_slot + offset + part).into(),
+                    (result + part).into(),
+                    0,
+                ),
+                span,
+            )?;
+        }
+        for field in 0..width {
+            for item in 0..u32::from(size) {
+                self.asm.emit(
+                    Op::Mov,
+                    Operands::abc(
+                        (window + 1 + item).into(),
+                        (refreshed + item * width + field).into(),
+                        0,
+                    ),
+                    span,
+                )?;
+            }
+            self.asm.emit(
+                Op::FixedSet,
+                Operands::abc(
+                    (element_slot + field).into(),
+                    window.into(),
+                    (size - 1).into(),
+                ),
+                ast.span(indexed),
+            )?;
+            for item in 0..u32::from(size) {
+                self.asm.emit(
+                    Op::Mov,
+                    Operands::abc(
+                        (refreshed + item * width + field).into(),
+                        (window + 1 + item).into(),
+                        0,
+                    ),
+                    span,
+                )?;
+            }
+        }
+        if let Some((_, _, owner, field, root)) = class_root {
+            self.class_store_field(
+                object.unwrap(),
+                owner,
+                field,
+                self.checked.types[root],
+                container.unwrap(),
+                span,
+            )?;
+        }
+        Ok(())
+    }
+
     fn assign_nested_index(
         &mut self,
         id: StmtId,

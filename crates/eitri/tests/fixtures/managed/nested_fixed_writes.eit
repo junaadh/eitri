@@ -18,3 +18,15 @@ fn col() -> i64 { test.emit(2); return 1 }
 fn replacement() -> i64 { test.emit(3); return 12 }
 values[row()][col()] = replacement()
 test.check(values[0][1] == 12)
+struct Cell { value: i64, text: string }
+var cells: [2]Cell = [Cell { value: 1, text: "a" }, Cell { value: 2, text: "b" }]
+cells[0].value = 7
+test.check(cells[0].value == 7)
+struct Inner { text: string, count: i64 }
+struct Entry { inner: Inner, other: i64 }
+struct Container { entries: [2]Entry }
+class Storage { container: Container }
+let storage = Storage { container: Container { entries: [Entry { inner: Inner { text: "a", count: 1 }, other: 3 }, Entry { inner: Inner { text: "b", count: 2 }, other: 4 }] } }
+storage.container.entries[1].inner.count += 5
+storage.container.entries[0].inner.text = "changed"
+test.check(storage.container.entries[1].inner.count == 7 && storage.container.entries[1].other == 4 && storage.container.entries[0].inner.text == "changed")
