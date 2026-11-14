@@ -1520,7 +1520,8 @@ impl<'i> Checker<'_, 'i> {
         let found = self.expr(expr, expected, true);
         if matches!(
             (expected, found),
-            (Some(Ty::OptionalString), Ty::String) | (Some(Ty::OptionalI64), Ty::I64)
+            (Some(Ty::OptionalString), Ty::String)
+                | (Some(Ty::OptionalI64), Ty::I64 | Ty::FindOffset)
         ) {
             self.out.optional_wrap[expr] = true;
             return expected.unwrap();
@@ -1744,7 +1745,20 @@ impl<'i> Checker<'_, 'i> {
             } else {
                 None
             };
-            let found = self.value(lhs, hint);
+            let mut found = self.value(lhs, hint);
+            if found == Ty::FindOffset && source_kind == Some(Ty::OptionalI64) {
+                self.out.optional_wrap[lhs] = true;
+                found = Ty::OptionalI64;
+            } else if found == Ty::OptionalI64 && source_kind == Some(Ty::FindOffset) {
+                for &node in &self.spine[mark..] {
+                    if let Expr::Binary { lhs, .. } = self.input.ast.exprs[node]
+                        && self.out.types[lhs] == Ty::FindOffset
+                    {
+                        self.out.optional_wrap[lhs] = true;
+                    }
+                }
+                source_kind = Some(Ty::OptionalI64);
+            }
             if !matches!(
                 found,
                 Ty::FindOffset | Ty::OptionalString | Ty::OptionalI64 | Ty::Error
@@ -1773,7 +1787,11 @@ impl<'i> Checker<'_, 'i> {
                 } else {
                     None
                 };
-                let found = self.value(node, hint);
+                let mut found = self.value(node, hint);
+                if source_kind == Ty::OptionalI64 && found == Ty::FindOffset {
+                    self.out.optional_wrap[node] = true;
+                    found = Ty::OptionalI64;
+                }
                 let inner = if source_kind == Ty::OptionalString {
                     Ty::String
                 } else {
@@ -1785,8 +1803,30 @@ impl<'i> Checker<'_, 'i> {
                 found
             }
             Ty::FindOffset => {
-                self.value(node, Some(Ty::I64));
-                Ty::I64
+                let hint = if matches!(self.ast().exprs[node], Expr::Null(_)) {
+                    Some(Ty::OptionalI64)
+                } else {
+                    None
+                };
+                let found = self.value(node, hint);
+                if matches!(found, Ty::OptionalI64 | Ty::FindOffset) {
+                    if found == Ty::FindOffset {
+                        self.out.optional_wrap[node] = true;
+                    }
+                    for &node in &self.spine[mark..] {
+                        if let Expr::Binary { lhs, .. } = self.input.ast.exprs[node]
+                            && self.out.types[lhs] == Ty::FindOffset
+                        {
+                            self.out.optional_wrap[lhs] = true;
+                        }
+                    }
+                    Ty::OptionalI64
+                } else {
+                    if found != Ty::I64 && found != Ty::Error {
+                        self.mismatch(found, Ty::I64, self.span(node));
+                    }
+                    Ty::I64
+                }
             }
             _ => {
                 self.value(node, None);
@@ -3159,6 +3199,16 @@ impl<'i> Checker<'_, 'i> {
         if depth >= 64 {
             return None;
         }
+        if matches!(self.ast().exprs[expr], Expr::String(_)) {
+            return Some(Ty::String);
+        }
+        if let Expr::Call { callee, .. } = self.ast().exprs[expr]
+            && let Expr::Member { base, name } = self.ast().exprs[callee]
+            && self.spelling(name) == "find"
+            && self.hint_at(base, depth + 1) == Some(Ty::String)
+        {
+            return Some(Ty::FindOffset);
+        }
         if let Expr::Member { base, name } = self.ast().exprs[expr]
             && let Some(Ty::Struct(id)) = self.hint_at(base, depth + 1)
         {
@@ -3229,11 +3279,22 @@ impl<'i> Checker<'_, 'i> {
                 }
             })
         };
+        let guidance = if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
+            && guidance == Some(Ty::FindOffset)
+        {
+            Some(Ty::OptionalI64)
+        } else {
+            guidance
+        };
         let mut lhs_ty = if matches!(guidance, Some(Ty::OptionalString | Ty::OptionalI64)) {
             self.value(leftmost, guidance)
         } else {
             self.expr(leftmost, guidance, true)
         };
+        if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq) && lhs_ty == Ty::FindOffset {
+            self.out.optional_wrap[leftmost] = true;
+            lhs_ty = Ty::OptionalI64;
+        }
         let mut lhs_span = self.span(leftmost);
         while self.spine.len() > mark {
             let node = self.spine.pop().unwrap();

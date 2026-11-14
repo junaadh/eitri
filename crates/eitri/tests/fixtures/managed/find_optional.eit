@@ -1,0 +1,13 @@
+//! host: test
+import test from "test"
+let source = "hello"
+let found: ?i64 = source.find("ll")
+let absent: ?i64 = source.find("x")
+test.check(found == 2 && absent == null)
+test.check(source.find("x") == null && null == source.find("x"))
+test.check((found ?? 99) == 2 && (absent ?? 99) == 99)
+let mixed: ?i64 = source.find("x") ?? found
+let other: ?i64 = absent ?? source.find("ll")
+let neither: ?i64 = source.find("x") ?? null
+test.check(mixed == 2 && other == 2 && neither == null)
+test.check((source.find("x") ?? source.find("ll") ?? 99) == 2)

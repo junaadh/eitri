@@ -889,6 +889,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - T017-39: collapsed `?i64` uses a tag and payload, preserving all integer
   values through null, conversion, equality, coalescing and aggregates.
   Optional payload bindings and literals match only present values.
+- T017-40: string `find` results convert to `?i64` and participate in optional
+  equality and mixed coalescing without losing the full i64 value range.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

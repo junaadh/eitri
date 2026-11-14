@@ -1369,6 +1369,32 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     /// Lower `e` into `dst` when given, or anywhere convenient; return the
     /// slot holding its value.
     fn expr(&mut self, e: ExprId, dst: Option<u32>) -> Lowered<u32> {
+        if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::FindOffset {
+            let target = if let Some(dst) = dst {
+                dst
+            } else {
+                let slot = self.top;
+                self.top += 2;
+                slot
+            };
+            let source = self.expr_inner(e, None)?;
+            let done = self.asm.label();
+            self.asm
+                .load(target, 0, ValueType::Bool, self.input.ast.span(e))?;
+            self.asm
+                .load(target + 1, 0, ValueType::I64, self.input.ast.span(e))?;
+            self.asm
+                .branch_imm(Cond::Eq, source, -1, done, self.input.ast.span(e))?;
+            self.asm
+                .load(target, 1, ValueType::Bool, self.input.ast.span(e))?;
+            self.asm.emit(
+                Op::Mov,
+                Operands::abc((target + 1).into(), source.into(), 0),
+                self.input.ast.span(e),
+            )?;
+            self.asm.bind(done)?;
+            return Ok(target);
+        }
         if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::I64 {
             let target = if let Some(dst) = dst {
                 dst
@@ -1837,7 +1863,8 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             } if matches!(
                 checked.types[lhs],
                 Ty::Struct(_) | Ty::Enum(_) | Ty::OptionalI64
-            ) || (checked.optional_wrap[lhs] && checked.types[lhs] == Ty::I64) =>
+            ) || (checked.optional_wrap[lhs]
+                && matches!(checked.types[lhs], Ty::I64 | Ty::FindOffset)) =>
             {
                 self.aggregate_equality(
                     lhs,
@@ -2088,7 +2115,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             let operand = self.stack[mark + index];
             let found = self.expr(operand, None)?;
             let next = self.asm.label();
-            if self.checked.types[operand] == Ty::OptionalI64 {
+            if self.checked.types[operand] == Ty::OptionalI64
+                || (self.checked.types[operand] == Ty::FindOffset
+                    && self.checked.optional_wrap[operand])
+            {
                 self.asm
                     .branch_test(Test::False, found, next, ast.span(operand));
                 if self.checked.types[root] == Ty::OptionalI64 {

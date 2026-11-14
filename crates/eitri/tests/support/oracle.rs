@@ -696,6 +696,14 @@ impl Eval<'_> {
     }
 
     fn expr(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
+        if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::FindOffset {
+            let Value::Scalar(Ty::FindOffset, word) = self.expr_inner(host, e)? else {
+                unreachable!()
+            };
+            return Ok(Value::OptionalI64(
+                (word as i64 != -1).then_some(word as i64),
+            ));
+        }
         if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::I64 {
             let Value::Int(value) = self.expr_inner(host, e)? else {
                 unreachable!()
