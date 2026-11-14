@@ -18,3 +18,9 @@ extend Panel { fn increment() -> void { point.x += 1 } }
 p.point.x = change_label(p)
 p.increment()
 test.check(p.point.x == 13 && p.point.label == "changed")
+extend Point { mutating fn add(n: i64) -> void { self.x += n } }
+p.point.add(7)
+test.check(p.point.x == 20)
+extend Panel { fn bump() -> void { point.add(2) } }
+p.bump()
+test.check(p.point.x == 22)

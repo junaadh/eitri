@@ -5,7 +5,8 @@ update literals, identity equality, shared field mutation, script calls, and
 methods declared with `extend`. Their fields can contain structs, enums,
 optionals, strings, and class references. Class references can appear inside
 structs, enums, and optional aggregate values, and optional references support
-recursive graphs. Mutating struct methods on class value fields and host class
+recursive graphs. Mutating struct methods work on class value fields rooted in
+a binding; methods on fields of temporary class expressions and host class
 signatures are not yet supported. Class objects
 and their reference graph are traced by the collector.
 

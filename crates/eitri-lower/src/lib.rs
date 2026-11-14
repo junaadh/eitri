@@ -2950,7 +2950,6 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             _ => unreachable!("checked calls resolve to functions"),
         };
         let args = ast.args(args);
-        let first = self.top;
         let receiver = if matches!(
             checked.resolutions[e],
             Res::Method(_) | Res::MutMethod(_, _)
@@ -2962,6 +2961,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         } else {
             None
         };
+        let class_root = if matches!(checked.resolutions[e], Res::MutMethod(_, _)) {
+            receiver.and_then(|receiver| self.class_field_root(receiver))
+        } else {
+            None
+        };
+        let captured_object = class_root.map(|_| self.temp());
+        let first = self.top;
         let bare_receiver = match checked.resolutions[e] {
             Res::BareMethod(_, binding) | Res::BareMutMethod(_, binding) => Some(binding),
             _ => None,
@@ -2987,7 +2993,35 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         self.top += argument_slots;
         if let Some(receiver) = receiver {
             let save = self.top;
-            self.expr(receiver, Some(first))?;
+            if let Some((base, implicit, owner, index, root)) = class_root {
+                let object = captured_object.unwrap();
+                if let Some(base) = base {
+                    self.expr(base, Some(object))?;
+                } else {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(object.into(), self.slots[implicit.unwrap()].into(), 0),
+                        ast.span(receiver),
+                    )?;
+                }
+                let root_ty = checked.types[root];
+                let root_slot =
+                    self.class_read_field(object, owner, index, root_ty, None, ast.span(receiver))?;
+                let nested_offset = self.class_nested_offset(receiver, root);
+                for part in 0..receiver_width {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(
+                            (first + part).into(),
+                            (root_slot + nested_offset + part).into(),
+                            0,
+                        ),
+                        ast.span(receiver),
+                    )?;
+                }
+            } else {
+                self.expr(receiver, Some(first))?;
+            }
             self.top = save;
         }
         if let Some(binding) = bare_receiver {
@@ -3058,19 +3092,40 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         };
         self.asm.call(site, ast.span(e))?;
         if let Some(binding) = mutation {
-            let destination = receiver.map_or(self.slots[binding], |receiver| {
-                self.field_address(receiver, binding)
-            });
-            for offset in 0..receiver_width {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (destination + offset).into(),
-                        (result.first + return_width + offset).into(),
-                        0,
-                    ),
-                    ast.span(e),
-                )?;
+            if let Some((_, _, owner, index, root)) = class_root {
+                let object = captured_object.unwrap();
+                let receiver = receiver.unwrap();
+                let root_ty = checked.types[root];
+                let root_slot =
+                    self.class_read_field(object, owner, index, root_ty, None, ast.span(e))?;
+                let nested_offset = self.class_nested_offset(receiver, root);
+                for offset in 0..receiver_width {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(
+                            (root_slot + nested_offset + offset).into(),
+                            (result.first + return_width + offset).into(),
+                            0,
+                        ),
+                        ast.span(e),
+                    )?;
+                }
+                self.class_store_field(object, owner, index, root_ty, root_slot, ast.span(e))?;
+            } else {
+                let destination = receiver.map_or(self.slots[binding], |receiver| {
+                    self.field_address(receiver, binding)
+                });
+                for offset in 0..receiver_width {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(
+                            (destination + offset).into(),
+                            (result.first + return_width + offset).into(),
+                            0,
+                        ),
+                        ast.span(e),
+                    )?;
+                }
             }
             if returns && let Some(destination) = dst {
                 for offset in 0..return_width {
@@ -3420,6 +3475,24 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
         }
+    }
+
+    fn class_nested_offset(&self, mut expr: ExprId, root: ExprId) -> u32 {
+        let mut offset = 0;
+        while expr != root {
+            let Expr::Member { base, .. } = self.input.ast.exprs[expr] else {
+                unreachable!()
+            };
+            let Ty::Struct(owner) = self.checked.types[base] else {
+                unreachable!()
+            };
+            let Res::Field(index) = self.checked.resolutions[expr] else {
+                unreachable!()
+            };
+            offset += self.field_offset(owner, index);
+            expr = base;
+        }
+        offset
     }
 
     fn class_read_field(

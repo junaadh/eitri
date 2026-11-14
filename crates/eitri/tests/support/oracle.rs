@@ -1436,6 +1436,7 @@ impl Eval<'_> {
             }
             Expr::Call { callee, args } => {
                 let mut values = Vec::with_capacity(self.ast.args(args).len() + 1);
+                let mut class_target = None;
                 if matches!(
                     self.checked.resolutions[e],
                     Res::Method(_) | Res::MutMethod(_, _)
@@ -1443,7 +1444,43 @@ impl Eval<'_> {
                     let Expr::Member { base, .. } = self.ast.exprs[callee] else {
                         unreachable!()
                     };
-                    values.push(self.expr(host, base)?);
+                    if matches!(self.checked.resolutions[e], Res::MutMethod(_, _))
+                        && let Some((object_expr, implicit, field, root)) =
+                            self.class_field_root(base)
+                    {
+                        let object = if let Some(expr) = object_expr {
+                            self.expr(host, expr)?
+                        } else {
+                            self.read(implicit.unwrap())
+                        };
+                        let Value::Class(_, index) = object else {
+                            unreachable!()
+                        };
+                        let mut path = Vec::new();
+                        let mut cursor = base;
+                        while cursor != root {
+                            let Expr::Member { base, .. } = self.ast.exprs[cursor] else {
+                                unreachable!()
+                            };
+                            let Res::Field(field) = self.checked.resolutions[cursor] else {
+                                unreachable!()
+                            };
+                            path.push(field as usize);
+                            cursor = base;
+                        }
+                        path.reverse();
+                        let mut receiver = self.structs[index as usize][field as usize];
+                        for &part in &path {
+                            let Value::Struct(_, nested) = receiver else {
+                                unreachable!()
+                            };
+                            receiver = self.structs[nested as usize][part];
+                        }
+                        values.push(receiver);
+                        class_target = Some((index, field as usize, path));
+                    } else {
+                        values.push(self.expr(host, base)?);
+                    }
                 }
                 if let Res::BareMethod(_, binding) | Res::BareMutMethod(_, binding) =
                     self.checked.resolutions[e]
@@ -1473,7 +1510,28 @@ impl Eval<'_> {
                         let mut updated = None;
                         let result =
                             self.call_script(host, f, &values, span, Some(&mut updated))?;
-                        self.write_lvalue(base, binding, updated.expect("mutating receiver"));
+                        let mut value = updated.expect("mutating receiver");
+                        if let Some((index, field, path)) = class_target {
+                            let mut current = self.structs[index as usize][field];
+                            let mut parents = Vec::new();
+                            for part in path {
+                                let Value::Struct(ty, nested) = current else {
+                                    unreachable!()
+                                };
+                                parents.push((ty, nested, part));
+                                current = self.structs[nested as usize][part];
+                            }
+                            for (ty, nested, part) in parents.into_iter().rev() {
+                                let mut fields = self.structs[nested as usize].clone();
+                                fields[part] = value;
+                                let next = self.structs.len() as u32;
+                                self.structs.push(fields);
+                                value = Value::Struct(ty, next);
+                            }
+                            self.structs[index as usize][field] = value;
+                        } else {
+                            self.write_lvalue(base, binding, value);
+                        }
                         Ok(result)
                     }
                     Res::Host(h) => self.call_host(host, h, &values, span),

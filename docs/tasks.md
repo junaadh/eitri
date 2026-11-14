@@ -804,9 +804,11 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
+- T017-54: mutating struct methods operate on class value fields rooted in a
+  binding, including bare receiver fields, with forced collection.
 - T017-53: class fields can contain multi-slot aggregates and optionals, with
   nested field writes and source-order effects; class layouts are capped at
-  256 flattened slots. Mutating methods on value fields remain open.
+  256 flattened slots.
 - T017-52: optional class references support recursive object graphs, null,
   implicit conversion, coalescing, matching and calls under forced collection.
 - T017-51: class extension methods support explicit and bare receiver fields,

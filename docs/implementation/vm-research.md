@@ -2576,3 +2576,18 @@ execution 250/334 ns, total 10.5/11.1 µs; retained context was 31,047 B.
 This scalar benchmark does not exercise class fields. Samples:
 `/private/tmp/eitri-t017-53-samples.csv`; report:
 `/private/tmp/eitri-t017-53-bench.txt`.
+
+### T017-54 mutating methods on class value fields
+
+Mutating struct methods operate on class fields rooted in a binding, including
+bare receiver fields. The containing class reference is captured before
+arguments are evaluated; the containing value is reloaded before the result is
+written back. Both interpreters and lowerers run the fixture under forced
+collection. Temporary class expressions as receivers remain unsupported.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 10.0/14.7 µs,
+execution 250/417 ns, total 10.3/15.0 µs; retained context was 31,047 B.
+This scalar benchmark does not exercise class methods. Samples:
+`/private/tmp/eitri-t017-54-samples.csv`; report:
+`/private/tmp/eitri-t017-54-bench.txt`.

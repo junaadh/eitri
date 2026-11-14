@@ -3131,13 +3131,6 @@ impl<'i> Checker<'_, 'i> {
                         if let Res::SelfField(binding, _) = self.out.resolutions[path] {
                             class_field |= matches!(self.out.bindings[binding].ty, Ty::Class(_));
                         }
-                        if class_field {
-                            self.report(
-                                Code::Unsupported,
-                                "not supported yet: mutating methods on class value fields",
-                                self.span(base),
-                            );
-                        }
                         let mut root = base;
                         while let Expr::Member { base, .. } = ast.exprs[root] {
                             root = base;
@@ -3146,7 +3139,9 @@ impl<'i> Checker<'_, 'i> {
                             Res::Binding(binding) | Res::SelfField(binding, _) => Some(binding),
                             _ => None,
                         };
-                        if !binding.is_some_and(|binding| self.out.bindings[binding].mutable) {
+                        if !class_field
+                            && !binding.is_some_and(|binding| self.out.bindings[binding].mutable)
+                        {
                             self.report(
                                 Code::AssignToImmutable,
                                 "mutating method requires a mutable receiver",
@@ -3155,6 +3150,12 @@ impl<'i> Checker<'_, 'i> {
                         }
                         if let Some(binding) = binding {
                             self.out.resolutions[expr] = Res::MutMethod(method, binding);
+                        } else {
+                            self.report(
+                                Code::Unsupported,
+                                "not supported yet: mutating method on a temporary class field",
+                                self.span(base),
+                            );
                         }
                     } else {
                         self.out.resolutions[expr] = Res::Method(method);
