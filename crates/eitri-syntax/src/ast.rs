@@ -89,6 +89,7 @@ pub enum Expr {
     /// Alternating literal fragments and expressions in source order.
     Interpolation(List<ExprId>),
     Bool(bool),
+    Null(TokenId),
     /// A name, resolved by the checker.
     Name(TokenId),
     SelfValue(TokenId),
@@ -157,6 +158,8 @@ pub struct Block {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeExpr {
     Named(TokenId),
+    OptionalString(TokenId),
+    OptionalI64(TokenId),
     /// Unsupported, already reported.
     Error,
 }

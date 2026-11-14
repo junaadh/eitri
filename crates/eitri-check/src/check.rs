@@ -94,6 +94,7 @@ pub struct Checked {
     pub types: IndexVec<ExprId, Ty>,
     /// For names and calls: what they refer to.
     pub resolutions: IndexVec<ExprId, Res>,
+    pub optional_wrap: IndexVec<ExprId, bool>,
     /// For `let`: the declared binding; for assignment: the target.
     pub stmt_bindings: IndexVec<StmtId, Option<BindingId>>,
     /// Field index for a bare receiver-field assignment.
@@ -130,6 +131,7 @@ impl Checked {
         self.bindings.clear();
         self.types.clear();
         self.resolutions.clear();
+        self.optional_wrap.clear();
         self.stmt_bindings.clear();
         self.stmt_fields.clear();
         self.signatures.clear();
@@ -222,6 +224,7 @@ impl CheckScratch {
         c.bindings.capacity() * size_of::<Binding>()
             + c.types.capacity() * size_of::<Ty>()
             + c.resolutions.capacity() * size_of::<Res>()
+            + c.optional_wrap.capacity() * size_of::<bool>()
             + c.stmt_bindings.capacity() * size_of::<Option<BindingId>>()
             + c.stmt_fields.capacity() * size_of::<Option<u32>>()
             + c.signatures.capacity() * size_of::<Signature>()
@@ -275,6 +278,8 @@ impl CheckScratch {
             .reserve_budgeted(count.saturating_sub(c.types.len()), budget)?;
         c.resolutions
             .reserve_budgeted(count.saturating_sub(c.resolutions.len()), budget)?;
+        c.optional_wrap
+            .reserve_budgeted(count.saturating_sub(c.optional_wrap.len()), budget)?;
         c.stmt_bindings
             .reserve_budgeted(count.saturating_sub(c.stmt_bindings.len()), budget)?;
         c.stmt_fields
@@ -356,6 +361,7 @@ pub fn check<'s>(
     scratch.unknown.clear();
     let ast = input.ast;
     scratch.checked.types.resize(ast.exprs.len(), Ty::Error);
+    scratch.checked.optional_wrap.resize(ast.exprs.len(), false);
     scratch
         .checked
         .resolutions
@@ -572,6 +578,11 @@ impl<'i> Checker<'_, 'i> {
 
     /// A written type; `void` only where `allow_void`.
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
+        match ty {
+            TypeExpr::OptionalString(_) => return Ty::OptionalString,
+            TypeExpr::OptionalI64(_) => return Ty::OptionalI64,
+            _ => {}
+        }
         let TypeExpr::Named(token) = ty else {
             return Ty::Error;
         };
@@ -880,6 +891,7 @@ impl<'i> Checker<'_, 'i> {
                     Ty::Void => 0,
                     Ty::Struct(id) => self.out.struct_widths[id],
                     Ty::Enum(id) => self.out.enum_widths[id],
+                    Ty::OptionalI64 => 2,
                     _ => 1,
                 })
                 .fold(0u32, u32::saturating_add);
@@ -969,7 +981,8 @@ impl<'i> Checker<'_, 'i> {
                 | Expr::Float { .. }
                 | Expr::Char(_)
                 | Expr::String(_)
-                | Expr::Bool(_) => {}
+                | Expr::Bool(_)
+                | Expr::Null(_) => {}
                 Expr::Unary { operand, .. } => self.spine.push(operand),
                 Expr::Binary { lhs, rhs, .. } => {
                     self.spine.push(lhs);
@@ -1108,6 +1121,7 @@ impl<'i> Checker<'_, 'i> {
                     match child {
                         Ty::Struct(id) => self.out.struct_widths[id],
                         Ty::Enum(id) => self.out.enum_widths[id],
+                        Ty::OptionalI64 => 2,
                         _ => 1,
                     }
                 };
@@ -1504,6 +1518,13 @@ impl<'i> Checker<'_, 'i> {
     /// its span. Returns its own type.
     fn value(&mut self, expr: ExprId, expected: Option<Ty>) -> Ty {
         let found = self.expr(expr, expected, true);
+        if matches!(
+            (expected, found),
+            (Some(Ty::OptionalString), Ty::String) | (Some(Ty::OptionalI64), Ty::I64)
+        ) {
+            self.out.optional_wrap[expr] = true;
+            return expected.unwrap();
+        }
         // Compare first: the span is only needed for the rare mismatch. An
         // `if`'s branches were held to `expected` and reported their own
         // mismatch; reporting the whole `if` again would be a cascade.
@@ -1597,6 +1618,18 @@ impl<'i> Checker<'_, 'i> {
             }
             Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
             Expr::Bool(_) => Ty::Bool,
+            Expr::Null(token) => {
+                if matches!(expected, Some(Ty::OptionalString | Ty::OptionalI64)) {
+                    expected.unwrap()
+                } else {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: `null`",
+                        self.token_span(token),
+                    );
+                    Ty::Error
+                }
+            }
             Expr::SelfValue(token) => {
                 if let Some(binding) = self.current.and_then(|f| f.self_binding) {
                     self.out.resolutions[expr] = Res::Binding(binding);
@@ -1657,7 +1690,7 @@ impl<'i> Checker<'_, 'i> {
             Expr::Binary {
                 op: BinaryOp::Coalesce,
                 ..
-            } => self.coalesce(expr),
+            } => self.coalesce(expr, expected),
             Expr::Binary { .. } => self.binary_chain(expr, expected),
             Expr::Call { callee, args } => self.call(expr, callee, args, expected),
             Expr::If(id) => self.if_expr(expr, id, expected, used),
@@ -1673,9 +1706,32 @@ impl<'i> Checker<'_, 'i> {
         self.out.ints.push(word as i64);
     }
 
-    fn coalesce(&mut self, root: ExprId) -> Ty {
+    fn coalesce(&mut self, root: ExprId, expected: Option<Ty>) -> Ty {
         let mark = self.spine.len();
+        let mut tail = root;
+        while let Expr::Binary {
+            op: BinaryOp::Coalesce,
+            rhs,
+            ..
+        } = self.ast().exprs[tail]
+        {
+            tail = rhs;
+        }
+        let context = if matches!(expected, Some(Ty::String | Ty::OptionalString))
+            || matches!(self.ast().exprs[tail], Expr::String(_))
+            || matches!(self.hint(tail), Some(Ty::String | Ty::OptionalString))
+        {
+            Some(Ty::OptionalString)
+        } else if matches!(expected, Some(Ty::I64 | Ty::OptionalI64))
+            || matches!(self.ast().exprs[tail], Expr::Int { .. })
+            || matches!(self.hint(tail), Some(Ty::I64 | Ty::OptionalI64))
+        {
+            Some(Ty::OptionalI64)
+        } else {
+            None
+        };
         let mut node = root;
+        let mut source_kind = None;
         while let Expr::Binary {
             op: BinaryOp::Coalesce,
             lhs,
@@ -1683,15 +1739,65 @@ impl<'i> Checker<'_, 'i> {
         } = self.ast().exprs[node]
         {
             self.spine.push(node);
-            self.value(lhs, Some(Ty::FindOffset));
+            let hint = if matches!(self.ast().exprs[lhs], Expr::Null(_)) {
+                context
+            } else {
+                None
+            };
+            let found = self.value(lhs, hint);
+            if !matches!(
+                found,
+                Ty::FindOffset | Ty::OptionalString | Ty::OptionalI64 | Ty::Error
+            ) {
+                self.report(
+                    Code::TypeMismatch,
+                    "left operand of `??` must be optional",
+                    self.span(lhs),
+                );
+            }
+            if let Some(previous) = source_kind
+                && previous != found
+                && found != Ty::Error
+                && previous != Ty::Error
+            {
+                self.mismatch(found, previous, self.span(lhs));
+            }
+            source_kind = Some(found);
             node = rhs;
         }
-        self.value(node, Some(Ty::I64));
+        let source_kind = source_kind.unwrap_or(Ty::Error);
+        let result = match source_kind {
+            Ty::OptionalString | Ty::OptionalI64 => {
+                let hint = if matches!(self.ast().exprs[node], Expr::Null(_)) {
+                    Some(source_kind)
+                } else {
+                    None
+                };
+                let found = self.value(node, hint);
+                let inner = if source_kind == Ty::OptionalString {
+                    Ty::String
+                } else {
+                    Ty::I64
+                };
+                if found != inner && found != source_kind && found != Ty::Error {
+                    self.mismatch(found, inner, self.span(node));
+                }
+                found
+            }
+            Ty::FindOffset => {
+                self.value(node, Some(Ty::I64));
+                Ty::I64
+            }
+            _ => {
+                self.value(node, None);
+                Ty::Error
+            }
+        };
         while self.spine.len() > mark {
             let node = self.spine.pop().expect("above mark");
-            self.out.types[node] = Ty::I64;
+            self.out.types[node] = result;
         }
-        Ty::I64
+        result
     }
 
     fn int(&mut self, expr: ExprId, token: TokenId, negative: bool, expected: Option<Ty>) -> Ty {
@@ -2005,6 +2111,11 @@ impl<'i> Checker<'_, 'i> {
                 }
                 continue;
             }
+            let narrowed = match ty {
+                Ty::OptionalString => Ty::String,
+                Ty::OptionalI64 => Ty::I64,
+                _ => ty,
+            };
             if let Some(literal) = pattern.literal {
                 if !matches!(
                     self.ast().exprs[literal],
@@ -2020,16 +2131,53 @@ impl<'i> Checker<'_, 'i> {
                         self.span(literal),
                     );
                 } else {
-                    self.value(literal, Some(ty));
+                    self.value(literal, Some(narrowed));
                 }
                 continue;
             }
             if self.input.tokens.kind(pattern.name) == eitri_syntax::TokenKind::Wildcard {
                 continue;
             }
-            let binding = self.new_binding(pattern.name, false, ty);
+            let binding = self.new_binding(pattern.name, false, narrowed);
             self.out.pattern_bindings[pattern.name] = Some(binding);
         }
+    }
+
+    fn payload_patterns_irrefutable(
+        &self,
+        enum_id: eitri_syntax::ast::EnumId,
+        case_index: usize,
+        bindings: List<eitri_syntax::ast::MatchBinding>,
+    ) -> bool {
+        let ast = self.input.ast;
+        let fields = ast.params(ast.enum_cases[ast.enums[enum_id].cases][case_index].fields);
+        let types = self.out.enum_case_types[self.out.enum_starts[enum_id] as usize + case_index];
+        for (position, pattern) in ast.match_bindings[bindings].iter().enumerate() {
+            if pattern.literal.is_some() || pattern.nested_case.is_some() {
+                return false;
+            }
+            if self.input.tokens.kind(pattern.name) == eitri_syntax::TokenKind::Wildcard {
+                continue;
+            }
+            let index = match pattern.label {
+                Some(label) => match fields
+                    .iter()
+                    .take(256)
+                    .position(|field| self.symbol(field.name) == self.symbol(label))
+                {
+                    Some(index) => index,
+                    None => continue,
+                },
+                None => position,
+            };
+            if matches!(
+                self.out.param_types[types].get(index),
+                Some(Ty::OptionalString | Ty::OptionalI64)
+            ) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Recognize a single finite restriction, keeping coverage storage bounded
@@ -2065,19 +2213,15 @@ impl<'i> Checker<'_, 'i> {
                 if cases.is_empty() || cases.len() > 256 {
                     return None;
                 }
+                let nested_index = cases
+                    .iter()
+                    .position(|case| self.symbol(case.name) == self.symbol(name))?;
                 if let Some(children) = pattern.nested_bindings
-                    && ast.match_bindings[children]
-                        .iter()
-                        .any(|child| child.literal.is_some() || child.nested_case.is_some())
+                    && !self.payload_patterns_irrefutable(nested, nested_index, children)
                 {
                     return None;
                 }
-                Some((
-                    cases
-                        .iter()
-                        .position(|case| self.symbol(case.name) == self.symbol(name))?,
-                    cases.len(),
-                ))
+                Some((nested_index, cases.len()))
             } else {
                 None
             };
@@ -2138,11 +2282,7 @@ impl<'i> Checker<'_, 'i> {
                     .position(|item| self.symbol(item.name) == self.symbol(case))
                 {
                     if arm.guard.is_none()
-                        && self.ast().match_bindings[arm.bindings]
-                            .iter()
-                            .all(|pattern| {
-                                pattern.literal.is_none() && pattern.nested_case.is_none()
-                            })
+                        && self.payload_patterns_irrefutable(enum_id, index, arm.bindings)
                     {
                         covered[index] = true;
                     }
@@ -3012,6 +3152,24 @@ impl<'i> Checker<'_, 'i> {
     /// left-most operand is checked first, then each operator from the
     /// inside out, so evaluation order and diagnostics follow the source.
     fn hint(&self, expr: ExprId) -> Option<Ty> {
+        self.hint_at(expr, 0)
+    }
+
+    fn hint_at(&self, expr: ExprId, depth: u8) -> Option<Ty> {
+        if depth >= 64 {
+            return None;
+        }
+        if let Expr::Member { base, name } = self.ast().exprs[expr]
+            && let Some(Ty::Struct(id)) = self.hint_at(base, depth + 1)
+        {
+            let fields = self.ast().params(self.ast().structs[id].fields);
+            let index = fields
+                .iter()
+                .position(|field| self.symbol(field.name) == self.symbol(name))?;
+            return self.out.param_types[self.out.struct_fields[id]]
+                .get(index)
+                .copied();
+        }
         if let Expr::Name(token) = self.ast().exprs[expr]
             && let Some(Some(Name::Binding(binding))) = self.heads.get(self.symbol(token).index())
         {
@@ -3043,10 +3201,27 @@ impl<'i> Checker<'_, 'i> {
         };
         let guidance = if matches!(first_op, BinaryOp::And | BinaryOp::Or) {
             Some(Ty::Bool)
+        } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
+            && ((matches!(ast.exprs[leftmost], Expr::Null(_))
+                && matches!(ast.exprs[first_rhs], Expr::Int { .. }))
+                || (matches!(ast.exprs[first_rhs], Expr::Null(_))
+                    && matches!(ast.exprs[leftmost], Expr::Int { .. })))
+        {
+            Some(Ty::OptionalI64)
+        } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
+            && ((matches!(ast.exprs[leftmost], Expr::Null(_))
+                && matches!(ast.exprs[first_rhs], Expr::String(_)))
+                || (matches!(ast.exprs[first_rhs], Expr::Null(_))
+                    && matches!(ast.exprs[leftmost], Expr::String(_))))
+        {
+            Some(Ty::OptionalString)
         } else {
             expected.filter(|t| t.numeric()).or_else(|| {
                 if !matches!(first_op, BinaryOp::Shl | BinaryOp::Shr)
-                    && matches!(ast.exprs[leftmost], Expr::Int { .. } | Expr::Float { .. })
+                    && matches!(
+                        ast.exprs[leftmost],
+                        Expr::Int { .. } | Expr::Float { .. } | Expr::Null(_) | Expr::String(_)
+                    )
                 {
                     self.hint(first_rhs)
                 } else {
@@ -3054,7 +3229,11 @@ impl<'i> Checker<'_, 'i> {
                 }
             })
         };
-        let mut lhs_ty = self.expr(leftmost, guidance, true);
+        let mut lhs_ty = if matches!(guidance, Some(Ty::OptionalString | Ty::OptionalI64)) {
+            self.value(leftmost, guidance)
+        } else {
+            self.expr(leftmost, guidance, true)
+        };
         let mut lhs_span = self.span(leftmost);
         while self.spine.len() > mark {
             let node = self.spine.pop().unwrap();

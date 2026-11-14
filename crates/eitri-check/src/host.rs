@@ -243,6 +243,14 @@ fn value_type(
     interner: &Interner,
     diagnostics: &mut Diagnostics,
 ) -> Ty {
+    if let TypeExpr::OptionalString(token) | TypeExpr::OptionalI64(token) = ty {
+        diagnostics.push(error(
+            Code::Unsupported,
+            "not supported yet: optional host types",
+            tokens.span(token),
+        ));
+        return Ty::Error;
+    }
     let TypeExpr::Named(token) = ty else {
         return Ty::Error;
     };

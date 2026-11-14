@@ -722,6 +722,26 @@ impl Parser<'_> {
     }
 
     fn type_expr(&mut self) -> Parsed<TypeExpr> {
+        let mut optional_tokens = 0;
+        while matches!(self.nth(optional_tokens), T::Question | T::QuestionQuestion) {
+            optional_tokens += 1;
+        }
+        if optional_tokens != 0 && self.nth(optional_tokens) == T::Ident {
+            let symbol = self
+                .tokens
+                .symbol(TokenId::from_u32(self.pos + optional_tokens));
+            if symbol == eitri_base::sym::STRING || symbol == eitri_base::sym::I64 {
+                for _ in 0..optional_tokens {
+                    self.bump();
+                }
+                let token = self.bump();
+                return Ok(if symbol == eitri_base::sym::STRING {
+                    TypeExpr::OptionalString(token)
+                } else {
+                    TypeExpr::OptionalI64(token)
+                });
+            }
+        }
         let span = self.current_span();
         let feature = match self.kind() {
             T::Ident => {
@@ -1426,7 +1446,10 @@ impl Parser<'_> {
             T::Float => self.unsupported_primary("float literals"),
             T::Str => self.unsupported_primary("string literals"),
             T::Char => self.unsupported_primary("char literals"),
-            T::Null => self.unsupported_primary("`null`"),
+            T::Null => {
+                self.bump();
+                self.ast.expr(Expr::Null(token), span)
+            }
             T::Dot => {
                 self.bump();
                 let case = self.expect(T::Ident, "an enum case")?;

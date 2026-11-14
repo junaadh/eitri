@@ -1,2 +1,2 @@
-fn f(x: ?i64) -> void {
+fn f(x: ?bool) -> void {
 }

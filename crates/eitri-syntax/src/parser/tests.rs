@@ -116,6 +116,9 @@ impl Printer<'_> {
     fn ty(&self, ty: TypeExpr) -> String {
         match ty {
             TypeExpr::Named(token) => self.token(token).to_owned(),
+            TypeExpr::OptionalString(token) | TypeExpr::OptionalI64(token) => {
+                format!("?{}", self.token(token))
+            }
             TypeExpr::Error => "<error>".into(),
         }
     }
@@ -203,7 +206,9 @@ impl Printer<'_> {
             Expr::Int { token, negative } | Expr::Float { token, negative } => {
                 format!("{}{}", if negative { "-" } else { "" }, self.token(token))
             }
-            Expr::Char(token) | Expr::String(token) => self.token(token).to_owned(),
+            Expr::Char(token) | Expr::String(token) | Expr::Null(token) => {
+                self.token(token).to_owned()
+            }
             Expr::StringPart(span) => self.text[span.range()].to_owned(),
             Expr::Interpolation(parts) => format!(
                 "(interpolation {})",
@@ -372,9 +377,8 @@ fn syntax_errors_resynchronize() {
 #[test]
 fn unsupported_features_are_reported_once_and_dropped() {
     let cases: &[(&str, &str)] = &[
-        ("let x = null", "E0001 8..12 not supported yet: `null`"),
         (
-            "fn f(x: ?i64) -> void {\n}",
+            "fn f(x: ?bool) -> void {\n}",
             "E0001 8..9 not supported yet: optional types",
         ),
         (
@@ -460,7 +464,7 @@ fn unsupported_features_are_reported_once_and_dropped() {
         assert_eq!(errors(text), [expected], "{text:?}");
     }
     // The rest of the program still parses normally.
-    let (tree, errors) = parse_text("let x = null + y\nlet z = 2", ModuleKind::Script);
+    let (tree, errors) = parse_text("let x = try y\nlet z = 2", ModuleKind::Script);
     assert_eq!(errors.len(), 1);
     assert_eq!(tree, "(let x <error>)\n(let z 2)");
 }

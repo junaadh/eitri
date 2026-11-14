@@ -263,10 +263,32 @@ fn observe(text: &str, reference: bool) -> Option<String> {
     // E2's frozen checker is an M0 regression baseline, not a T013/T017 oracle.
     if !ast.enums.is_empty()
         || !ast.structs.is_empty()
-        || ast
-            .stmts
-            .iter()
-            .any(|s| matches!(s, eitri_syntax::ast::Stmt::AssignField { .. }))
+        || ast.fns.iter().any(|function| {
+            matches!(
+                function.ret,
+                eitri_syntax::ast::TypeExpr::OptionalString(_)
+                    | eitri_syntax::ast::TypeExpr::OptionalI64(_)
+            ) || ast.params(function.params).iter().any(|param| {
+                matches!(
+                    param.ty,
+                    eitri_syntax::ast::TypeExpr::OptionalString(_)
+                        | eitri_syntax::ast::TypeExpr::OptionalI64(_)
+                )
+            })
+        })
+        || ast.stmts.iter().any(|s| {
+            matches!(
+                s,
+                eitri_syntax::ast::Stmt::AssignField { .. }
+                    | eitri_syntax::ast::Stmt::Let {
+                        ty: Some(
+                            eitri_syntax::ast::TypeExpr::OptionalString(_)
+                                | eitri_syntax::ast::TypeExpr::OptionalI64(_)
+                        ),
+                        ..
+                    }
+            )
+        })
         || ast.exprs.iter().any(|e| {
             matches!(
                 e,
@@ -277,6 +299,7 @@ fn observe(text: &str, reference: bool) -> Option<String> {
                     | eitri_syntax::ast::Expr::Float { .. }
                     | eitri_syntax::ast::Expr::Char(_)
                     | eitri_syntax::ast::Expr::String(_)
+                    | eitri_syntax::ast::Expr::Null(_)
                     | eitri_syntax::ast::Expr::StringPart(_)
                     | eitri_syntax::ast::Expr::Interpolation(_)
                     | eitri_syntax::ast::Expr::Convert { .. }

@@ -732,6 +732,7 @@ impl<'i> Checker<'_, 'i> {
             Expr::Float { .. }
             | Expr::Char(_)
             | Expr::String(_)
+            | Expr::Null(_)
             | Expr::StringPart(_)
             | Expr::Interpolation(_)
             | Expr::Convert { .. } => {

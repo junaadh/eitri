@@ -109,3 +109,58 @@ fn aggregate_signature_cannot_be_called_as_flat_scalars() {
         cx.execute(&compiled, &mut Probe).unwrap();
     }
 }
+
+#[test]
+fn optional_signature_cannot_be_called_as_scalar() {
+    struct Probe;
+    impl Host for Probe {
+        fn call(&mut self, cx: &mut Call<'_, '_>, _: u32) -> Result<(), HostError> {
+            let callback = cx.function("callback").unwrap();
+            let mut result = [0];
+            assert!(cx.call(self, callback, &[0], &mut result).is_err());
+            assert!(
+                cx.call_values(self, callback, &[eitri::ReentryArg::Scalar(0)])
+                    .is_err()
+            );
+            Ok(())
+        }
+    }
+    for ty in ["?string", "?i64"] {
+        let source = format!(
+            "import h from \"h\"\nfn callback(value: {ty}) -> i64 {{ return 1 }}\nh.probe()\n"
+        );
+        for threaded in [false, true] {
+            let mut cx = Context::new();
+            cx.set_threaded(threaded);
+            cx.register_host_module("h", "pub fn probe() -> void\n")
+                .unwrap();
+            let compiled = cx.compile(&source).unwrap();
+            cx.execute(&compiled, &mut Probe).unwrap();
+        }
+    }
+}
+
+#[test]
+fn optional_host_signatures_are_rejected() {
+    let mut context = Context::new();
+    assert!(
+        context
+            .register_host_module("h", "pub fn f(value: ?string) -> void\n")
+            .is_err()
+    );
+    assert!(
+        context
+            .register_host_module("h", "pub fn f() -> ?string\n")
+            .is_err()
+    );
+    assert!(
+        context
+            .register_host_module("h", "pub fn f(value: ?i64) -> void\n")
+            .is_err()
+    );
+    assert!(
+        context
+            .register_host_module("h", "pub fn f() -> ?i64\n")
+            .is_err()
+    );
+}

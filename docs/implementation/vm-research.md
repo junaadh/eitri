@@ -2323,3 +2323,49 @@ execution 209/292 ns, total 9,083/9,958 ns; retained context memory was
 30,683 B. This scalar workload does not exercise enum constructors. Samples:
 `/private/tmp/eitri-t017-36-samples.csv`; report:
 `/private/tmp/eitri-t017-36-bench.txt`.
+
+### T017-37 optional strings
+
+Collapsed `?string` values use nullable managed-reference slots. `null`,
+implicit conversion, equality and `??` with a string fallback work inside
+structs, enum payloads and script calls. Optional host signatures and reentry
+are rejected. The coercion map adds compiler scratch; forced-GC tests cover
+null and present values on both interpreters and lowerers.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 8,875/11,200 ns,
+execution 250/334 ns, total 9,083/11,700 ns. Retained context memory increased
+from 30,683 B to 30,898 B and fresh creation from 197 to 198 allocations. This
+scalar workload does not exercise optionals. Samples:
+`/private/tmp/eitri-t017-37-samples.csv`; report:
+`/private/tmp/eitri-t017-37-bench.txt`.
+
+### T017-38 optional coalescing
+
+Optional-string coalescing can return an optional fallback, and contextual
+`null` can participate in coalescing. String literals compare against null in
+either order. The existing nullable slots preserve roots and short-circuit
+effects under forced collection across both execution paths.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 8,500/10,300 ns,
+execution 209/292 ns, total 8,708/10,600 ns; retained context memory was
+30,898 B. This scalar workload does not exercise optional values. Samples:
+`/private/tmp/eitri-t017-38-samples.csv`; report:
+`/private/tmp/eitri-t017-38-bench.txt`.
+
+### T017-39 optional integers and payload narrowing
+
+Collapsed `?i64` uses a boolean tag and an i64 slot, preserving all integers.
+Null, implicit conversion, equality, coalescing, calls and aggregate fields
+work; optional host signatures and reentry reject. Optional payload bindings and
+literals match only present values. The optimized branch path now avoids
+scalar comparison shortcuts for coerced multi-slot values. Forced GC covers
+both interpreters and lowerers.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 9,333/10,300 ns,
+execution 250/292 ns, total 9,583/10,600 ns; retained context memory was
+30,898 B. This scalar workload does not exercise optionals. Samples:
+`/private/tmp/eitri-t017-39-samples.csv`; report:
+`/private/tmp/eitri-t017-39-bench.txt`.

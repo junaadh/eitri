@@ -1,0 +1,20 @@
+//! host: test
+import test from "test"
+struct Box { value: ?i64, text: string }
+enum Choice { Empty, Value(item: ?i64) }
+fn identity(value: ?i64) -> ?i64 { return value }
+let present = Box { value: -1, text: "alive" }
+let absent = Box { value: null, text: "empty" }
+let wrapped = Choice.Value(item: identity(present.value))
+test.check((present.value ?? 7) == -1 && (absent.value ?? 7) == 7)
+test.check(match wrapped { .Empty => false, .Value(item) => item == -1, .Value(_) => false })
+test.check(present == Box { value: -1, text: "alive" })
+test.check(present.value != null && absent.value == null)
+let collapsed: ???i64 = -9223372036854775808
+test.check((collapsed ?? 0) == -9223372036854775808)
+let picked: ?i64 = absent.value ?? present.value
+test.check((picked ?? 0) == -1 && null != 0 && 0 != null)
+fn choose(flag: bool) -> ?i64 { return if flag { 42 } else { null } }
+let chosen = choose(true)
+let neither: ?i64 = null ?? null
+test.check(42 == chosen && neither == null && (choose(false) ?? 9) == 9)

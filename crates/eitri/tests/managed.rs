@@ -719,6 +719,81 @@ fn mixed_enum_values_survive_collection() {
 }
 
 #[test]
+fn optional_strings_survive_collection() {
+    let source = include_str!("fixtures/managed/optional_string.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/optional_string.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn optional_i64_values_survive_collection() {
+    let source = include_str!("fixtures/managed/optional_i64.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/optional_i64.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn optional_payload_patterns_survive_collection() {
+    let source = include_str!("fixtures/managed/optional_patterns.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/optional_patterns.expect")
+            );
+        }
+    }
+}
+
+#[test]
 fn nested_enum_payloads_survive_collection() {
     let source = include_str!("fixtures/managed/enum_nested.eit");
     for threaded in [false, true] {

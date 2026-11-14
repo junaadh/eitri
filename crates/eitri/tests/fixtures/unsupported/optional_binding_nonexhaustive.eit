@@ -1,0 +1,2 @@
+enum E { Value(item: ?i64) }
+let n = match E.Value(null) { .Value(x) => x }

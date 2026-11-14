@@ -169,6 +169,8 @@ impl Dumper<'_> {
             Ty::F64 => "'f64'",
             Ty::Char => "'char'",
             Ty::String => "'string'",
+            Ty::OptionalString => "'?string'",
+            Ty::OptionalI64 => "'?i64'",
             Ty::Struct(_) => "'struct'",
             Ty::Enum(_) => "'enum'",
             Ty::FindOffset => "'?i64'",
@@ -189,6 +191,8 @@ impl Dumper<'_> {
             Ty::F64 => "f64",
             Ty::Char => "char",
             Ty::String => "string",
+            Ty::OptionalString => "?string",
+            Ty::OptionalI64 => "?i64",
             Ty::Struct(_) => "struct",
             Ty::Enum(_) => "enum",
             Ty::FindOffset => "?i64",
@@ -215,6 +219,9 @@ impl Dumper<'_> {
     fn written_type(&self, ty: TypeExpr) -> String {
         match ty {
             TypeExpr::Named(token) => self.paint(TYPE, &format!("'{}'", self.token(token))),
+            TypeExpr::OptionalString(token) | TypeExpr::OptionalI64(token) => {
+                self.paint(TYPE, &format!("'?{}'", self.token(token)))
+            }
             TypeExpr::Error => self.paint(TYPE, "'<error>'"),
         }
     }
@@ -317,7 +324,9 @@ impl Dumper<'_> {
             Node::Param(f, i) => {
                 let param = ast.params(ast.fns[f].params)[i];
                 let end = match param.ty {
-                    TypeExpr::Named(token) => tokens.span(token),
+                    TypeExpr::Named(token)
+                    | TypeExpr::OptionalString(token)
+                    | TypeExpr::OptionalI64(token) => tokens.span(token),
                     TypeExpr::Error => tokens.span(param.name),
                 };
                 let range = self.range(tokens.span(param.name).to(end));
@@ -498,6 +507,7 @@ impl Dumper<'_> {
                 );
                 (line, Vec::new())
             }
+            Expr::Null(_) => (format!("{} {range} {ty}", self.paint(STMT, "Null")), vec![]),
             Expr::String(_) | Expr::StringPart(_) => (
                 format!(
                     "{} {range} {ty} {}",

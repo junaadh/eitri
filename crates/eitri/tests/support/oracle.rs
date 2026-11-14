@@ -205,6 +205,8 @@ enum Value {
     Scalar(Ty, u64),
     Bool(bool),
     String(u32),
+    OptionalString(Option<u32>),
+    OptionalI64(Option<i64>),
     Struct(eitri_syntax::ast::StructId, u32),
     Enum(eitri_syntax::ast::EnumId, u32, u32),
     Void,
@@ -245,6 +247,8 @@ impl Value {
             Self::Int(_) => Ty::I64,
             Self::Bool(_) => Ty::Bool,
             Self::String(_) => Ty::String,
+            Self::OptionalString(_) => Ty::OptionalString,
+            Self::OptionalI64(_) => Ty::OptionalI64,
             Self::Struct(id, _) => Ty::Struct(id),
             Self::Enum(id, _, _) => Ty::Enum(id),
             Self::Scalar(ty, _) => ty,
@@ -293,7 +297,12 @@ impl Value {
             Value::Int(value) => value as u64,
             Value::Scalar(_, word) => word,
             Value::Bool(value) => u64::from(value),
-            Value::String(_) | Value::Struct(_, _) | Value::Enum(_, _, _) | Value::Void => {
+            Value::String(_)
+            | Value::OptionalString(_)
+            | Value::OptionalI64(_)
+            | Value::Struct(_, _)
+            | Value::Enum(_, _, _)
+            | Value::Void => {
                 unreachable!("the checker rejects managed or void host arguments")
             }
         }
@@ -657,7 +666,12 @@ impl Eval<'_> {
                 }
             } else if let Some(literal) = pattern.literal {
                 let expected = self.expr(host, literal)?;
-                let actual = self.structs[payload as usize][index];
+                let actual = match self.structs[payload as usize][index] {
+                    Value::OptionalI64(Some(value)) => Value::Int(value),
+                    Value::OptionalString(Some(value)) => Value::String(value),
+                    Value::OptionalI64(None) | Value::OptionalString(None) => return Ok(false),
+                    value => value,
+                };
                 if !self
                     .binary_values(BinaryOp::Eq, actual, expected, ast.span(literal))?
                     .bool()
@@ -665,7 +679,13 @@ impl Eval<'_> {
                     return Ok(false);
                 }
             } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
-                self.locals[binding.index()] = Some(self.structs[payload as usize][index]);
+                let value = match self.structs[payload as usize][index] {
+                    Value::OptionalI64(Some(value)) => Value::Int(value),
+                    Value::OptionalString(Some(value)) => Value::String(value),
+                    Value::OptionalI64(None) | Value::OptionalString(None) => return Ok(false),
+                    value => value,
+                };
+                self.locals[binding.index()] = Some(value);
             }
         }
         Ok(true)
@@ -676,6 +696,22 @@ impl Eval<'_> {
     }
 
     fn expr(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
+        if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::I64 {
+            let Value::Int(value) = self.expr_inner(host, e)? else {
+                unreachable!()
+            };
+            return Ok(Value::OptionalI64(Some(value)));
+        }
+        if self.checked.optional_wrap[e] {
+            let Value::String(value) = self.expr_inner(host, e)? else {
+                unreachable!()
+            };
+            return Ok(Value::OptionalString(Some(value)));
+        }
+        self.expr_inner(host, e)
+    }
+
+    fn expr_inner(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
         let span = self.ast.span(e);
         if let Res::EnumCase(id, case) = self.checked.resolutions[e] {
             let declaration = self.ast.enum_cases[self.ast.enums[id].cases][case as usize];
@@ -787,6 +823,10 @@ impl Eval<'_> {
                 self.convert(e, value)
             }
             Expr::Bool(value) => Ok(Value::Bool(value)),
+            Expr::Null(_) if self.checked.types[e] == Ty::OptionalI64 => {
+                Ok(Value::OptionalI64(None))
+            }
+            Expr::Null(_) => Ok(Value::OptionalString(None)),
             Expr::SelfValue(_) | Expr::Name(_) => match self.checked.resolutions[e] {
                 Res::Binding(binding) => Ok(self.read(binding)),
                 Res::SelfField(binding, field) => {
@@ -829,8 +869,24 @@ impl Eval<'_> {
                         } else {
                             Ok(Value::Int(word as i64))
                         }
+                    } else if let Value::OptionalI64(value) = value {
+                        match value {
+                            Some(value) if self.checked.types[e] == Ty::OptionalI64 => {
+                                Ok(Value::OptionalI64(Some(value)))
+                            }
+                            Some(value) => Ok(Value::Int(value)),
+                            None => self.expr(host, rhs),
+                        }
+                    } else if let Value::OptionalString(value) = value {
+                        match value {
+                            Some(value) if self.checked.types[e] == Ty::OptionalString => {
+                                Ok(Value::OptionalString(Some(value)))
+                            }
+                            Some(value) => Ok(Value::String(value)),
+                            None => self.expr(host, rhs),
+                        }
                     } else {
-                        unreachable!("checked optional find")
+                        unreachable!("checked optional")
                     }
                 }
                 BinaryOp::And => Ok(Value::Bool(
@@ -1216,6 +1272,8 @@ impl Eval<'_> {
                 }
                 (Value::String(a), Value::String(b))
                     if self.strings[a as usize] == self.strings[b as usize] => {}
+                (Value::OptionalString(Some(a)), Value::OptionalString(Some(b)))
+                    if self.strings[a as usize] == self.strings[b as usize] => {}
                 (a, b) if a.ty().float() && a.ty() == b.ty() && a.float() == b.float() => {}
                 (a, b) if !a.ty().float() && a == b => {}
                 _ => return false,
@@ -1229,6 +1287,18 @@ impl Eval<'_> {
         let ty = a.ty();
         if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
             let equal = self.aggregate_equal(a, b);
+            return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
+        }
+        if let (Value::OptionalI64(left), Value::OptionalI64(right)) = (a, b) {
+            let equal = left == right;
+            return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
+        }
+        if let (Value::OptionalString(left), Value::OptionalString(right)) = (a, b) {
+            let equal = match (left, right) {
+                (None, None) => true,
+                (Some(a), Some(b)) => self.strings[a as usize] == self.strings[b as usize],
+                _ => false,
+            };
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
         }
         if let (Value::String(left), Value::String(right)) = (a, b) {

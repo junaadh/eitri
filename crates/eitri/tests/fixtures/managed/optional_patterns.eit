@@ -1,0 +1,16 @@
+//! host: test
+import test from "test"
+enum Number { Value(item: ?i64) }
+enum Text { Value(item: ?string) }
+fn number(value: Number) -> i64 {
+    return match value { .Value(1) => 10, .Value(x) => x, .Value(_) => -1 }
+}
+fn text(value: Text) -> string {
+    return match value { .Value("yes") => "matched", .Value(x) => x, .Value(_) => "null" }
+}
+test.emit(number(Number.Value(1)))
+test.emit(number(Number.Value(2)))
+test.emit(number(Number.Value(null)))
+test.check(text(Text.Value("yes")) == "matched")
+test.check(text(Text.Value("other")) == "other")
+test.check(text(Text.Value(null)) == "null")
