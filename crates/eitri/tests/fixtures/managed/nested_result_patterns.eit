@@ -1,0 +1,10 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string), Missing }
+enum Choice { Text(text: string), None }
+fn fail() -> Problem!Choice { return .Err(Problem.Bad("bad")) }
+fn select() -> Problem!Choice { return Choice.Text("yes") }
+test.check(match fail() { .Err(.Bad(text)) => text == "bad", .Err => false, .Ok => false })
+test.check(match select() { .Ok(.Text(text)) => text == "yes", .Ok => false, .Err => false })
+test.check(match fail() { .Err(Problem.Bad(text)) if text == "wrong" => false, .Err(.Bad(text)) => text == "bad", .Err => false, .Ok => false })
+test.check(match fail() { .Err => true, .Ok => false, .Err(.Bad(text)) => text == "never" })

@@ -1,0 +1,3 @@
+enum Problem { Bad, Missing }
+fn fail() -> Problem!i64 { return .Err(Problem.Bad) }
+let value = match fail() { .Err(.Bad) => 0, .Ok(value) => value }

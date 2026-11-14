@@ -3040,12 +3040,45 @@ impl<'i> Checker<'_, 'i> {
                     );
                 }
                 if let Some(pattern) = patterns.first() {
-                    if pattern.label.is_some() || pattern.nested_case.is_some() {
+                    if pattern.label.is_some() {
                         self.report(
-                            Code::Unsupported,
-                            "not supported yet: nested result patterns",
+                            Code::TypeMismatch,
+                            "result payload has no label",
                             self.token_span(pattern.name),
                         );
+                    } else if let Some(case) = pattern.nested_case {
+                        if let Ty::Enum(nested) | Ty::OptionalEnum(nested) = payload {
+                            if let Some(qualifier) = pattern.nested_qualifier
+                                && self.symbol(qualifier)
+                                    != self.symbol(self.ast().enums[nested].name)
+                            {
+                                self.report(
+                                    Code::TypeMismatch,
+                                    "nested enum pattern qualifier does not match payload",
+                                    self.token_span(qualifier),
+                                );
+                            }
+                            let cases = &self.ast().enum_cases[self.ast().enums[nested].cases];
+                            if let Some(index) = cases.iter().take(256).position(|candidate| {
+                                self.symbol(candidate.name) == self.symbol(case)
+                            }) {
+                                if let Some(children) = pattern.nested_bindings {
+                                    self.check_match_payload(nested, index, case, children, true);
+                                }
+                            } else {
+                                self.report(
+                                    Code::UnknownName,
+                                    "unknown nested enum case",
+                                    self.token_span(case),
+                                );
+                            }
+                        } else {
+                            self.report(
+                                Code::TypeMismatch,
+                                "nested case pattern requires an enum payload",
+                                self.token_span(case),
+                            );
+                        }
                     } else if let Some(literal) = pattern.literal {
                         if matches!(self.ast().exprs[literal], Expr::Null(_))
                             && payload.optional_inner().is_some()

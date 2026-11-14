@@ -1160,6 +1160,21 @@ impl Eval<'_> {
                         }),
                         value => Some(value),
                     };
+                    if let Some(case) = pattern.nested_case {
+                        let Some(Value::Enum(nested, tag, payload)) = present else {
+                            continue;
+                        };
+                        let cases = &ast.enum_cases[ast.enums[nested].cases];
+                        if self.tokens.symbol(cases[tag as usize].name) != self.tokens.symbol(case)
+                        {
+                            continue;
+                        }
+                        if let Some(children) = pattern.nested_bindings
+                            && !self.match_payload(host, nested, tag, payload, children)?
+                        {
+                            continue;
+                        }
+                    }
                     if pattern.literal.is_some() && present.is_some() {
                         continue;
                     }

@@ -2817,3 +2817,10 @@ bindings match present values, and the checker requires the null state to be
 covered. The 1001-sample release harness measured fresh module compile p50/p99
 12.3/20.5 µs and source-to-result 12.6/20.8 µs on the general workload. Raw
 samples: `/private/tmp/eitri-t017-75-main-samples.csv`.
+
+### T017-76 nested result patterns
+
+Result cases can match nested enum payloads using existing bounded enum pattern
+handling. The 1001-sample release harness measured fresh module compile p50/p99
+12.0/15.8 µs and source-to-result 12.2/16.1 µs on the general workload. Raw
+samples: `/private/tmp/eitri-t017-76-main-samples.csv`.

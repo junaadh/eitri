@@ -4545,7 +4545,26 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     let value = self.top;
                     self.top += self.width(payload_ty);
                     self.move_nullable(payload_ty, source, value, false, span)?;
-                    if pattern.literal.is_some() {
+                    if let Some(case) = pattern.nested_case {
+                        let nested = match payload_ty {
+                            Ty::Enum(id) | Ty::OptionalEnum(id) => id,
+                            _ => unreachable!("checked nested result pattern"),
+                        };
+                        let cases = &ast.enum_cases[ast.enums[nested].cases];
+                        let tag = cases
+                            .iter()
+                            .position(|item| {
+                                self.input.tokens.symbol(item.name)
+                                    == self.input.tokens.symbol(case)
+                            })
+                            .expect("checked nested case");
+                        let source = self.match_present(value, payload_ty, next, span)?;
+                        self.asm
+                            .branch_imm(Cond::Ne, source, tag as i64, next, span)?;
+                        if let Some(children) = pattern.nested_bindings {
+                            self.match_payload(source, nested, tag, children, next, span)?;
+                        }
+                    } else if pattern.literal.is_some() {
                         if let Ty::OptionalClass(id) = payload_ty {
                             let null = self.temp();
                             let equal = self.temp();
@@ -4637,6 +4656,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     .first()
                     .is_some_and(|pattern| {
                         pattern.literal.is_some()
+                            || pattern.nested_case.is_some()
                             || (self.checked.pattern_bindings[pattern.name].is_some()
                                 && (if self
                                     .input
