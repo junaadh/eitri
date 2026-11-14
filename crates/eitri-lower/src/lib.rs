@@ -170,6 +170,7 @@ pub fn value_type(ty: Ty) -> ValueType {
         Ty::String => ValueType::String,
         Ty::Class(id) => ValueType::Record(id.as_u32()),
         Ty::OptionalString => ValueType::NullableString,
+        Ty::OptionalClass(id) => ValueType::NullableRecord(id.as_u32()),
         Ty::FindOffset => ValueType::I64,
         _ => {
             unreachable!("checked code has only value types here")

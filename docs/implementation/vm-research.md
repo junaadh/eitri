@@ -2532,3 +2532,17 @@ function metadata increase scalar-path storage; the latency comparison is from
 single runs and this workload does not execute classes. Samples:
 `/private/tmp/eitri-t017-50-samples.csv`; report:
 `/private/tmp/eitri-t017-50-bench.txt`.
+
+### T017-51 class extension methods
+
+Class methods use `extend`, accept shared receivers, and can read or write
+explicit or bare fields and call other methods. Static constructors work;
+`mutating` class methods are rejected because the reference is already shared.
+Both interpreters and lowerers run the fixture with forced collection.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 9,833/17,200 ns,
+execution 250/458 ns, total 10.1/17.7 µs; retained context was 31,047 B.
+This benchmark does not exercise class methods. Samples:
+`/private/tmp/eitri-t017-51-samples.csv`; report:
+`/private/tmp/eitri-t017-51-bench.txt`.

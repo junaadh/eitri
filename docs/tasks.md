@@ -804,10 +804,12 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
+- T017-51: class extension methods support explicit and bare receiver fields,
+  shared mutation, method calls and static constructors.
 - T017-50: classes with single-slot fields allocate traced heap objects, share
   identity, support construction/update, field mutation and script calls.
   Nullable managed slots preserve class references inside enums and optional
-  aggregates. Class methods and optional class types remain open.
+  aggregates. Optional class types and multi-slot class fields remain open.
 - T017-49: struct and optional struct match bindings preserve managed fields;
   string bindings use the correct managed slot type.
 - T017-48: optional enum subjects and payloads support nested case matching,

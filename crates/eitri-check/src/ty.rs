@@ -16,6 +16,7 @@ pub enum Ty {
     Char,
     String,
     OptionalString,
+    OptionalClass(eitri_syntax::ast::StructId),
     OptionalI64,
     OptionalBool,
     OptionalI8,
@@ -59,6 +60,7 @@ impl Ty {
             }
             Self::FindOffset
             | Self::OptionalString
+            | Self::OptionalClass(_)
             | Self::OptionalI64
             | Self::OptionalBool
             | Self::OptionalI8
@@ -90,9 +92,18 @@ impl Ty {
         })
     }
 
+    pub fn optional_inner(self) -> Option<Self> {
+        match self {
+            Self::OptionalString => Some(Self::String),
+            Self::OptionalClass(id) => Some(Self::Class(id)),
+            ty => ty.tagged_optional_inner(),
+        }
+    }
+
     pub fn optional_of(self) -> Option<Self> {
         Some(match self {
             Self::String => Self::OptionalString,
+            Self::Class(id) => Self::OptionalClass(id),
             Self::I64 => Self::OptionalI64,
             Self::Bool => Self::OptionalBool,
             Self::I8 => Self::OptionalI8,
@@ -138,6 +149,7 @@ impl Ty {
             Ty::Char => "`char`",
             Ty::String => "`string`",
             Ty::OptionalString => "`?string`",
+            Ty::OptionalClass(_) => "an optional class",
             Ty::OptionalI64 => "`?i64`",
             Ty::OptionalBool => "`?bool`",
             Ty::OptionalI8 => "`?i8`",

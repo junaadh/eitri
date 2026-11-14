@@ -895,7 +895,11 @@ impl<'i> Checker<'_, 'i> {
                 if matches!(ty, Ty::Enum(_) | Ty::Class(_)) && decl.mutating {
                     self.report(
                         Code::TypeMismatch,
-                        "enum and class methods cannot be mutating",
+                        if matches!(ty, Ty::Enum(_)) {
+                            "enum methods cannot be mutating"
+                        } else {
+                            "class methods cannot be mutating"
+                        },
                         self.token_span(decl.name),
                     );
                 }
@@ -1587,7 +1591,7 @@ impl<'i> Checker<'_, 'i> {
                 | Expr::Call { .. }
                 | Expr::NamedCall { .. }
         ) {
-            expected.and_then(Ty::tagged_optional_inner).or(expected)
+            expected.and_then(Ty::optional_inner).or(expected)
         } else {
             expected
         };
@@ -1693,9 +1697,7 @@ impl<'i> Checker<'_, 'i> {
             Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
             Expr::Bool(_) => Ty::Bool,
             Expr::Null(token) => {
-                if expected.is_some_and(|ty| {
-                    ty == Ty::OptionalString || ty.tagged_optional_inner().is_some()
-                }) {
+                if expected.is_some_and(|ty| ty.optional_inner().is_some()) {
                     expected.unwrap()
                 } else {
                     self.report(
@@ -1795,7 +1797,7 @@ impl<'i> Checker<'_, 'i> {
         }
         let context = expected
             .and_then(|ty| {
-                if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() {
+                if ty.optional_inner().is_some() {
                     Some(ty)
                 } else {
                     ty.optional_of()
@@ -1808,7 +1810,7 @@ impl<'i> Checker<'_, 'i> {
                 Expr::Bool(_) => Some(Ty::OptionalBool),
                 Expr::Char(_) => Some(Ty::OptionalChar),
                 _ => self.hint(tail).and_then(|ty| {
-                    if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() {
+                    if ty.optional_inner().is_some() {
                         Some(ty)
                     } else {
                         ty.optional_of()
@@ -1843,9 +1845,7 @@ impl<'i> Checker<'_, 'i> {
                 }
                 source_kind = Some(Ty::OptionalI64);
             }
-            if !matches!(found, Ty::FindOffset | Ty::OptionalString | Ty::Error)
-                && found.tagged_optional_inner().is_none()
-            {
+            if !matches!(found, Ty::FindOffset | Ty::Error) && found.optional_inner().is_none() {
                 self.report(
                     Code::TypeMismatch,
                     "left operand of `??` must be optional",
@@ -1864,7 +1864,7 @@ impl<'i> Checker<'_, 'i> {
         }
         let source_kind = source_kind.unwrap_or(Ty::Error);
         let result = match source_kind {
-            kind if kind == Ty::OptionalString || kind.tagged_optional_inner().is_some() => {
+            kind if kind.optional_inner().is_some() => {
                 let hint = match self.ast().exprs[node] {
                     Expr::Null(_) => Some(source_kind),
                     Expr::Int { .. } | Expr::Float { .. } => source_kind.tagged_optional_inner(),
@@ -1875,11 +1875,7 @@ impl<'i> Checker<'_, 'i> {
                     self.out.optional_wrap[node] = true;
                     found = Ty::OptionalI64;
                 }
-                let inner = if source_kind == Ty::OptionalString {
-                    Ty::String
-                } else {
-                    source_kind.tagged_optional_inner().unwrap()
-                };
+                let inner = source_kind.optional_inner().unwrap();
                 if found != inner && found != source_kind && found != Ty::Error {
                     self.mismatch(found, inner, self.span(node));
                 }
@@ -2234,11 +2230,7 @@ impl<'i> Checker<'_, 'i> {
                 }
                 continue;
             }
-            let narrowed = if ty == Ty::OptionalString {
-                Ty::String
-            } else {
-                ty.tagged_optional_inner().unwrap_or(ty)
-            };
+            let narrowed = ty.optional_inner().unwrap_or(ty);
             if let Some(literal) = pattern.literal {
                 if matches!(self.ast().exprs[literal], Expr::Null(_)) {
                     self.value(literal, Some(ty));
@@ -2299,7 +2291,7 @@ impl<'i> Checker<'_, 'i> {
             };
             if self.out.param_types[types]
                 .get(index)
-                .is_some_and(|ty| *ty == Ty::OptionalString || ty.tagged_optional_inner().is_some())
+                .is_some_and(|ty| ty.optional_inner().is_some())
             {
                 return false;
             }
@@ -2352,9 +2344,7 @@ impl<'i> Checker<'_, 'i> {
                         mask[0] = 1;
                         Some(count)
                     }
-                    (ty, Expr::Null(_))
-                        if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() =>
-                    {
+                    (ty, Expr::Null(_)) if ty.optional_inner().is_some() => {
                         mask[0] = 1;
                         Some(2)
                     }
@@ -2397,7 +2387,7 @@ impl<'i> Checker<'_, 'i> {
                         }
                         Some(count)
                     }
-                    ty if ty == Ty::OptionalString || ty.tagged_optional_inner().is_some() => {
+                    ty if ty.optional_inner().is_some() => {
                         mask[0] = 0b10;
                         Some(2)
                     }
@@ -2590,11 +2580,7 @@ impl<'i> Checker<'_, 'i> {
             );
             return Ty::Error;
         }
-        let inner = if subject == Ty::OptionalString {
-            Some(Ty::String)
-        } else {
-            subject.tagged_optional_inner()
-        };
+        let inner = subject.optional_inner();
         let mut fallback = false;
         let mut present = false;
         let mut null = false;
@@ -3497,11 +3483,7 @@ impl<'i> Checker<'_, 'i> {
         } = self.ast().exprs[expr]
         {
             let ty = self.hint_at(lhs, depth + 1)?;
-            return if ty == Ty::OptionalString {
-                Some(Ty::String)
-            } else {
-                ty.tagged_optional_inner()
-            };
+            return ty.optional_inner();
         }
         if let Expr::Call { callee, .. } = self.ast().exprs[expr]
             && let Expr::Name(name) = self.ast().exprs[callee]
@@ -3561,7 +3543,7 @@ impl<'i> Checker<'_, 'i> {
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
             && self
                 .hint(first_rhs)
-                .is_some_and(|ty| ty == Ty::OptionalString || ty.tagged_optional_inner().is_some())
+                .is_some_and(|ty| ty.optional_inner().is_some())
         {
             self.hint(first_rhs)
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
@@ -3619,9 +3601,7 @@ impl<'i> Checker<'_, 'i> {
         } else {
             guidance
         };
-        let mut lhs_ty = if guidance
-            .is_some_and(|ty| ty == Ty::OptionalString || ty.tagged_optional_inner().is_some())
-        {
+        let mut lhs_ty = if guidance.is_some_and(|ty| ty.optional_inner().is_some()) {
             self.value(leftmost, guidance)
         } else {
             self.expr(leftmost, guidance, true)

@@ -1,0 +1,2 @@
+class Box { value: i64 }
+extend Box { mutating fn change() -> void {} }
