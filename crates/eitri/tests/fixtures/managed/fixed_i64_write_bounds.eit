@@ -1,0 +1,4 @@
+//! host: test
+import test from "test"
+var values: [2]i64 = [1, 2]
+values[2] = test.id(3)

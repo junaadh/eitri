@@ -804,6 +804,23 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
+- T017-64: fixed arrays support class references, including collector tracing,
+  identity and mutation; fixed-array reentry signatures are rejected.
+- T017-63: fixed arrays support all implemented scalar element types with
+  checked indexing, updates, equality and value-copy semantics.
+- T017-62: fixed string arrays support literals, copies, indexing, writes,
+  aggregate fields and script calls with collector roots.
+- T017-61: indexed writes through class fields preserve sibling changes and
+  support nested struct fields under forced collection.
+- T017-60: indexed writes to fixed arrays in mutable struct fields preserve
+  value semantics.
+- T017-59: indexed writes to mutable local fixed i64 arrays include bounds
+  checks and compound assignment; writes through class fields remain open.
+- T017-58: fixed i64 array reads check bounds on both interpreters; the verifier
+  checks the full operand window. Writes through fields remain open.
+- T017-57: `[N]i64` values (1 to 256 elements) support literals, copies,
+  aggregate fields, equality and script calls. Indexed writes and other element
+  types remain open; dynamic literals and host array signatures reject.
 - T017-56: indirect enum equality compares payloads structurally with bounded
   execution and memory; class references retain identity semantics.
 - T017-55: indirect enum payloads allocate traced records, supporting recursive

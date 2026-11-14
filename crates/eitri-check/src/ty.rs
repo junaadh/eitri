@@ -2,12 +2,29 @@
 
 use eitri_base::{Symbol, sym};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FixedScalar {
+    I8,
+    U8,
+    U64,
+    F32,
+    F64,
+    Bool,
+    Char,
+}
+
 /// A checked type. `Error` marks an expression whose problem was already
 /// reported; it is compatible with everything, so it causes no further
 /// diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
     I64,
+    FixedI64(u16),
+    FixedString(u16),
+    FixedScalar(u16, FixedScalar),
+    FixedClass(u16, eitri_syntax::ast::StructId),
+    FixedStruct(u16, eitri_syntax::ast::StructId),
+    FixedEnum(u16, eitri_syntax::ast::EnumId),
     I8,
     U8,
     U64,
@@ -51,7 +68,13 @@ impl Ty {
             Self::Char => S::Char,
             Self::Bool => S::Bool,
             Self::String => return Some(TypeDesc::String),
-            Self::Struct(_)
+            Self::FixedI64(_)
+            | Self::FixedString(_)
+            | Self::FixedScalar(_, _)
+            | Self::FixedClass(_, _)
+            | Self::FixedStruct(_, _)
+            | Self::FixedEnum(_, _)
+            | Self::Struct(_)
             | Self::Class(_)
             | Self::Enum(_)
             | Self::OptionalStruct(_)
@@ -88,6 +111,29 @@ impl Ty {
             Self::OptionalChar => Self::Char,
             Self::OptionalStruct(id) => Self::Struct(id),
             Self::OptionalEnum(id) => Self::Enum(id),
+            _ => return None,
+        })
+    }
+
+    pub fn fixed_inner(self) -> Option<(u16, Self)> {
+        Some(match self {
+            Self::FixedI64(size) => (size, Self::I64),
+            Self::FixedString(size) => (size, Self::String),
+            Self::FixedClass(size, id) => (size, Self::Class(id)),
+            Self::FixedStruct(size, id) => (size, Self::Struct(id)),
+            Self::FixedEnum(size, id) => (size, Self::Enum(id)),
+            Self::FixedScalar(size, element) => (
+                size,
+                match element {
+                    FixedScalar::I8 => Self::I8,
+                    FixedScalar::U8 => Self::U8,
+                    FixedScalar::U64 => Self::U64,
+                    FixedScalar::F32 => Self::F32,
+                    FixedScalar::F64 => Self::F64,
+                    FixedScalar::Bool => Self::Bool,
+                    FixedScalar::Char => Self::Char,
+                },
+            ),
             _ => return None,
         })
     }
@@ -141,6 +187,12 @@ impl Ty {
     pub fn quoted(self) -> &'static str {
         match self {
             Ty::I64 => "`i64`",
+            Ty::FixedI64(_) => "a fixed i64 array",
+            Ty::FixedString(_) => "a fixed string array",
+            Ty::FixedScalar(_, _) => "a fixed scalar array",
+            Ty::FixedClass(_, _) => "a fixed class array",
+            Ty::FixedStruct(_, _) => "a fixed struct array",
+            Ty::FixedEnum(_, _) => "a fixed enum array",
             Ty::I8 => "`i8`",
             Ty::U8 => "`u8`",
             Ty::U64 => "`u64`",

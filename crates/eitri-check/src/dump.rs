@@ -186,6 +186,12 @@ impl Dumper<'_> {
             Ty::Enum(_) => "'enum'",
             Ty::FindOffset => "'?i64'",
             Ty::I64 => "'i64'",
+            Ty::FixedI64(_) => "'[N]i64'",
+            Ty::FixedString(_) => "'[N]string'",
+            Ty::FixedScalar(_, _) => "'[N]scalar'",
+            Ty::FixedClass(_, _) => "'[N]class'",
+            Ty::FixedStruct(_, _) => "'[N]struct'",
+            Ty::FixedEnum(_, _) => "'[N]enum'",
             Ty::Bool => "'bool'",
             Ty::Void => "'void'",
             Ty::Error => "'<error>'",
@@ -219,6 +225,12 @@ impl Dumper<'_> {
             Ty::Enum(_) => "enum",
             Ty::FindOffset => "?i64",
             Ty::I64 => "i64",
+            Ty::FixedI64(_) => "[N]i64",
+            Ty::FixedString(_) => "[N]string",
+            Ty::FixedScalar(_, _) => "[N]scalar",
+            Ty::FixedClass(_, _) => "[N]class",
+            Ty::FixedStruct(_, _) => "[N]struct",
+            Ty::FixedEnum(_, _) => "[N]enum",
             Ty::Bool => "bool",
             Ty::Void => "void",
             Ty::Error => "<error>",
@@ -240,6 +252,13 @@ impl Dumper<'_> {
 
     fn written_type(&self, ty: TypeExpr) -> String {
         match ty {
+            TypeExpr::FixedNamed(size, _) | TypeExpr::FixedScalar(size, _) => {
+                self.paint(TYPE, &format!("'[{}]scalar'", self.token(size)))
+            }
+            TypeExpr::FixedString(token) => {
+                self.paint(TYPE, &format!("'[{}]string'", self.token(token)))
+            }
+            TypeExpr::FixedI64(token) => self.paint(TYPE, &format!("'[{}]i64'", self.token(token))),
             TypeExpr::Named(token) => self.paint(TYPE, &format!("'{}'", self.token(token))),
             TypeExpr::OptionalString(token)
             | TypeExpr::OptionalI64(token)
@@ -350,7 +369,11 @@ impl Dumper<'_> {
             Node::Param(f, i) => {
                 let param = ast.params(ast.fns[f].params)[i];
                 let end = match param.ty {
-                    TypeExpr::Named(token)
+                    TypeExpr::FixedNamed(token, _)
+                    | TypeExpr::FixedScalar(token, _)
+                    | TypeExpr::FixedString(token)
+                    | TypeExpr::FixedI64(token)
+                    | TypeExpr::Named(token)
                     | TypeExpr::OptionalString(token)
                     | TypeExpr::OptionalI64(token)
                     | TypeExpr::OptionalBool(token)
@@ -446,6 +469,10 @@ impl Dumper<'_> {
                 let line = format!("{} {range} {ty} '{op}'", self.paint(STMT, kind));
                 (line, vec![Node::Ref(target, binding), Node::Expr(value)])
             }
+            Stmt::AssignIndex { target, value, .. } => (
+                self.paint(STMT, "AssignIndex"),
+                vec![Node::Expr(target), Node::Expr(value)],
+            ),
             Stmt::AssignField {
                 target,
                 value,
@@ -544,6 +571,14 @@ impl Dumper<'_> {
                     self.paint(VALUE, self.text(span))
                 ),
                 Vec::new(),
+            ),
+            Expr::Index { base, index } => (
+                format!("{} {range} {ty}", self.paint(STMT, "Index")),
+                vec![Node::Expr(base), Node::Expr(index)],
+            ),
+            Expr::FixedArray(parts) => (
+                "fixed array".into(),
+                ast.args(parts).iter().copied().map(Node::Expr).collect(),
             ),
             Expr::Interpolation(parts) => (
                 format!("{} {range} {ty}", self.paint(STMT, "Interpolation")),

@@ -1,0 +1,1 @@
+struct Node { children: [2]Node }

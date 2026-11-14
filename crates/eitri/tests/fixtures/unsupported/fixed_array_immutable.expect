@@ -1,0 +1,1 @@
+error[E0303] 28..37: fixed array assignment requires a mutable local

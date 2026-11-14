@@ -945,13 +945,35 @@ impl Parser<'_> {
             && self.nth(1) == T::Int
             && self.nth(2) == T::RBracket
             && self.nth(3) == T::Ident
-            && self.tokens.symbol(TokenId::from_u32(self.pos + 3)) == sym::I64
+            && (matches!(
+                self.tokens.symbol(TokenId::from_u32(self.pos + 3)),
+                sym::I64
+                    | sym::STRING
+                    | sym::BOOL
+                    | sym::I8
+                    | sym::U8
+                    | sym::U64
+                    | sym::F32
+                    | sym::F64
+                    | sym::CHAR
+            ) || !self
+                .tokens
+                .symbol(TokenId::from_u32(self.pos + 3))
+                .is_type_name())
         {
             self.bump();
             let size = self.bump();
             self.bump();
-            self.bump();
-            return Ok(TypeExpr::FixedI64(size));
+            let element = self.bump();
+            return Ok(if self.tokens.symbol(element) == sym::I64 {
+                TypeExpr::FixedI64(size)
+            } else if self.tokens.symbol(element) == sym::STRING {
+                TypeExpr::FixedString(size)
+            } else if self.tokens.symbol(element).is_type_name() {
+                TypeExpr::FixedScalar(size, element)
+            } else {
+                TypeExpr::FixedNamed(size, element)
+            });
         }
         let mut optional_tokens = 0;
         while matches!(self.nth(optional_tokens), T::Question | T::QuestionQuestion) {
@@ -1201,6 +1223,12 @@ impl Parser<'_> {
                 })))
             }
             Expr::Error => Ok(None),
+            Expr::Index { .. } => Ok(Some(self.ast.stmts.push(Stmt::AssignIndex {
+                target,
+                op,
+                value,
+                span,
+            }))),
             Expr::Member { .. } => Ok(Some(self.ast.stmts.push(Stmt::AssignField {
                 target,
                 op,
@@ -1497,7 +1525,14 @@ impl Parser<'_> {
                     expr = self.ast.expr(member, span);
                 }
                 T::LParen => expr = self.call(expr)?,
-                T::QuestionDot | T::LBracket | T::QuestionBracket => {
+                T::LBracket => {
+                    self.bump();
+                    let index = self.expr(false)?;
+                    let close = self.expect(T::RBracket, "`]`")?;
+                    let span = start.to(self.span_of(close));
+                    expr = self.ast.expr(Expr::Index { base: expr, index }, span);
+                }
+                T::QuestionDot | T::QuestionBracket => {
                     let feature = if self.at(T::QuestionDot) {
                         "optional chaining"
                     } else {

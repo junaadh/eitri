@@ -367,6 +367,8 @@ pub enum Sem {
     RecordSet,
     RecordEq,
     RecordDeepEq,
+    FixedGet,
+    FixedSet,
     RecordNull,
     RecordWrap,
     RecordUnwrap,
@@ -734,7 +736,9 @@ ops! {
     RecordWrap = "RECORD.WRAP", "RECORD", Abc, [Dst, Src, None], Sem::RecordWrap, NONE, true, None;
     RecordUnwrap = "RECORD.UNWRAP", "RECORD", Abc, [Dst, Src, None], Sem::RecordUnwrap, FAULT, true, None;
     RecordEq = "RECORD.EQ", "RECORD", Abc, [Dst, Src, Src], Sem::RecordEq, NONE, true, None;
+    FixedGet = "FIXED.GET", "FIXED", Abc, [Dst, Src, Index8], Sem::FixedGet, FAULT, true, None;
     RecordDeepEq = "RECORD.DEEP.EQ", "RECORD", Abc, [Dst, Src, Src], Sem::RecordDeepEq, FAULT, true, MayGrowVm;
+    FixedSet = "FIXED.SET", "FIXED", Abc, [Src, Src, Index8], Sem::FixedSet, FAULT, true, None;
 
 }
 

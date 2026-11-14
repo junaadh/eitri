@@ -285,7 +285,8 @@ fn observe(text: &str, reference: bool) -> Option<String> {
         || ast.stmts.iter().any(|s| {
             matches!(
                 s,
-                eitri_syntax::ast::Stmt::AssignField { .. }
+                eitri_syntax::ast::Stmt::AssignIndex { .. }
+                    | eitri_syntax::ast::Stmt::AssignField { .. }
                     | eitri_syntax::ast::Stmt::Let {
                         ty: Some(
                             eitri_syntax::ast::TypeExpr::OptionalString(_)
@@ -301,7 +302,9 @@ fn observe(text: &str, reference: bool) -> Option<String> {
         || ast.exprs.iter().any(|e| {
             matches!(
                 e,
-                eitri_syntax::ast::Expr::Match(_)
+                eitri_syntax::ast::Expr::Index { .. }
+                    | eitri_syntax::ast::Expr::FixedArray(_)
+                    | eitri_syntax::ast::Expr::Match(_)
                     | eitri_syntax::ast::Expr::EnumShorthand(_)
                     | eitri_syntax::ast::Expr::NamedCall { .. }
                     | eitri_syntax::ast::Expr::StructLiteral { .. }

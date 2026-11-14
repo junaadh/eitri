@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+class Item { text: string }
+struct Holder { items: [2]Item }
+let first = Item { text: "first" }
+let second = Item { text: "second" }
+var values: [2]Item = [first, second]
+let copy = values
+values[0] = second
+test.check(copy[0] == first && values[0] == second)
+let holder = Holder { items: copy }
+test.check(holder.items[1].text == "second")
+enum Box { Items(items: [2]Item) }
+test.check(match Box.Items(copy) { .Items(items) => items[0] == first })

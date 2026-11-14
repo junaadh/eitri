@@ -243,6 +243,18 @@ fn value_type(
     interner: &Interner,
     diagnostics: &mut Diagnostics,
 ) -> Ty {
+    if let TypeExpr::FixedI64(token)
+    | TypeExpr::FixedString(token)
+    | TypeExpr::FixedScalar(token, _)
+    | TypeExpr::FixedNamed(token, _) = ty
+    {
+        diagnostics.push(error(
+            Code::Unsupported,
+            "not supported yet: fixed array host types",
+            tokens.span(token),
+        ));
+        return Ty::Error;
+    }
     if let TypeExpr::OptionalString(token)
     | TypeExpr::OptionalI64(token)
     | TypeExpr::OptionalBool(token)

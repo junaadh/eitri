@@ -425,6 +425,27 @@ fn managed_op(
             *field = value;
             Ok(None)
         }
+        Op::FixedSet => {
+            let index = st.m.slots[st.base + b];
+            if index > c as u64 {
+                return Err(FaultKind::IndexOutOfBounds);
+            }
+            st.m.slots[st.base + b + 1 + index as usize] = st.m.slots[st.base + a];
+            if !st.m.references.is_empty() {
+                st.m.references[st.base + b + 1 + index as usize] = st.m.references[st.base + a];
+            }
+            Ok(None)
+        }
+        Op::FixedGet => {
+            let index = st.m.slots[st.base + b];
+            if index > c as u64 {
+                return Err(FaultKind::IndexOutOfBounds);
+            }
+            if !st.m.references.is_empty() {
+                st.m.references[st.base + a] = st.m.references[st.base + b + 1 + index as usize];
+            }
+            Ok(Some(st.m.slots[st.base + b + 1 + index as usize]))
+        }
         Op::RecordDeepEq => Ok(Some(u64::from(st.m.heap.equal_records(
             st.m.references[st.base + b],
             st.m.references[st.base + c],
@@ -814,6 +835,8 @@ managed_handler!(record_unwrap, Op::RecordUnwrap);
 managed_handler!(record_get, Op::RecordGet);
 managed_handler!(record_set, Op::RecordSet);
 managed_handler!(record_eq, Op::RecordEq);
+managed_handler!(fixed_get, Op::FixedGet);
+managed_handler!(fixed_set, Op::FixedSet);
 managed_handler!(record_deep_eq, Op::RecordDeepEq);
 managed_handler!(str_new, Op::StrNew);
 managed_handler!(str_len, Op::StrLen);
@@ -966,6 +989,8 @@ extern "rust-preserve-none" fn wide(
         Op::from_byte(op),
         Some(
             Op::Mov
+                | Op::FixedGet
+                | Op::FixedSet
                 | Op::RecordNew
                 | Op::RecordNull
                 | Op::RecordWrap
@@ -1402,6 +1427,8 @@ static TABLE: [Handler; 256] = {
     table[Op::FremF32 as usize] = t013_frem_f32;
     table[Op::FremF64 as usize] = t013_frem_f64;
     table[Op::Mov as usize] = mov;
+    table[Op::FixedGet as usize] = fixed_get;
+    table[Op::FixedSet as usize] = fixed_set;
     table[Op::RecordNew as usize] = record_new;
     table[Op::RecordNull as usize] = record_null;
     table[Op::RecordWrap as usize] = record_wrap;

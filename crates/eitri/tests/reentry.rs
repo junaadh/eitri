@@ -141,6 +141,36 @@ fn optional_signature_cannot_be_called_as_scalar() {
 }
 
 #[test]
+fn fixed_array_signatures_cannot_be_called_as_flat_scalars() {
+    struct Probe;
+    impl Host for Probe {
+        fn call(&mut self, cx: &mut Call<'_, '_>, _: u32) -> Result<(), HostError> {
+            let mut result = [0];
+            for name in ["scalar", "class_array", "struct_array", "enum_array"] {
+                let callback = cx.function(name).unwrap();
+                assert!(cx.call(self, callback, &[0, 0], &mut result).is_err());
+                assert!(
+                    cx.call_values(self, callback, &[eitri::ReentryArg::Scalar(0)])
+                        .is_err()
+                );
+            }
+            Ok(())
+        }
+    }
+    let source = "import h from \"h\"\nclass Item { value: i64 }\nstruct Pair { value: i64 }\nenum Choice { A, B }\nfn struct_array(value: [2]Pair) -> i64 { return 1 }\nfn enum_array(value: [2]Choice) -> i64 { return 1 }\nfn scalar(value: [2]bool) -> i64 { return 1 }\nfn class_array(value: [2]Item) -> i64 { return 1 }\nh.probe()\n";
+    for threaded in [false, true] {
+        let mut cx = Context::new();
+        cx.set_threaded(threaded);
+        cx.register_host_module("h", "pub fn probe() -> void\n")
+            .unwrap();
+        let mut compiled = cx.compile(source).unwrap();
+        cx.execute(&compiled, &mut Probe).unwrap();
+        cx.optimize(&mut compiled, source).unwrap();
+        cx.execute(&compiled, &mut Probe).unwrap();
+    }
+}
+
+#[test]
 fn optional_host_signatures_are_rejected() {
     let mut context = Context::new();
     assert!(

@@ -61,6 +61,7 @@ pub enum FaultKind {
     Conversion,
     InvalidStringSlice,
     InvalidEnumPayload,
+    IndexOutOfBounds,
     Budget,
     Depth,
     OutOfMemory,
@@ -90,6 +91,7 @@ impl FaultKind {
             FaultKind::Conversion => "numeric conversion out of range",
             FaultKind::InvalidStringSlice => "invalid string slice boundary",
             FaultKind::InvalidEnumPayload => "invalid enum payload",
+            FaultKind::IndexOutOfBounds => "index out of bounds",
             FaultKind::Budget => "execution budget exhausted",
             FaultKind::Depth => "call depth exceeded",
             FaultKind::OutOfMemory => "managed memory limit exceeded",
@@ -2000,6 +2002,38 @@ fn execute(
                         let left = m.heap.string(left).expect("live string root");
                         let right = m.heap.string(right).expect("live string root");
                         s[a!()] = left.find(right).map_or(-1, |index| index as i64) as u64;
+                    }
+                    Op::FixedSet => {
+                        let index = s[b!()];
+                        if index > c!() as u64 {
+                            return Err(fault(
+                                &m.frames[floor..],
+                                FaultKind::IndexOutOfBounds,
+                                id,
+                                start,
+                            ));
+                        }
+                        s[b!() + 1 + index as usize] = s[a!()];
+                        if !m.references.is_empty() {
+                            m.references[base + b!() + 1 + index as usize] =
+                                m.references[base + a!()];
+                        }
+                    }
+                    Op::FixedGet => {
+                        let index = s[b!()];
+                        if index > c!() as u64 {
+                            return Err(fault(
+                                &m.frames[floor..],
+                                FaultKind::IndexOutOfBounds,
+                                id,
+                                start,
+                            ));
+                        }
+                        s[a!()] = s[b!() + 1 + index as usize];
+                        if !m.references.is_empty() {
+                            m.references[base + a!()] =
+                                m.references[base + b!() + 1 + index as usize];
+                        }
                     }
                     Op::Ldi => s[a!()] = (word >> 16) as i16 as i64 as u64,
                     Op::Ldk => s[a!()] = function.consts[(word >> 16) as usize],

@@ -11,7 +11,7 @@ pub use check::{
     Binding, BindingId, CheckScratch, Checked, Input, Res, Signature, check, int_value,
 };
 pub use host::{DECLARATION, HostFn, HostFnId, HostModule, HostModuleId, Hosts};
-pub use ty::Ty;
+pub use ty::{FixedScalar, Ty};
 
 #[cfg(test)]
 mod tests;

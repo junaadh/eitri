@@ -116,6 +116,11 @@ impl Printer<'_> {
     fn ty(&self, ty: TypeExpr) -> String {
         match ty {
             TypeExpr::Named(token) => self.token(token).to_owned(),
+            TypeExpr::FixedI64(token) => format!("[{}]i64", self.token(token)),
+            TypeExpr::FixedString(token) => format!("[{}]string", self.token(token)),
+            TypeExpr::FixedNamed(size, element) | TypeExpr::FixedScalar(size, element) => {
+                format!("[{}]{}", self.token(size), self.token(element))
+            }
             TypeExpr::OptionalString(token)
             | TypeExpr::OptionalI64(token)
             | TypeExpr::OptionalBool(token)
@@ -178,6 +183,9 @@ impl Printer<'_> {
                 };
                 format!("({op} {} {})", self.token(target), self.expr(value))
             }
+            Stmt::AssignIndex { target, value, .. } => {
+                format!("(assign-index {} {})", self.expr(target), self.expr(value))
+            }
             Stmt::AssignField { target, value, .. } => {
                 format!("(assign-field {} {})", self.expr(target), self.expr(value))
             }
@@ -214,6 +222,18 @@ impl Printer<'_> {
                 self.token(token).to_owned()
             }
             Expr::StringPart(span) => self.text[span.range()].to_owned(),
+            Expr::Index { base, index } => {
+                format!("(index {} {})", self.expr(base), self.expr(index))
+            }
+            Expr::FixedArray(parts) => format!(
+                "(array {})",
+                self.ast
+                    .args(parts)
+                    .iter()
+                    .map(|&e| self.expr(e))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
             Expr::Interpolation(parts) => format!(
                 "(interpolation {})",
                 self.ast
@@ -440,14 +460,9 @@ fn unsupported_features_are_reported_once_and_dropped() {
             "E0001 4..5 not supported yet: destructuring",
         ),
         ("let x = try f()", "E0001 8..11 not supported yet: `try`"),
-        ("let x = a[0]", "E0001 9..10 not supported yet: indexing"),
         (
             "let x = a?.b",
             "E0001 9..11 not supported yet: optional chaining",
-        ),
-        (
-            "let a = [1, 2]",
-            "E0001 8..9 not supported yet: array literals",
         ),
         (
             "let x = f() else e => 0",

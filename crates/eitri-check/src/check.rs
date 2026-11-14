@@ -579,6 +579,51 @@ impl<'i> Checker<'_, 'i> {
     /// A written type; `void` only where `allow_void`.
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
         match ty {
+            TypeExpr::FixedI64(token)
+            | TypeExpr::FixedString(token)
+            | TypeExpr::FixedScalar(token, _)
+            | TypeExpr::FixedNamed(token, _) => {
+                let text = &self.input.text[self.token_span(token).range()];
+                let size = text
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|&size| (1..=256).contains(&size));
+                return if let Some(size) = size {
+                    match ty {
+                        TypeExpr::FixedString(_) => Ty::FixedString(size),
+                        TypeExpr::FixedNamed(_, element) => {
+                            let inner = self.ty(TypeExpr::Named(element), false);
+                            match inner {
+                                Ty::Class(id) => Ty::FixedClass(size, id),
+                                Ty::Struct(id) => Ty::FixedStruct(size, id),
+                                Ty::Enum(id) => Ty::FixedEnum(size, id),
+                                _ => Ty::Error,
+                            }
+                        }
+                        TypeExpr::FixedScalar(_, element) => {
+                            let element = match type_name(self.symbol(element)) {
+                                TypeName::Supported(Ty::I8) => crate::FixedScalar::I8,
+                                TypeName::Supported(Ty::U8) => crate::FixedScalar::U8,
+                                TypeName::Supported(Ty::U64) => crate::FixedScalar::U64,
+                                TypeName::Supported(Ty::F32) => crate::FixedScalar::F32,
+                                TypeName::Supported(Ty::F64) => crate::FixedScalar::F64,
+                                TypeName::Supported(Ty::Bool) => crate::FixedScalar::Bool,
+                                TypeName::Supported(Ty::Char) => crate::FixedScalar::Char,
+                                _ => unreachable!(),
+                            };
+                            Ty::FixedScalar(size, element)
+                        }
+                        _ => Ty::FixedI64(size),
+                    }
+                } else {
+                    self.report(
+                        Code::Limit,
+                        "implementation limit: fixed array size must be 1 to 256",
+                        self.token_span(token),
+                    );
+                    Ty::Error
+                };
+            }
             TypeExpr::OptionalString(_) => return Ty::OptionalString,
             TypeExpr::OptionalI64(_) => return Ty::OptionalI64,
             TypeExpr::OptionalBool(_) => return Ty::OptionalBool,
@@ -852,6 +897,16 @@ impl<'i> Checker<'_, 'i> {
                     let width: u32 = self.out.param_types[fields]
                         .iter()
                         .map(|&ty| match ty {
+                            Ty::FixedI64(size)
+                            | Ty::FixedString(size)
+                            | Ty::FixedScalar(size, _)
+                            | Ty::FixedClass(size, _) => u32::from(size),
+                            Ty::FixedStruct(size, id) => {
+                                u32::from(size).saturating_mul(self.out.struct_widths[id])
+                            }
+                            Ty::FixedEnum(size, id) => {
+                                u32::from(size).saturating_mul(self.out.enum_widths[id])
+                            }
                             Ty::Struct(id) => self.out.struct_widths[id],
                             Ty::Enum(id) => self.out.enum_widths[id],
                             Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
@@ -963,6 +1018,16 @@ impl<'i> Checker<'_, 'i> {
                 .chain(std::iter::once(ret))
                 .map(|ty| match ty {
                     Ty::Void => 0,
+                    Ty::FixedI64(size)
+                    | Ty::FixedString(size)
+                    | Ty::FixedScalar(size, _)
+                    | Ty::FixedClass(size, _) => u32::from(size),
+                    Ty::FixedStruct(size, id) => {
+                        u32::from(size).saturating_mul(self.out.struct_widths[id])
+                    }
+                    Ty::FixedEnum(size, id) => {
+                        u32::from(size).saturating_mul(self.out.enum_widths[id])
+                    }
                     Ty::Struct(id) => self.out.struct_widths[id],
                     Ty::Enum(id) => self.out.enum_widths[id],
                     Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
@@ -1178,10 +1243,11 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 }
                 let child = fields[field];
-                let child_node = child
+                let child_node = child.fixed_inner().map_or(child, |(_, inner)| inner);
+                let child_node = child_node
                     .tagged_optional_inner()
                     .filter(|ty| matches!(ty, Ty::Struct(_) | Ty::Enum(_)))
-                    .unwrap_or(child);
+                    .unwrap_or(child_node);
                 let child_index = match child_node {
                     Ty::Struct(id) => Some(id.index()),
                     Ty::Enum(id) => Some(structs + id.index()),
@@ -1210,6 +1276,16 @@ impl<'i> Checker<'_, 'i> {
                     1
                 } else {
                     match child {
+                        Ty::FixedI64(size)
+                        | Ty::FixedString(size)
+                        | Ty::FixedScalar(size, _)
+                        | Ty::FixedClass(size, _) => u32::from(size),
+                        Ty::FixedStruct(size, id) => {
+                            u32::from(size).saturating_mul(self.out.struct_widths[id])
+                        }
+                        Ty::FixedEnum(size, id) => {
+                            u32::from(size).saturating_mul(self.out.enum_widths[id])
+                        }
                         Ty::Struct(id) => self.out.struct_widths[id],
                         Ty::Enum(id) => self.out.enum_widths[id],
                         Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
@@ -1381,6 +1457,56 @@ impl<'i> Checker<'_, 'i> {
             } => self.assign(id, target, op, value),
             Stmt::Expr(expr) => {
                 self.expr(expr, None, false);
+            }
+            Stmt::AssignIndex {
+                target, op, value, ..
+            } => {
+                let element_ty = self.value(target, None);
+                let Expr::Index { base, .. } = self.ast().exprs[target] else {
+                    unreachable!()
+                };
+                let mut root = base;
+                let mut through_class = false;
+                while let Expr::Member { base, .. } = self.ast().exprs[root] {
+                    through_class |= matches!(self.out.types[base], Ty::Class(_));
+                    root = base;
+                }
+                let binding = match self.out.resolutions[root] {
+                    Res::Binding(binding) | Res::SelfField(binding, _) => Some(binding),
+                    _ => None,
+                };
+                through_class |= binding
+                    .is_some_and(|binding| matches!(self.out.bindings[binding].ty, Ty::Class(_)));
+                through_class |= matches!(self.out.types[root], Ty::Class(_));
+                if binding.is_none()
+                    || (!through_class
+                        && !binding.is_some_and(|binding| self.out.bindings[binding].mutable))
+                {
+                    self.report(
+                        Code::AssignToImmutable,
+                        "fixed array assignment requires a mutable local",
+                        self.span(target),
+                    );
+                }
+                self.check_readonly_path(base);
+                let shifts = matches!(op, AssignOp::Compound(BinaryOp::Shl | BinaryOp::Shr));
+                if let AssignOp::Compound(binary) = op
+                    && !valid_operand(binary, element_ty)
+                {
+                    self.mismatch(element_ty, Ty::I64, self.span(target));
+                }
+                if matches!(op, AssignOp::Compound(_)) && element_ty == Ty::String {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: compound assignment to string array elements",
+                        self.span(target),
+                    );
+                }
+                let rhs = self.value(value, if shifts { None } else { Some(element_ty) });
+                if shifts && rhs != Ty::Error && !rhs.integer() {
+                    self.mismatch(rhs, Ty::I64, self.span(value));
+                }
+                self.out.stmt_bindings[id] = binding;
             }
             Stmt::AssignField {
                 target, op, value, ..
@@ -1670,6 +1796,58 @@ impl<'i> Checker<'_, 'i> {
                     );
                 }
                 Ty::Char
+            }
+            Expr::Index { base, index } => {
+                let ty = self.value(base, None);
+                self.value(index, Some(Ty::I64));
+                if let Some((_, inner)) = ty.fixed_inner() {
+                    inner
+                } else {
+                    if ty != Ty::Error {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: indexing this type",
+                            self.span(expr),
+                        );
+                    }
+                    Ty::Error
+                }
+            }
+            Expr::FixedArray(elements) => {
+                let values = self.input.ast.args(elements);
+                let expected_size = expected.and_then(Ty::fixed_inner).map(|(size, _)| size);
+                if expected_size.is_none() {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: dynamically sized array literals",
+                        self.span(expr),
+                    );
+                }
+                if values.is_empty() || values.len() > 256 {
+                    self.report(
+                        Code::Limit,
+                        "implementation limit: fixed array size must be 1 to 256",
+                        self.span(expr),
+                    );
+                }
+                if expected_size.is_some_and(|size| usize::from(size) != values.len()) {
+                    self.report(
+                        Code::TypeMismatch,
+                        "fixed array length mismatch",
+                        self.span(expr),
+                    );
+                }
+                let element_ty = expected
+                    .and_then(Ty::fixed_inner)
+                    .map_or(Ty::I64, |(_, ty)| ty);
+                for &element in values {
+                    self.value(element, Some(element_ty));
+                }
+                if values.is_empty() || values.len() > 256 {
+                    Ty::Error
+                } else {
+                    expected.unwrap_or(Ty::Error)
+                }
             }
             Expr::String(token) => {
                 let spelling = &self.input.text[self.token_span(token).range()];

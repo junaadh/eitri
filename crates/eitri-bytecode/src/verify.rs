@@ -726,6 +726,11 @@ pub fn string_roots_budgeted(
             }
         }
         match insn.decoded.op.info().sem {
+            Sem::FixedGet | Sem::FixedSet => {
+                let first = insn.decoded.operands.b as usize;
+                let count = insn.decoded.operands.c as usize + 1;
+                uses[i * frame + first..i * frame + first + count + 1].fill(true);
+            }
             Sem::RecordAlloc => {
                 let first = insn.decoded.operands.b as usize;
                 let count = function.record_shapes[insn.decoded.operands.c as usize].len();
@@ -914,6 +919,16 @@ fn structure(
         let at = pc as u32;
         let decoded = decode(code, pc).map_err(|e| error(at, ErrorKind::Decode(e)))?;
         let info = decoded.op.info();
+        if matches!(decoded.op, Op::FixedGet | Op::FixedSet)
+            && (decoded.operands.b as usize)
+                .checked_add(decoded.operands.c as usize + 2)
+                .is_none_or(|end| end > function.frame_size as usize)
+        {
+            return Err(error(
+                at,
+                ErrorKind::InvalidScalar("invalid fixed array window"),
+            ));
+        }
         if decoded.op == Op::RecordNull
             && decoded.operands.c as usize >= function.record_shapes.len()
         {
@@ -1257,6 +1272,37 @@ fn transfer(
     let [a, b, c] = columns(d);
     let write = |state: &mut [Slot], slot: i64, ty| state[slot as usize] = Slot::Ty(ty);
     match d.op.info().sem {
+        Sem::FixedSet | Sem::FixedGet => {
+            read(state, pc, b, Some(I64))?;
+            let ty = read(state, pc, b + 1, None)?;
+            if !matches!(
+                ty,
+                I64 | ValueType::I8
+                    | ValueType::U8
+                    | ValueType::U64
+                    | ValueType::F32
+                    | ValueType::F64
+                    | ValueType::Bool
+                    | ValueType::Char
+                    | ValueType::String
+                    | ValueType::NullableString
+                    | ValueType::Record(_)
+                    | ValueType::NullableRecord(_)
+            ) {
+                return Err(error(
+                    pc,
+                    ErrorKind::InvalidScalar("unsupported fixed array element"),
+                ));
+            }
+            for slot in b + 1..=b + c + 1 {
+                read(state, pc, slot, Some(ty))?;
+            }
+            if matches!(d.op.info().sem, Sem::FixedGet) {
+                write(state, a, ty);
+            } else {
+                read(state, pc, a, Some(ty))?;
+            }
+        }
         Sem::RecordNull => write(state, a, ValueType::NullableRecord(c as u32)),
         Sem::RecordWrap => {
             let ValueType::Record(id) = read(state, pc, b, None)? else {

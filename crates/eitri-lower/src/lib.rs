@@ -745,12 +745,28 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let mut function = self.asm.finish(name, signature)?;
         function.reentry_safe = !matches!(
             types.ret,
-            Ty::Struct(_) | Ty::Enum(_) | Ty::Class(_) | Ty::OptionalClass(_) | Ty::OptionalString
+            Ty::FixedI64(_)
+                | Ty::FixedString(_)
+                | Ty::FixedScalar(_, _)
+                | Ty::FixedClass(_, _)
+                | Ty::FixedStruct(_, _)
+                | Ty::FixedEnum(_, _)
+                | Ty::Struct(_)
+                | Ty::Enum(_)
+                | Ty::Class(_)
+                | Ty::OptionalClass(_)
+                | Ty::OptionalString
         ) && types.ret.tagged_optional_inner().is_none()
             && !parameter_types.iter().any(|ty| {
                 (matches!(
                     ty,
-                    Ty::Struct(_)
+                    Ty::FixedI64(_)
+                        | Ty::FixedString(_)
+                        | Ty::FixedScalar(_, _)
+                        | Ty::FixedClass(_, _)
+                        | Ty::FixedStruct(_, _)
+                        | Ty::FixedEnum(_, _)
+                        | Ty::Struct(_)
                         | Ty::Enum(_)
                         | Ty::Class(_)
                         | Ty::OptionalClass(_)
@@ -789,6 +805,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
 
     fn width(&self, ty: Ty) -> u32 {
         match ty {
+            Ty::FixedI64(size)
+            | Ty::FixedString(size)
+            | Ty::FixedScalar(size, _)
+            | Ty::FixedClass(size, _) => u32::from(size),
+            Ty::FixedStruct(size, id) => {
+                u32::from(size).saturating_mul(self.checked.struct_widths[id])
+            }
+            Ty::FixedEnum(size, id) => u32::from(size).saturating_mul(self.checked.enum_widths[id]),
             Ty::Struct(id) => self.checked.struct_widths[id],
             Ty::Enum(id) => self.checked.enum_widths[id],
             Ty::OptionalStruct(id) => 1 + self.checked.struct_widths[id],
@@ -808,11 +832,32 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         nullable: bool,
         output: &mut Vec<ValueType>,
     ) -> Lowered<()> {
+        if let Some((size, inner)) = ty.fixed_inner()
+            && !matches!(inner, Ty::Struct(_) | Ty::Enum(_))
+        {
+            let element = match inner {
+                Ty::String if nullable => ValueType::NullableString,
+                Ty::Class(id) if nullable => ValueType::NullableRecord(id.as_u32()),
+                _ => value_type(inner),
+            };
+            output.extend(std::iter::repeat_n(element, size as usize));
+            return Ok(());
+        }
         if let Some(inner) = ty.tagged_optional_inner() {
             output.push(ValueType::Bool);
             return self.flatten_with_nullable(inner, true, output);
         }
-        if !matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+        if !matches!(
+            ty,
+            Ty::FixedI64(_)
+                | Ty::FixedString(_)
+                | Ty::FixedScalar(_, _)
+                | Ty::FixedClass(_, _)
+                | Ty::FixedStruct(_, _)
+                | Ty::FixedEnum(_, _)
+                | Ty::Struct(_)
+                | Ty::Enum(_)
+        ) {
             output.push(match ty {
                 Ty::String if nullable => ValueType::NullableString,
                 Ty::Class(id) if nullable => ValueType::NullableRecord(id.as_u32()),
@@ -822,6 +867,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         }
         let capacity =
             self.width(ty) as usize + self.input.ast.structs.len() + self.input.ast.enums.len();
+        #[derive(Clone)]
         enum Work {
             Type(Ty, bool),
             Record(u32),
@@ -863,6 +909,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             );
                         }
                     }
+                }
+                ty if ty.fixed_inner().is_some() => {
+                    let (size, inner) = ty.fixed_inner().unwrap();
+                    pending.extend(std::iter::repeat_n(
+                        Work::Type(inner, nullable),
+                        size as usize,
+                    ));
                 }
                 Ty::String if nullable => output.push(ValueType::NullableString),
                 Ty::Class(id) if nullable => output.push(ValueType::NullableRecord(id.as_u32())),
@@ -1116,8 +1169,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 };
                 match op {
                     AssignOp::Set => {
-                        if matches!(ty, Ty::Struct(_) | Ty::Enum(_))
-                            || ty.tagged_optional_inner().is_some()
+                        if matches!(
+                            ty,
+                            Ty::FixedI64(_)
+                                | Ty::FixedString(_)
+                                | Ty::FixedScalar(_, _)
+                                | Ty::FixedClass(_, _)
+                                | Ty::FixedStruct(_, _)
+                                | Ty::FixedEnum(_, _)
+                                | Ty::Struct(_)
+                                | Ty::Enum(_)
+                        ) || ty.tagged_optional_inner().is_some()
                         {
                             let source = self.expr(value, None)?;
                             if source != slot {
@@ -1155,6 +1217,143 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
             Stmt::Expr(e) => self.discard(e)?,
+            Stmt::AssignIndex {
+                target,
+                op,
+                value,
+                span,
+            } => {
+                let Expr::Index { base, index } = ast.exprs[target] else {
+                    unreachable!()
+                };
+                let binding = checked.stmt_bindings[id].expect("checked array binding");
+                let Some((size, inner)) = checked.types[base].fixed_inner() else {
+                    unreachable!()
+                };
+                let element_width = self.width(inner);
+                let class_root = self.class_field_root(base);
+                let object = if let Some((class_base, implicit, _, _, _)) = class_root {
+                    let slot = self.temp();
+                    if let Some(expr) = class_base {
+                        self.expr(expr, Some(slot))?;
+                    } else {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc(slot.into(), self.slots[implicit.unwrap()].into(), 0),
+                            span,
+                        )?;
+                    }
+                    Some(slot)
+                } else {
+                    None
+                };
+                let destination = if class_root.is_none() {
+                    self.field_address(base, binding)
+                } else {
+                    0
+                };
+                let window = self.top;
+                self.top += 1 + u32::from(size);
+                let end = self.top;
+                self.expr(index, Some(window))?;
+                let source = if let Some((_, _, owner, field, root)) = class_root {
+                    self.class_read_field(
+                        object.unwrap(),
+                        owner,
+                        field,
+                        checked.types[root],
+                        None,
+                        span,
+                    )? + self.class_nested_offset(base, root)
+                } else {
+                    destination
+                };
+                let old = self.top;
+                self.top += element_width;
+                for field in 0..element_width {
+                    for item in 0..u32::from(size) {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc(
+                                (window + 1 + item).into(),
+                                (source + item * element_width + field).into(),
+                                0,
+                            ),
+                            span,
+                        )?;
+                    }
+                    self.asm.emit(
+                        Op::FixedGet,
+                        Operands::abc((old + field).into(), window.into(), (size - 1).into()),
+                        ast.span(target),
+                    )?;
+                }
+                let rhs = self.expr(value, None)?;
+                let result = if let AssignOp::Compound(binary) = op {
+                    let slot = self.temp();
+                    self.operate(binary, checked.types[target], slot, old, rhs, span)?;
+                    slot
+                } else {
+                    rhs
+                };
+                let container = if let Some((_, _, owner, field, root)) = class_root {
+                    Some(self.class_read_field(
+                        object.unwrap(),
+                        owner,
+                        field,
+                        checked.types[root],
+                        None,
+                        span,
+                    )?)
+                } else {
+                    None
+                };
+                let refreshed = if let Some((_, _, _, _, root)) = class_root {
+                    container.unwrap() + self.class_nested_offset(base, root)
+                } else {
+                    destination
+                };
+                for field in 0..element_width {
+                    for item in 0..u32::from(size) {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc(
+                                (window + 1 + item).into(),
+                                (refreshed + item * element_width + field).into(),
+                                0,
+                            ),
+                            span,
+                        )?;
+                    }
+                    self.asm.emit(
+                        Op::FixedSet,
+                        Operands::abc((result + field).into(), window.into(), (size - 1).into()),
+                        span,
+                    )?;
+                    for item in 0..u32::from(size) {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc(
+                                (refreshed + item * element_width + field).into(),
+                                (window + 1 + item).into(),
+                                0,
+                            ),
+                            span,
+                        )?;
+                    }
+                }
+                if let Some((_, _, owner, field, root)) = class_root {
+                    self.class_store_field(
+                        object.unwrap(),
+                        owner,
+                        field,
+                        checked.types[root],
+                        container.unwrap(),
+                        span,
+                    )?;
+                }
+                self.top = end;
+            }
             Stmt::AssignField {
                 target,
                 op,
@@ -1258,8 +1457,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let slot = self.field_address(target, binding);
                 match op {
                     AssignOp::Set => {
-                        if (matches!(checked.types[target], Ty::Struct(_) | Ty::Enum(_))
-                            || checked.types[target].tagged_optional_inner().is_some())
+                        if (matches!(
+                            checked.types[target],
+                            Ty::FixedI64(_)
+                                | Ty::FixedString(_)
+                                | Ty::FixedScalar(_, _)
+                                | Ty::FixedClass(_, _)
+                                | Ty::FixedStruct(_, _)
+                                | Ty::FixedEnum(_, _)
+                                | Ty::Struct(_)
+                                | Ty::Enum(_)
+                        ) || checked.types[target].tagged_optional_inner().is_some())
                         {
                             let source = self.expr(value, None)?;
                             if source != slot {
@@ -1662,7 +1870,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 self.top += 1 + self.width(inner);
                 slot
             };
-            if matches!(inner, Ty::Struct(_) | Ty::Enum(_)) {
+            if matches!(
+                inner,
+                Ty::FixedI64(_)
+                    | Ty::FixedString(_)
+                    | Ty::FixedScalar(_, _)
+                    | Ty::FixedClass(_, _)
+                    | Ty::FixedStruct(_, _)
+                    | Ty::FixedEnum(_, _)
+                    | Ty::Struct(_)
+                    | Ty::Enum(_)
+            ) {
                 let source = self.expr_inner(e, None)?;
                 self.move_nullable(inner, source, target + 1, true, self.input.ast.span(e))?;
             } else {
@@ -1838,6 +2056,63 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             return Ok(slot);
         }
         match ast.exprs[e] {
+            Expr::Index { base, index } => {
+                let (size, inner) = checked.types[base].fixed_inner().unwrap();
+                let element_width = self.width(inner);
+                let target = if let Some(dst) = dst {
+                    dst
+                } else {
+                    let slot = self.top;
+                    self.top += element_width;
+                    slot
+                };
+                let source = self.top;
+                self.top += u32::from(size) * element_width;
+                let window = self.top;
+                self.top += 1 + u32::from(size);
+                let end = self.top;
+                self.expr(base, Some(source))?;
+                self.top = end;
+                self.expr(index, Some(window))?;
+                for field in 0..element_width {
+                    for item in 0..u32::from(size) {
+                        self.asm.emit(
+                            Op::Mov,
+                            Operands::abc(
+                                (window + 1 + item).into(),
+                                (source + item * element_width + field).into(),
+                                0,
+                            ),
+                            span,
+                        )?;
+                    }
+                    self.asm.emit(
+                        Op::FixedGet,
+                        Operands::abc((target + field).into(), window.into(), (size - 1).into()),
+                        span,
+                    )?;
+                }
+                Ok(target)
+            }
+            Expr::FixedArray(elements) => {
+                let width = self.width(checked.types[e]);
+                let slot = if let Some(dst) = dst {
+                    dst
+                } else {
+                    let slot = self.top;
+                    self.top += width;
+                    slot
+                };
+                let end = self.top;
+                for (index, &element) in ast.args(elements).iter().enumerate() {
+                    self.expr(
+                        element,
+                        Some(slot + index as u32 * self.width(checked.types[element])),
+                    )?;
+                    self.top = end;
+                }
+                Ok(slot)
+            }
             Expr::Int { .. } | Expr::Float { .. } | Expr::Char(_) => {
                 let slot = self.dst(dst);
                 let value = checked.int_value(e).expect("checked literals have values");
@@ -2034,8 +2309,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     unreachable!()
                 };
                 let source = self.expr(base, None)? + self.field_offset(id, index);
-                if (matches!(checked.types[e], Ty::Struct(_) | Ty::Enum(_))
-                    || checked.types[e].tagged_optional_inner().is_some())
+                if (matches!(
+                    checked.types[e],
+                    Ty::FixedI64(_)
+                        | Ty::FixedString(_)
+                        | Ty::FixedScalar(_, _)
+                        | Ty::FixedClass(_, _)
+                        | Ty::FixedStruct(_, _)
+                        | Ty::FixedEnum(_, _)
+                        | Ty::Struct(_)
+                        | Ty::Enum(_)
+                ) || checked.types[e].tagged_optional_inner().is_some())
                 {
                     let width = self.width(checked.types[e]);
                     let target = match dst {
@@ -2103,8 +2387,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                     _ => unreachable!("checked value names resolve to bindings or fields"),
                 };
-                if (matches!(checked.types[e], Ty::Struct(_) | Ty::Enum(_))
-                    || checked.types[e].tagged_optional_inner().is_some())
+                if (matches!(
+                    checked.types[e],
+                    Ty::FixedI64(_)
+                        | Ty::FixedString(_)
+                        | Ty::FixedScalar(_, _)
+                        | Ty::FixedClass(_, _)
+                        | Ty::FixedStruct(_, _)
+                        | Ty::FixedEnum(_, _)
+                        | Ty::Struct(_)
+                        | Ty::Enum(_)
+                ) || checked.types[e].tagged_optional_inner().is_some())
                 {
                     let width = self.width(checked.types[e]);
                     let target = match dst {
@@ -2291,8 +2584,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 op: BinaryOp::Eq | BinaryOp::NotEq,
                 lhs,
                 rhs,
-            } if (matches!(checked.types[lhs], Ty::Struct(_) | Ty::Enum(_))
-                || checked.types[lhs].tagged_optional_inner().is_some())
+            } if (matches!(
+                checked.types[lhs],
+                Ty::FixedI64(_)
+                    | Ty::FixedString(_)
+                    | Ty::FixedScalar(_, _)
+                    | Ty::FixedClass(_, _)
+                    | Ty::FixedStruct(_, _)
+                    | Ty::FixedEnum(_, _)
+                    | Ty::Struct(_)
+                    | Ty::Enum(_)
+            ) || checked.types[lhs].tagged_optional_inner().is_some())
                 || (checked.optional_wrap[lhs] && checked.types[lhs] != Ty::String) =>
             {
                 self.aggregate_equality(
@@ -2532,8 +2834,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         }
         let count = self.stack.len() - mark;
         let slot = if self.checked.types[root].tagged_optional_inner().is_some()
-            || matches!(self.checked.types[root], Ty::Struct(_) | Ty::Enum(_))
-        {
+            || matches!(
+                self.checked.types[root],
+                Ty::FixedI64(_)
+                    | Ty::FixedString(_)
+                    | Ty::FixedScalar(_, _)
+                    | Ty::FixedClass(_, _)
+                    | Ty::FixedStruct(_, _)
+                    | Ty::FixedEnum(_, _)
+                    | Ty::Struct(_)
+                    | Ty::Enum(_)
+            ) {
             if let Some(dst) = dst {
                 dst
             } else {
@@ -2568,7 +2879,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     }
                 } else {
                     let inner = self.checked.types[root];
-                    if matches!(inner, Ty::Struct(_) | Ty::Enum(_)) {
+                    if matches!(
+                        inner,
+                        Ty::FixedI64(_)
+                            | Ty::FixedString(_)
+                            | Ty::FixedScalar(_, _)
+                            | Ty::FixedClass(_, _)
+                            | Ty::FixedStruct(_, _)
+                            | Ty::FixedEnum(_, _)
+                            | Ty::Struct(_)
+                            | Ty::Enum(_)
+                    ) {
                         self.move_nullable(inner, found + 1, slot, false, ast.span(operand))?;
                     } else {
                         self.asm.emit(
@@ -3385,7 +3706,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             ty if ty.tagged_optional_inner().is_some() => {
                 self.asm.branch_test(Test::False, source, next, span);
                 let inner = ty.tagged_optional_inner().unwrap();
-                if matches!(inner, Ty::Struct(_) | Ty::Enum(_)) {
+                if matches!(
+                    inner,
+                    Ty::FixedI64(_)
+                        | Ty::FixedString(_)
+                        | Ty::FixedScalar(_, _)
+                        | Ty::FixedClass(_, _)
+                        | Ty::FixedStruct(_, _)
+                        | Ty::FixedEnum(_, _)
+                        | Ty::Struct(_)
+                        | Ty::Enum(_)
+                ) {
                     let value = self.top;
                     self.top += self.width(inner);
                     self.move_nullable(inner, source + 1, value, false, span)?;

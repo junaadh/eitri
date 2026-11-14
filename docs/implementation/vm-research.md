@@ -2624,3 +2624,115 @@ execution 250/292 ns, total 9,667/24,100 ns; 48 allocations (5,088 B), 3,184 B
 metadata and 31,047 B retained context. This scalar benchmark does not exercise
 indirect equality. Samples: `/private/tmp/eitri-t017-56-samples.csv`; report:
 `/private/tmp/eitri-t017-56-bench.txt`.
+
+### T017-57 fixed i64 array values
+
+Fixed `[N]i64` values of lengths 1 through 256 support contextual literals,
+copies, aggregate fields, equality and script calls on both interpreters and
+lowerers. Array indexing and other element types remain open. Unannotated
+literals continue to denote unsupported dynamic arrays; host array signatures
+are rejected. The fixture runs under forced collection.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 8,750/9,500 ns,
+execution 208/250 ns, total 8,958/9,792 ns; retained context was 31,047 B.
+This scalar benchmark does not exercise arrays. Samples:
+`/private/tmp/eitri-t017-57-samples.csv`; report:
+`/private/tmp/eitri-t017-57-bench.txt`.
+
+### T017-58 fixed i64 indexed reads
+
+Indexed fixed i64 array reads evaluate the array before the index and fault on
+negative or out-of-range indices. The verifier checks the complete operand
+window. A read currently copies N slots to a temporary window, so code size and
+work are O(N) with N bounded at 256; this cost has not been benchmarked on an
+array workload. Both interpreters and lowerers run the fixture, including
+forced collection and an out-of-bounds fault. Indexed writes remain open.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 10.0/34.2 µs,
+execution 250/959 ns, total 10.2/35.9 µs; retained context was 31,047 B.
+This scalar benchmark does not exercise arrays. Samples:
+`/private/tmp/eitri-t017-58-samples.csv`; report:
+`/private/tmp/eitri-t017-58-bench.txt`.
+
+### T017-59 fixed i64 indexed local writes
+
+Mutable local fixed arrays support indexed writes and compound assignments,
+with bounds checked before evaluating the right side and value-copy semantics.
+Both interpreters and lowerers run the fixtures, including a fault that occurs
+before a host effect. Writes currently copy O(N) slots with N bounded at 256;
+writes through fields remain open.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 9,958/11,300 ns,
+execution 250/292 ns, total 10.2/11.8 µs; retained context was 31,047 B.
+This scalar benchmark does not exercise arrays. Samples:
+`/private/tmp/eitri-t017-59-samples.csv`; report:
+`/private/tmp/eitri-t017-59-bench.txt`.
+
+### T017-60 fixed arrays in struct fields
+
+Indexed writes to fixed i64 arrays in mutable struct fields preserve value
+semantics, including compound operations. Read-only paths reject writes; writes
+through class fields remain unsupported. The fixture runs on both interpreters
+and lowerers under forced collection.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 9,709/14,000 ns,
+execution 250/292 ns, total 9,959/14,200 ns; retained context was 31,047 B.
+This scalar benchmark does not exercise array fields. Samples:
+`/private/tmp/eitri-t017-60-samples.csv`; report:
+`/private/tmp/eitri-t017-60-bench.txt`.
+
+### T017-61 fixed array class fields
+
+Indexed fixed i64 writes work through class fields and nested struct fields;
+the class reference is captured before the index, and the containing value is
+reloaded after the right-hand side. Both interpreters and lowerers run the
+fixture under forced collection.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 9,625/14,600 ns,
+execution 250/292 ns, total 9,875/14,900 ns; retained context was 31,047 B.
+This scalar benchmark does not exercise array fields. Samples:
+`/private/tmp/eitri-t017-61-samples.csv`; report:
+`/private/tmp/eitri-t017-61-bench.txt`.
+
+### T017-62 fixed string arrays
+
+Fixed string arrays use managed element slots with verified homogeneous array
+windows. Literals, indexed reads and writes, copies, equality, calls, struct
+fields and enum payloads run on both interpreters and lowerers with forced
+collection. Arrays remain bounded at 256 elements; other element types and
+empty fixed arrays remain open.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 10.0/11.3 µs,
+execution 250/292 ns, total 10.3/11.5 µs; retained context was 31,047 B.
+This scalar benchmark does not exercise string arrays. Samples:
+`/private/tmp/eitri-t017-62-samples.csv`; report:
+`/private/tmp/eitri-t017-62-bench.txt`.
+
+### T017-63 fixed scalar arrays
+
+Fixed arrays now support all implemented scalar element types, including
+contextual numeric literals, checked indexing and writes, and IEEE float
+comparison. Both interpreters and lowerers run the fixture under forced
+collection. Aggregate element types and empty arrays remain open.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 9,917/11,200 ns,
+execution 250/333 ns, total 10.2/11.5 µs; retained context was 31,047 B.
+This scalar benchmark does not exercise fixed arrays. Samples:
+`/private/tmp/eitri-t017-63-samples.csv`; report:
+`/private/tmp/eitri-t017-63-bench.txt`.
+
+### T017-64 fixed class-reference arrays
+
+Class references in fixed arrays retain identity through copies and remain traced
+through collection. Array signatures remain unavailable to host reentry. The
+existing 1001-sample release harness reported fresh module compile p50/p99
+14.3/29.9 µs and source-to-result 14.6/31.2 µs; these are general workload
+measurements, not a class-array-specific comparison. Raw samples were retained
+at `/private/tmp/eitri-t017-64-samples.csv`.

@@ -89,6 +89,10 @@ pub enum Expr {
     /// Alternating literal fragments and expressions in source order.
     Interpolation(List<ExprId>),
     FixedArray(List<ExprId>),
+    Index {
+        base: ExprId,
+        index: ExprId,
+    },
     Bool(bool),
     Null(TokenId),
     /// A name, resolved by the checker.
@@ -165,6 +169,9 @@ pub enum TypeExpr {
     OptionalScalar(TokenId),
     OptionalNamed(TokenId),
     FixedI64(TokenId),
+    FixedString(TokenId),
+    FixedScalar(TokenId, TokenId),
+    FixedNamed(TokenId, TokenId),
     /// Unsupported, already reported.
     Error,
 }
@@ -196,6 +203,12 @@ pub enum Stmt {
         span: Span,
     },
     Expr(ExprId),
+    AssignIndex {
+        target: ExprId,
+        op: AssignOp,
+        value: ExprId,
+        span: Span,
+    },
     AssignField {
         target: ExprId,
         op: AssignOp,

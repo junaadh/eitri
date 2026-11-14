@@ -530,7 +530,7 @@ impl<'i> Checker<'_, 'i> {
             Stmt::Expr(expr) => {
                 self.expr(expr, None, false);
             }
-            Stmt::AssignField { target, .. } => {
+            Stmt::AssignIndex { target, .. } | Stmt::AssignField { target, .. } => {
                 self.report(
                     Code::Unsupported,
                     "not supported yet: assignment to fields",
@@ -738,7 +738,7 @@ impl<'i> Checker<'_, 'i> {
             | Expr::Convert { .. } => {
                 unreachable!("outside frozen M0 reference")
             }
-            Expr::Error => Ty::Error,
+            Expr::Index { .. } | Expr::FixedArray(_) | Expr::Error => Ty::Error,
         };
         self.out.types[expr] = ty;
         ty

@@ -1,0 +1,24 @@
+//! host: test
+import test from "test"
+struct Item { text: string, number: i64 }
+enum Choice { Empty, Full(item: Item) }
+struct Holder { items: [2]Item, choices: [2]Choice }
+let first = Item { text: "first", number: 1 }
+let second = Item { text: "second", number: 2 }
+var items: [2]Item = [first, second]
+let copy = items
+items[0] = second
+test.check(copy[0].text == "first" && items[0].number == 2)
+var choices: [2]Choice = [Choice.Empty, Choice.Full(first)]
+choices[0] = Choice.Full(second)
+test.check(match choices[0] { .Empty => false, .Full(item) => item.text == "second" })
+let holder = Holder { items: copy, choices: choices }
+test.check(holder.items[1].number == 2)
+test.check(match holder.choices[1] { .Empty => false, .Full(item) => item.number == 1 })
+test.check(copy == [first, second] && choices != [Choice.Empty, Choice.Empty])
+class Store { items: [2]Item }
+let store = Store { items: copy }
+store.items[1] = first
+test.check(store.items[1].text == "first" && copy[1].text == "second")
+enum Wrapped { Items(items: [2]Item), Choices(choices: [2]Choice) }
+test.check(match Wrapped.Choices(choices) { .Items(items) => false, .Choices(value) => match value[0] { .Empty => false, .Full(item) => item.number == 2 } })

@@ -203,6 +203,9 @@ impl Oracle {
 enum Value {
     Int(i64),
     Scalar(Ty, u64),
+    FixedI64(u16, u32),
+    FixedString(u16, u32),
+    FixedScalar(Ty, u32),
     Bool(bool),
     String(u32),
     OptionalString(Option<u32>),
@@ -251,6 +254,9 @@ impl Value {
     fn ty(self) -> Ty {
         match self {
             Self::Int(_) => Ty::I64,
+            Self::FixedI64(size, _) => Ty::FixedI64(size),
+            Self::FixedString(size, _) => Ty::FixedString(size),
+            Self::FixedScalar(ty, _) => ty,
             Self::Bool(_) => Ty::Bool,
             Self::String(_) => Ty::String,
             Self::OptionalString(_) => Ty::OptionalString,
@@ -309,7 +315,10 @@ impl Value {
             Value::Int(value) => value as u64,
             Value::Scalar(_, word) => word,
             Value::Bool(value) => u64::from(value),
-            Value::String(_)
+            Value::FixedI64(_, _)
+            | Value::FixedString(_, _)
+            | Value::FixedScalar(_, _)
+            | Value::String(_)
             | Value::OptionalString(_)
             | Value::OptionalClass(_, _)
             | Value::OptionalI64(_)
@@ -466,6 +475,130 @@ impl Eval<'_> {
                         }
                     };
                     self.locals[binding.index()] = Some(new);
+                }
+            }
+            Stmt::AssignIndex {
+                target,
+                op,
+                value,
+                span,
+            } => {
+                let Expr::Index { base, index } = self.ast.exprs[target] else {
+                    unreachable!()
+                };
+                let binding = self.checked.stmt_bindings[id].expect("checked array binding");
+                let class_target = if let Some((object_expr, implicit, field, root)) =
+                    self.class_field_root(base)
+                {
+                    let object = if let Some(expr) = object_expr {
+                        self.expr(host, expr)?
+                    } else {
+                        self.read(implicit.unwrap())
+                    };
+                    let Value::Class(_, object) = object else {
+                        unreachable!()
+                    };
+                    let mut path = Vec::new();
+                    let mut cursor = base;
+                    while cursor != root {
+                        let Expr::Member { base, .. } = self.ast.exprs[cursor] else {
+                            unreachable!()
+                        };
+                        let Res::Field(index) = self.checked.resolutions[cursor] else {
+                            unreachable!()
+                        };
+                        path.push(index as usize);
+                        cursor = base;
+                    }
+                    path.reverse();
+                    Some((object, field as usize, path))
+                } else {
+                    None
+                };
+                let index = self.expr(host, index)?.int();
+                let before = if let Some((object, field, path)) = &class_target {
+                    let mut current = self.structs[*object as usize][*field];
+                    for &index in path {
+                        let Value::Struct(_, nested) = current else {
+                            unreachable!()
+                        };
+                        current = self.structs[nested as usize][index];
+                    }
+                    current
+                } else {
+                    self.expr(host, base)?
+                };
+                let (Value::FixedI64(size, array)
+                | Value::FixedString(size, array)
+                | Value::FixedScalar(
+                    Ty::FixedScalar(size, _)
+                    | Ty::FixedClass(size, _)
+                    | Ty::FixedStruct(size, _)
+                    | Ty::FixedEnum(size, _),
+                    array,
+                )) = before
+                else {
+                    unreachable!()
+                };
+                if index < 0 || index as u64 >= u64::from(size) {
+                    return Err(self.fault("index out of bounds", self.ast.span(target)));
+                }
+                let old = self.structs[array as usize][index as usize];
+                let rhs = self.expr(host, value)?;
+                let result = match op {
+                    AssignOp::Set => rhs,
+                    AssignOp::Compound(op) => self.binary_values(op, old, rhs, span)?,
+                };
+                let refreshed = if let Some((object, field, path)) = &class_target {
+                    let mut current = self.structs[*object as usize][*field];
+                    for &part in path {
+                        let Value::Struct(_, nested) = current else {
+                            unreachable!()
+                        };
+                        current = self.structs[nested as usize][part];
+                    }
+                    current
+                } else {
+                    self.expr(host, base)?
+                };
+                let (Value::FixedI64(_, current)
+                | Value::FixedString(_, current)
+                | Value::FixedScalar(_, current)) = refreshed
+                else {
+                    unreachable!()
+                };
+                let mut values = self.structs[current as usize].clone();
+                values[index as usize] = result;
+                let next = self.structs.len() as u32;
+                self.structs.push(values);
+                let mut updated = match self.checked.types[base] {
+                    Ty::FixedString(_) => Value::FixedString(size, next),
+                    ty @ (Ty::FixedScalar(_, _)
+                    | Ty::FixedClass(_, _)
+                    | Ty::FixedStruct(_, _)
+                    | Ty::FixedEnum(_, _)) => Value::FixedScalar(ty, next),
+                    _ => Value::FixedI64(size, next),
+                };
+                if let Some((object, field, path)) = class_target {
+                    let mut current = self.structs[object as usize][field];
+                    let mut parents = Vec::new();
+                    for index in path {
+                        let Value::Struct(ty, nested) = current else {
+                            unreachable!()
+                        };
+                        parents.push((ty, nested, index));
+                        current = self.structs[nested as usize][index];
+                    }
+                    for (ty, nested, index) in parents.into_iter().rev() {
+                        let mut fields = self.structs[nested as usize].clone();
+                        fields[index] = updated;
+                        let next = self.structs.len() as u32;
+                        self.structs.push(fields);
+                        updated = Value::Struct(ty, next);
+                    }
+                    self.structs[object as usize][field] = updated;
+                } else {
+                    self.write_lvalue(base, binding, updated);
                 }
             }
             Stmt::AssignField {
@@ -972,6 +1105,42 @@ impl Eval<'_> {
             return Ok(Value::Enum(id, case, index));
         }
         match self.ast.exprs[e] {
+            Expr::Index { base, index } => {
+                let (Value::FixedI64(size, array)
+                | Value::FixedString(size, array)
+                | Value::FixedScalar(
+                    Ty::FixedScalar(size, _)
+                    | Ty::FixedClass(size, _)
+                    | Ty::FixedStruct(size, _)
+                    | Ty::FixedEnum(size, _),
+                    array,
+                )) = self.expr(host, base)?
+                else {
+                    unreachable!()
+                };
+                let index = self.expr(host, index)?.int();
+                if index < 0 || index as u64 >= u64::from(size) {
+                    return Err(self.fault("index out of bounds", span));
+                }
+                Ok(self.structs[array as usize][index as usize])
+            }
+            Expr::FixedArray(elements) => {
+                let mut values = Vec::new();
+                for &element in self.ast.args(elements) {
+                    values.push(self.expr(host, element)?);
+                }
+                let id = self.structs.len() as u32;
+                let size = values.len() as u16;
+                self.structs.push(values);
+                Ok(match self.checked.types[e] {
+                    Ty::FixedString(_) => Value::FixedString(size, id),
+                    ty @ (Ty::FixedScalar(_, _)
+                    | Ty::FixedClass(_, _)
+                    | Ty::FixedStruct(_, _)
+                    | Ty::FixedEnum(_, _)) => Value::FixedScalar(ty, id),
+                    _ => Value::FixedI64(size, id),
+                })
+            }
             Expr::Int { .. } | Expr::Float { .. } | Expr::Char(_) => Ok(Value::from_word(
                 self.checked.types[e],
                 self.checked.int_value(e).expect("checked literal fits") as u64,
@@ -1714,6 +1883,25 @@ impl Eval<'_> {
         let mut pending = vec![(a, b)];
         while let Some((a, b)) = pending.pop() {
             match (a, b) {
+                (Value::FixedScalar(ta, a), Value::FixedScalar(tb, b)) if ta == tb => {
+                    pending.extend(
+                        self.structs[a as usize]
+                            .iter()
+                            .copied()
+                            .zip(self.structs[b as usize].iter().copied()),
+                    );
+                }
+                (Value::FixedI64(sa, a), Value::FixedI64(sb, b))
+                | (Value::FixedString(sa, a), Value::FixedString(sb, b))
+                    if sa == sb =>
+                {
+                    pending.extend(
+                        self.structs[a as usize]
+                            .iter()
+                            .copied()
+                            .zip(self.structs[b as usize].iter().copied()),
+                    );
+                }
                 (Value::Struct(ta, ia), Value::Struct(tb, ib)) if ta == tb => {
                     pending.extend(
                         self.structs[ia as usize]
@@ -1778,7 +1966,17 @@ impl Eval<'_> {
             let equal = a == b;
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
         }
-        if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+        if matches!(
+            ty,
+            Ty::FixedI64(_)
+                | Ty::FixedString(_)
+                | Ty::FixedScalar(_, _)
+                | Ty::FixedClass(_, _)
+                | Ty::FixedStruct(_, _)
+                | Ty::FixedEnum(_, _)
+                | Ty::Struct(_)
+                | Ty::Enum(_)
+        ) {
             let equal = self.aggregate_equal(a, b);
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
         }

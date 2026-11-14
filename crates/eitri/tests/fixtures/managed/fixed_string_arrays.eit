@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+struct Bundle { names: [2]string, label: string }
+fn identity(names: [2]string) -> [2]string { return names }
+let original: [2]string = ["one", "two"]
+let copy = identity(original)
+var mutable: [2]string = copy
+mutable[0] = "changed"
+let bundle = Bundle { names: mutable, label: "root" }
+test.check(original[0] == "one" && bundle.names[0] == "changed")
+test.check(copy == ["one", "two"] && mutable != copy)
+enum Choice { Empty, Items(names: [2]string) }
+let choice = Choice.Items(original)
+test.check(match choice { .Empty => false, .Items(names) => names[1] == "two" })
