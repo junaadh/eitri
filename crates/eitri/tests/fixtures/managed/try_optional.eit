@@ -1,0 +1,36 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+struct Data { text: string }
+fn text(ok: bool) -> Problem!string {
+    if ok { return "yes" }
+    return .Err(Problem.Bad("no"))
+}
+fn number(ok: bool) -> Problem!i64 {
+    if ok { return 42 }
+    return .Err(Problem.Bad("no"))
+}
+fn data(ok: bool) -> Problem!Data {
+    if ok { return Data { text: "data" } }
+    return .Err(Problem.Bad("no"))
+}
+test.check((try? text(true)) == "yes")
+test.check((try? text(false)) == null)
+test.check((try? number(true)) == 42)
+test.check((try? number(false)) == null)
+test.check(match try? data(true) { null => false, value => value.text == "data" })
+test.check((try? data(false)) == null)
+class Thing { text: string }
+enum Choice { Selected(text: string) }
+fn thing(ok: bool) -> Problem!Thing {
+    if ok { return Thing { text: "class" } }
+    return .Err(Problem.Bad("no"))
+}
+fn choice(ok: bool) -> Problem!Choice {
+    if ok { return Choice.Selected("enum") }
+    return .Err(Problem.Bad("no"))
+}
+test.check(match try? thing(true) { null => false, value => value.text == "class" })
+test.check((try? thing(false)) == null)
+test.check(match try? choice(true) { null => false, .Selected(text) => text == "enum" })
+test.check((try? choice(false)) == null)

@@ -1946,6 +1946,35 @@ impl<'i> Checker<'_, 'i> {
                 }
                 Ty::Char
             }
+            Expr::TryOptional(operand) => {
+                let source = self.value(operand, None);
+                match source {
+                    Ty::Result(id) => {
+                        let success = self.out.result_types[id as usize].1;
+                        if let Some(optional) = success.optional_of() {
+                            optional
+                        } else if success.optional_inner().is_some() {
+                            success
+                        } else {
+                            self.report(
+                                Code::Unsupported,
+                                "not supported yet: optional result success type",
+                                self.span(expr),
+                            );
+                            Ty::Error
+                        }
+                    }
+                    Ty::Error => Ty::Error,
+                    _ => {
+                        self.report(
+                            Code::TypeMismatch,
+                            "try? requires a result",
+                            self.span(expr),
+                        );
+                        Ty::Error
+                    }
+                }
+            }
             Expr::Try(operand) => {
                 let source = self.value(operand, None);
                 let enclosing = self.current.map(|f| f.ret);

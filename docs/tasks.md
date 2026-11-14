@@ -807,6 +807,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-73: `try?` converts result success to optional values and errors to
+  null for supported scalar, string and aggregate payloads.
 - T017-72: plain `try` propagates matching errors, including `void` success
   and mutations before early return, on both interpreters under forced GC.
 - T017-71: result fields work in structs, classes and enum payloads with

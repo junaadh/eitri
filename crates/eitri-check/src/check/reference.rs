@@ -738,6 +738,17 @@ impl<'i> Checker<'_, 'i> {
             | Expr::Convert { .. } => {
                 unreachable!("outside frozen M0 reference")
             }
+            Expr::TryOptional(operand) => {
+                let source = self.value(operand, None);
+                if source != Ty::Error {
+                    self.report(
+                        Code::TypeMismatch,
+                        "try? requires a result",
+                        self.span(expr),
+                    );
+                }
+                Ty::Error
+            }
             Expr::Index { .. } | Expr::FixedArray(_) | Expr::Try(_) | Expr::Error => Ty::Error,
         };
         self.out.types[expr] = ty;

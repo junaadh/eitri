@@ -1446,22 +1446,26 @@ impl Parser<'_> {
     }
 
     fn prefix(&mut self, ns: bool) -> Parsed<ExprId> {
-        if self.at(T::Try) {
+        if matches!(self.kind(), T::Try | T::TryQuestion) {
+            let optional = self.at(T::TryQuestion);
             let start = self.current_span();
             self.bump();
             self.enter()?;
             let operand = self.postfix(ns);
             self.leave();
             let operand = operand?;
-            return Ok(self
-                .ast
-                .expr(Expr::Try(operand), start.to(self.ast.span(operand))));
+            let expr = if optional {
+                Expr::TryOptional(operand)
+            } else {
+                Expr::Try(operand)
+            };
+            return Ok(self.ast.expr(expr, start.to(self.ast.span(operand))));
         }
         let op = match self.kind() {
             T::Minus => UnaryOp::Neg,
             T::Bang => UnaryOp::Not,
             T::Tilde => UnaryOp::BitNot,
-            T::TryQuestion | T::Await | T::Spawn => {
+            T::Await | T::Spawn => {
                 let start = self.current_span();
                 let feature = match self.kind() {
                     T::Tilde => "bitwise operators",

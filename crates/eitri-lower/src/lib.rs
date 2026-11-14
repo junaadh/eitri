@@ -2159,6 +2159,61 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             return Ok(slot);
         }
         match ast.exprs[e] {
+            Expr::TryOptional(operand) => {
+                let Ty::Result(id) = checked.types[operand] else {
+                    unreachable!("checked result")
+                };
+                let (error, success) = checked.result_types[id as usize];
+                let optional = checked.types[e];
+                let target = if let Some(dst) = dst {
+                    dst
+                } else {
+                    let slot = self.top;
+                    self.top += self.width(optional);
+                    slot
+                };
+                let source = self.expr(operand, None)?;
+                let mut layout = self.asm.temporary_vec(self.width(optional) as usize)?;
+                self.flatten_type(optional, &mut layout)?;
+                for (offset, ty) in layout.into_iter().enumerate() {
+                    let slot = target + offset as u32;
+                    match ty {
+                        ValueType::NullableRecord(id) => self.asm.emit(
+                            Op::RecordNull,
+                            Operands::abc(slot.into(), 0, id.into()),
+                            span,
+                        )?,
+                        ValueType::NullableString => self.asm.emit(
+                            Op::NullableNull,
+                            Operands::abc(slot.into(), 0, 0),
+                            span,
+                        )?,
+                        ty => self.asm.load(slot, 0, ty, span)?,
+                    }
+                }
+                let done = self.asm.label();
+                self.asm.branch_imm(Cond::Eq, source, 0, done, span)?;
+                let offset = u32::from(
+                    success.optional_inner().is_none()
+                        && !matches!(success, Ty::String | Ty::Class(_)),
+                );
+                if offset != 0 {
+                    self.asm.load(target, 1, ValueType::Bool, span)?;
+                }
+                for part in 0..self.width(success) {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(
+                            (target + offset + part).into(),
+                            (source + 1 + self.width(error) + part).into(),
+                            0,
+                        ),
+                        span,
+                    )?;
+                }
+                self.asm.bind(done)?;
+                Ok(target)
+            }
             Expr::Try(operand) => {
                 let Ty::Result(source_id) = checked.types[operand] else {
                     unreachable!("checked try result")

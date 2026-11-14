@@ -670,6 +670,10 @@ impl Dumper<'_> {
                     vec![base],
                 )
             }
+            Expr::TryOptional(operand) => (
+                format!("{} {range} {ty}", self.paint(STMT, "TryOptional")),
+                vec![Node::Expr(operand)],
+            ),
             Expr::Try(operand) => (
                 format!("{} {range} {ty}", self.paint(STMT, "Try")),
                 vec![Node::Expr(operand)],

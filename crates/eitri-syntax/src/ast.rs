@@ -109,6 +109,7 @@ pub enum Expr {
         name: TokenId,
     },
     Try(ExprId),
+    TryOptional(ExprId),
     Unary {
         op: UnaryOp,
         operand: ExprId,

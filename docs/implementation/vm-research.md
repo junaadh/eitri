@@ -2794,3 +2794,10 @@ existing inline payload representation. The 1001-sample release harness in
 the isolated workspace measured fresh module compile p50/p99 14.8/17.2 µs and
 source-to-result 15.1/17.5 µs on the general workload. Raw samples:
 `/private/tmp/eitri-t017-72-samples.csv`.
+
+### T017-73 try-optional conversion
+
+`try?` constructs an optional directly from the result tag and payload. The
+1001-sample release harness in the isolated workspace measured fresh module
+compile p50/p99 14.0/39.1 µs and source-to-result 14.3/39.8 µs on the general
+workload. Raw samples: `/private/tmp/eitri-t017-73-samples.csv`.

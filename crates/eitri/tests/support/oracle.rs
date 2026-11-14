@@ -1207,6 +1207,54 @@ impl Eval<'_> {
             return Ok(Value::Enum(id, case, index));
         }
         match self.ast.exprs[e] {
+            Expr::TryOptional(operand) => {
+                let Value::Result(_, is_ok, payload) = self.expr(host, operand)? else {
+                    unreachable!("checked result")
+                };
+                let value = is_ok.then(|| self.structs[payload as usize][0]);
+                Ok(match self.checked.types[e] {
+                    Ty::OptionalString => Value::OptionalString(value.map(|v| {
+                        if let Value::String(id) = v {
+                            id
+                        } else {
+                            unreachable!()
+                        }
+                    })),
+                    Ty::OptionalClass(id) => Value::OptionalClass(
+                        id,
+                        value.map(|v| {
+                            if let Value::Class(_, id) = v {
+                                id
+                            } else {
+                                unreachable!()
+                            }
+                        }),
+                    ),
+                    Ty::OptionalStruct(id) => Value::OptionalStruct(
+                        id,
+                        value.map(|v| {
+                            if let Value::Struct(_, id) = v {
+                                id
+                            } else {
+                                unreachable!()
+                            }
+                        }),
+                    ),
+                    Ty::OptionalEnum(id) => Value::OptionalEnum(
+                        id,
+                        value.map(|v| {
+                            if let Value::Enum(_, tag, id) = v {
+                                (tag, id)
+                            } else {
+                                unreachable!()
+                            }
+                        }),
+                    ),
+                    Ty::OptionalI64 => Value::OptionalI64(value.map(Value::int)),
+                    Ty::OptionalBool => Value::OptionalBool(value.map(Value::bool)),
+                    ty => Value::OptionalScalar(ty, value.map(Value::word)),
+                })
+            }
             Expr::Try(operand) => {
                 let Value::Result(_, is_ok, payload) = self.expr(host, operand)? else {
                     unreachable!("checked result")
