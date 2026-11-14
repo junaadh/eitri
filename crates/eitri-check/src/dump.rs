@@ -189,6 +189,7 @@ impl Dumper<'_> {
             Ty::FixedI64(_) => "'[N]i64'",
             Ty::FixedString(_) => "'[N]string'",
             Ty::FixedScalar(_, _) => "'[N]scalar'",
+            Ty::Result(_) => "'result'",
             Ty::FixedClass(_, _) => "'[N]class'",
             Ty::FixedStruct(_, _) => "'[N]struct'",
             Ty::FixedEnum(_, _) => "'[N]enum'",
@@ -228,6 +229,7 @@ impl Dumper<'_> {
             Ty::FixedI64(_) => "[N]i64",
             Ty::FixedString(_) => "[N]string",
             Ty::FixedScalar(_, _) => "[N]scalar",
+            Ty::Result(_) => "result",
             Ty::FixedClass(_, _) => "[N]class",
             Ty::FixedStruct(_, _) => "[N]struct",
             Ty::FixedEnum(_, _) => "[N]enum",
@@ -252,6 +254,10 @@ impl Dumper<'_> {
 
     fn written_type(&self, ty: TypeExpr) -> String {
         match ty {
+            TypeExpr::ResultNamed(error, success) => self.paint(
+                TYPE,
+                &format!("'{}!{}'", self.token(error), self.token(success)),
+            ),
             TypeExpr::FixedNamed(size, _) | TypeExpr::FixedScalar(size, _) => {
                 self.paint(TYPE, &format!("'[{}]scalar'", self.token(size)))
             }
@@ -369,7 +375,8 @@ impl Dumper<'_> {
             Node::Param(f, i) => {
                 let param = ast.params(ast.fns[f].params)[i];
                 let end = match param.ty {
-                    TypeExpr::FixedNamed(token, _)
+                    TypeExpr::ResultNamed(_, token)
+                    | TypeExpr::FixedNamed(token, _)
                     | TypeExpr::FixedScalar(token, _)
                     | TypeExpr::FixedString(token)
                     | TypeExpr::FixedI64(token)

@@ -1,0 +1,6 @@
+//! host: test
+import test from "test"
+struct Source { names: [2]string, count: i64 }
+struct Config { name: string = Source { names: ["one", "two"], count: 7 }.names[1], count: i64 = Source { names: ["x", "y"], count: 7 }.count }
+let value = Config {}
+test.check(value.name == "two" && value.count == 7)

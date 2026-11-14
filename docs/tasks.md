@@ -804,6 +804,15 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
+- Current gaps include result values, fixed-array types beyond the currently
+  supported element forms and sizes, and remaining pattern/default behavior.
+  T017 stays open until its completion criteria are verified.
+- T017-67: field defaults can read fields and index fixed arrays from
+  constructed values, with managed values traced during evaluation.
+- T017-66: fixed-array field defaults evaluate at each construction, including
+  independently allocated class elements and managed strings.
+- T017-65: fixed arrays support struct and enum elements, including managed
+  fields, copies, indexing, updates, equality, and recursive-layout rejection.
 - T017-64: fixed arrays support class references, including collector tracing,
   identity and mutation; fixed-array reentry signatures are rejected.
 - T017-63: fixed arrays support all implemented scalar element types with
@@ -815,12 +824,12 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - T017-60: indexed writes to fixed arrays in mutable struct fields preserve
   value semantics.
 - T017-59: indexed writes to mutable local fixed i64 arrays include bounds
-  checks and compound assignment; writes through class fields remain open.
+  checks and compound assignment (class-field writes followed in T017-61).
 - T017-58: fixed i64 array reads check bounds on both interpreters; the verifier
-  checks the full operand window. Writes through fields remain open.
+  checks the full operand window (field writes followed in T017-60–61).
 - T017-57: `[N]i64` values (1 to 256 elements) support literals, copies,
-  aggregate fields, equality and script calls. Indexed writes and other element
-  types remain open; dynamic literals and host array signatures reject.
+  aggregate fields, equality and script calls. Subsequent stages added writes
+  and further element types; dynamic literals and host array signatures reject.
 - T017-56: indirect enum equality compares payloads structurally with bounded
   execution and memory; class references retain identity semantics.
 - T017-55: indirect enum payloads allocate traced records, supporting recursive
@@ -855,7 +864,7 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - T017-1: nonempty local structs with up to 256 scalar or string fields,
   literals, field reads and `var` field writes run on both interpreters. Copies,
   initializer order, branches, loops and forced collection are exercised.
-  Methods, calls and enum support remain open.
+  Methods, calls and enums were added in subsequent stages.
 - T017-2: nested struct fields, nested writes and inline-cycle rejection run
   on both interpreters. An iterative layout walk is tested on 2,000 levels;
   strings in nested values survive forced collection.
@@ -885,7 +894,7 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - T017-13: field defaults can call a function without arguments, evaluated
   separately at each construction that omits the field.
 - T017-14: field defaults support scalar operations and calls with arguments;
-  captured names and aggregate construction remain unsupported.
+  aggregate construction was added in subsequent stages; captured names remain unsupported.
 - T017-15: static extension functions on structs and enums can be called
   through the type name; `self` is rejected in their bodies.
 - T017-16: static extension functions also resolve by bare name in methods
@@ -1592,4 +1601,6 @@ a debugger with breakpoints (T055); a mandatory native tier (T043).
 
 ## Immediate next task
 
-**T016 — implement strings**. Start with concatenation and content comparison.
+**T017 — finish aggregates and tagged values.** Complete the remaining
+result values, fixed-array forms and matching/default behavior, then verify the
+completion criteria. T016 still has string work recorded above.

@@ -116,6 +116,9 @@ impl Printer<'_> {
     fn ty(&self, ty: TypeExpr) -> String {
         match ty {
             TypeExpr::Named(token) => self.token(token).to_owned(),
+            TypeExpr::ResultNamed(error, success) => {
+                format!("{}!{}", self.token(error), self.token(success))
+            }
             TypeExpr::FixedI64(token) => format!("[{}]i64", self.token(token)),
             TypeExpr::FixedString(token) => format!("[{}]string", self.token(token)),
             TypeExpr::FixedNamed(size, element) | TypeExpr::FixedScalar(size, element) => {
@@ -418,7 +421,7 @@ fn unsupported_features_are_reported_once_and_dropped() {
             "E0001 8..10 not supported yet: function types",
         ),
         (
-            "fn f(x: E!i64) -> void {\n}",
+            "fn f(x: E![]i64) -> void {\n}",
             "E0001 8..9 not supported yet: result types",
         ),
         (

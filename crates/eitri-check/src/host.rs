@@ -243,6 +243,14 @@ fn value_type(
     interner: &Interner,
     diagnostics: &mut Diagnostics,
 ) -> Ty {
+    if let TypeExpr::ResultNamed(token, _) = ty {
+        diagnostics.push(error(
+            Code::Unsupported,
+            "not supported yet: result host types",
+            tokens.span(token),
+        ));
+        return Ty::Error;
+    }
     if let TypeExpr::FixedI64(token)
     | TypeExpr::FixedString(token)
     | TypeExpr::FixedScalar(token, _)

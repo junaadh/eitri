@@ -95,6 +95,7 @@ pub struct Checked {
     /// For names and calls: what they refer to.
     pub resolutions: IndexVec<ExprId, Res>,
     pub optional_wrap: IndexVec<ExprId, bool>,
+    pub result_types: Vec<(Ty, Ty)>,
     /// For `let`: the declared binding; for assignment: the target.
     pub stmt_bindings: IndexVec<StmtId, Option<BindingId>>,
     /// Field index for a bare receiver-field assignment.
@@ -132,6 +133,7 @@ impl Checked {
         self.types.clear();
         self.resolutions.clear();
         self.optional_wrap.clear();
+        self.result_types.clear();
         self.stmt_bindings.clear();
         self.stmt_fields.clear();
         self.signatures.clear();
@@ -225,6 +227,7 @@ impl CheckScratch {
             + c.types.capacity() * size_of::<Ty>()
             + c.resolutions.capacity() * size_of::<Res>()
             + c.optional_wrap.capacity() * size_of::<bool>()
+            + c.result_types.capacity() * size_of::<(Ty, Ty)>()
             + c.stmt_bindings.capacity() * size_of::<Option<BindingId>>()
             + c.stmt_fields.capacity() * size_of::<Option<u32>>()
             + c.signatures.capacity() * size_of::<Signature>()
@@ -294,6 +297,8 @@ impl CheckScratch {
             .reserve_budgeted(count.saturating_sub(c.enum_starts.len()), budget)?;
         c.enum_widths
             .reserve_budgeted(count.saturating_sub(c.enum_widths.len()), budget)?;
+        let result_count = count.saturating_sub(c.result_types.len());
+        budget.reserve_vec(&mut c.result_types, result_count)?;
         let enum_cases = count.saturating_sub(c.enum_case_types.len());
         budget.reserve_vec(&mut c.enum_case_types, enum_cases)?;
         c.pattern_bindings
@@ -579,6 +584,43 @@ impl<'i> Checker<'_, 'i> {
     /// A written type; `void` only where `allow_void`.
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
         match ty {
+            TypeExpr::ResultNamed(error, success) => {
+                let error_ty = self.ty(TypeExpr::Named(error), false);
+                let success_ty = self.ty(TypeExpr::Named(success), true);
+                if !matches!(error_ty, Ty::Struct(_) | Ty::Enum(_) | Ty::Class(_)) {
+                    if error_ty != Ty::Error {
+                        self.report(
+                            Code::TypeMismatch,
+                            "result error must be a named type",
+                            self.token_span(error),
+                        );
+                    }
+                    return Ty::Error;
+                }
+                if success_ty == Ty::Error {
+                    return Ty::Error;
+                }
+                let pair = (error_ty, success_ty);
+                let index = if let Some(index) = self
+                    .out
+                    .result_types
+                    .iter()
+                    .position(|&existing| existing == pair)
+                {
+                    index
+                } else {
+                    let index = self.out.result_types.len();
+                    self.out.result_types.push(pair);
+                    index
+                };
+                self.report(
+                    Code::Unsupported,
+                    "not supported yet: result values",
+                    self.token_span(error),
+                );
+                let _ = index;
+                return Ty::Error;
+            }
             TypeExpr::FixedI64(token)
             | TypeExpr::FixedString(token)
             | TypeExpr::FixedScalar(token, _)
@@ -1124,6 +1166,11 @@ impl<'i> Checker<'_, 'i> {
                 | Expr::String(_)
                 | Expr::Bool(_)
                 | Expr::Null(_) => {}
+                Expr::FixedArray(elements) => self.spine.extend_from_slice(ast.args(elements)),
+                Expr::Index { base, index } => {
+                    self.spine.push(base);
+                    self.spine.push(index);
+                }
                 Expr::Unary { operand, .. } => self.spine.push(operand),
                 Expr::Binary { lhs, rhs, .. } => {
                     self.spine.push(lhs);
@@ -1141,6 +1188,7 @@ impl<'i> Checker<'_, 'i> {
                 Expr::EnumShorthand(_) => {}
                 Expr::Member { base, .. } if matches!(ast.exprs[base], Expr::Name(token) if self.enum_names.get(self.symbol(token).index()).copied().flatten().is_some()) =>
                     {}
+                Expr::Member { base, .. } => self.spine.push(base),
                 Expr::NamedCall { callee, args }
                     if matches!(
                         ast.exprs[callee],

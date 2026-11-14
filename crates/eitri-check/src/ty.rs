@@ -19,6 +19,7 @@ pub enum FixedScalar {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
     I64,
+    Result(u32),
     FixedI64(u16),
     FixedString(u16),
     FixedScalar(u16, FixedScalar),
@@ -68,7 +69,8 @@ impl Ty {
             Self::Char => S::Char,
             Self::Bool => S::Bool,
             Self::String => return Some(TypeDesc::String),
-            Self::FixedI64(_)
+            Self::Result(_)
+            | Self::FixedI64(_)
             | Self::FixedString(_)
             | Self::FixedScalar(_, _)
             | Self::FixedClass(_, _)
@@ -190,6 +192,7 @@ impl Ty {
             Ty::FixedI64(_) => "a fixed i64 array",
             Ty::FixedString(_) => "a fixed string array",
             Ty::FixedScalar(_, _) => "a fixed scalar array",
+            Ty::Result(_) => "a result",
             Ty::FixedClass(_, _) => "a fixed class array",
             Ty::FixedStruct(_, _) => "a fixed struct array",
             Ty::FixedEnum(_, _) => "a fixed enum array",

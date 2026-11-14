@@ -2736,3 +2736,19 @@ existing 1001-sample release harness reported fresh module compile p50/p99
 14.3/29.9 µs and source-to-result 14.6/31.2 µs; these are general workload
 measurements, not a class-array-specific comparison. Raw samples were retained
 at `/private/tmp/eitri-t017-64-samples.csv`.
+
+### T017-65 fixed inline aggregate arrays
+
+Inline struct and enum array indexing transposes each flattened component into
+a checked fixed-array window. Code size is O(flattened array slots), bounded
+by the existing aggregate slot limit. A 1001-sample release run measured fresh
+module compile p50/p99 14.0/20.8 µs and source-to-result 14.3/21.2 µs; these
+are general workload measurements, not an array-specific comparison. Raw
+samples: `/private/tmp/eitri-t017-65-samples.csv`.
+
+### T017-66 fixed-array field defaults
+
+Fixed-array defaults are checked and evaluated at each construction site.
+The 1001-sample release harness reported fresh module compile p50/p99
+13.8/44.9 µs and source-to-result 14.2/46.5 µs, for its general workload.
+Raw samples: `/private/tmp/eitri-t017-66-samples.csv`.

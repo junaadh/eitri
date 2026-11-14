@@ -1,0 +1,10 @@
+//! host: test
+import test from "test"
+class Item { text: string }
+struct Holder { values: [2]string = ["one", "two"], items: [2]Item = [Item { text: "a" }, Item { text: "b" }] }
+let first = Holder {}
+let second = Holder {}
+test.check(first.values[0] == "one" && first.values[1] == "two")
+test.check(first.items[0].text == "a" && second.items[1].text == "b")
+first.items[0].text = "changed"
+test.check(second.items[0].text == "a")

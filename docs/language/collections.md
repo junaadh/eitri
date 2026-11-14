@@ -1,10 +1,10 @@
 # Collections
 
-The current implementation supports fixed arrays of supported scalar, string, and class-reference
+The current implementation supports fixed arrays of supported scalar, string, class, struct, and enum
 elements, with lengths 1 through 256
 in literals, copies, aggregate fields, equality, script calls, and indexed reads.
 Indexed writes to mutable locals, mutable struct fields, and class fields also
-work. Struct and enum element types, empty fixed arrays, and dynamic collections remain future
+work. Nested array types, empty fixed arrays, and dynamic collections remain future
 work. An unannotated array literal denotes a dynamic array and is rejected until
 that feature lands.
 
