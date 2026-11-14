@@ -204,3 +204,33 @@ fn optional_host_signatures_are_rejected() {
             .is_err()
     );
 }
+
+#[test]
+fn result_signatures_cannot_be_called_as_flat_scalars() {
+    struct Probe;
+    impl Host for Probe {
+        fn call(&mut self, cx: &mut Call<'_, '_>, _: u32) -> Result<(), HostError> {
+            for name in ["returns_result", "takes_result"] {
+                let callback = cx.function(name).unwrap();
+                let mut result = [0];
+                assert!(cx.call(self, callback, &[0], &mut result).is_err());
+                assert!(
+                    cx.call_values(self, callback, &[eitri::ReentryArg::Scalar(0)])
+                        .is_err()
+                );
+            }
+            Ok(())
+        }
+    }
+    let source = "import h from \"h\"\nenum Problem { Missing }\nfn returns_result(value: i64) -> Problem!i64 { return value }\nfn takes_result(value: Problem!i64) -> i64 { return 1 }\nh.probe()\n";
+    for threaded in [false, true] {
+        let mut cx = Context::new();
+        cx.set_threaded(threaded);
+        cx.register_host_module("h", "pub fn probe() -> void\n")
+            .unwrap();
+        let mut compiled = cx.compile(source).unwrap();
+        cx.execute(&compiled, &mut Probe).unwrap();
+        cx.optimize(&mut compiled, source).unwrap();
+        cx.execute(&compiled, &mut Probe).unwrap();
+    }
+}

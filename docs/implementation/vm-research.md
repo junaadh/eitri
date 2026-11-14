@@ -2772,3 +2772,10 @@ Field defaults support interpolation of checked scalar and aggregate-field
 expressions. The 1001-sample release harness measured fresh module compile
 p50/p99 13.5/23.4 µs and source-to-result 13.9/24.3 µs on the general workload.
 Raw samples: `/private/tmp/eitri-t017-69-samples.csv`.
+
+### T017-70 basic result values
+
+Results use an inline tag and nullable managed payload slots. The 1001-sample
+release harness measured fresh module compile p50/p99 13.4/19.9 µs and
+source-to-result 13.7/20.3 µs on the general workload. Raw samples:
+`/private/tmp/eitri-t017-70-main-samples.csv`.

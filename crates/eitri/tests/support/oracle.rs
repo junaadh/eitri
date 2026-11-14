@@ -218,6 +218,7 @@ enum Value {
     Struct(eitri_syntax::ast::StructId, u32),
     Class(eitri_syntax::ast::StructId, u32),
     Enum(eitri_syntax::ast::EnumId, u32, u32),
+    Result(u32, bool, u32),
     Void,
 }
 
@@ -269,6 +270,7 @@ impl Value {
             Self::Struct(id, _) => Ty::Struct(id),
             Self::Class(id, _) => Ty::Class(id),
             Self::Enum(id, _, _) => Ty::Enum(id),
+            Self::Result(id, _, _) => Ty::Result(id),
             Self::Scalar(ty, _) => ty,
             Self::Void => Ty::Void,
         }
@@ -329,6 +331,7 @@ impl Value {
             | Value::Struct(_, _)
             | Value::Class(_, _)
             | Value::Enum(_, _, _)
+            | Value::Result(_, _, _)
             | Value::Void => {
                 unreachable!("the checker rejects managed or void host arguments")
             }
@@ -750,7 +753,17 @@ impl Eval<'_> {
             Stmt::Return { value, .. } => {
                 let value = match value {
                     Some(value) => self.expr(host, value)?,
-                    None => Value::Void,
+                    None => {
+                        if let Some(Ty::Result(id)) =
+                            self.current.map(|f| self.checked.signatures[f].ret)
+                        {
+                            let index = self.structs.len() as u32;
+                            self.structs.push(vec![Value::Void]);
+                            Value::Result(id, true, index)
+                        } else {
+                            Value::Void
+                        }
+                    }
                 };
                 return Err(Unwind::Return(value));
             }
@@ -1020,6 +1033,12 @@ impl Eval<'_> {
     }
 
     fn expr(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
+        if let Some(id) = self.checked.result_wrap[e] {
+            let payload = self.expr_inner(host, e)?;
+            let index = self.structs.len() as u32;
+            self.structs.push(vec![payload]);
+            return Ok(Value::Result(id, true, index));
+        }
         if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::FindOffset {
             let Value::Scalar(Ty::FindOffset, word) = self.expr_inner(host, e)? else {
                 unreachable!()
@@ -1074,8 +1093,91 @@ impl Eval<'_> {
         self.expr_inner(host, e)
     }
 
+    fn binary_chain(
+        &mut self,
+        host: &mut dyn Host,
+        op: BinaryOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Flow<Value> {
+        let mut pending = vec![(op, rhs, span)];
+        let mut left = lhs;
+        while let Expr::Binary { op, lhs, rhs } = self.ast.exprs[left] {
+            if matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Coalesce)
+                || self.checked.optional_wrap[left]
+                || self.checked.result_wrap[left].is_some()
+            {
+                break;
+            }
+            pending.push((op, rhs, self.ast.span(left)));
+            left = lhs;
+        }
+        let mut value = self.expr(host, left)?;
+        while let Some((op, rhs, span)) = pending.pop() {
+            let rhs = self.expr(host, rhs)?;
+            value = self.binary_values(op, value, rhs, span)?;
+        }
+        Ok(value)
+    }
+
+    fn match_result(
+        &mut self,
+        host: &mut dyn Host,
+        id: eitri_syntax::ast::MatchId,
+        subject: Value,
+        is_ok: bool,
+        payload: u32,
+    ) -> Flow<Value> {
+        let ast = self.ast;
+        let node = ast.matches[id];
+        for &arm in &ast.match_arms[node.arms] {
+            if let Some(case) = arm.case {
+                if (self.interner.resolve(self.tokens.symbol(case)) == "Ok") != is_ok {
+                    continue;
+                }
+                if let Some(pattern) = ast.match_bindings[arm.bindings].first()
+                    && let Some(binding) = self.checked.pattern_bindings[pattern.name]
+                {
+                    self.locals[binding.index()] = Some(self.structs[payload as usize][0]);
+                }
+            }
+            if let Some(token) = arm.catch_binding {
+                let binding = self.checked.pattern_bindings[token].unwrap();
+                self.locals[binding.index()] = Some(subject);
+            }
+            if let Some(guard) = arm.guard
+                && !self.expr(host, guard)?.bool()
+            {
+                continue;
+            }
+            return match arm.body {
+                eitri_syntax::ast::MatchBody::Expr(expr) => self.expr(host, expr),
+                eitri_syntax::ast::MatchBody::Block(block) => self.block(host, block),
+            };
+        }
+        unreachable!("checked result match is exhaustive")
+    }
+
     fn expr_inner(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
         let span = self.ast.span(e);
+        if let Res::ResultCase(id, is_ok) = self.checked.resolutions[e] {
+            let payload = match self.ast.exprs[e] {
+                Expr::Call { args, .. } => self.ast.args(args).first().copied(),
+                Expr::NamedCall { args, .. } => {
+                    self.ast.field_inits[args].first().map(|arg| arg.value)
+                }
+                _ => None,
+            };
+            let payload = if let Some(payload) = payload {
+                self.expr(host, payload)?
+            } else {
+                Value::Void
+            };
+            let index = self.structs.len() as u32;
+            self.structs.push(vec![payload]);
+            return Ok(Value::Result(id, is_ok, index));
+        }
         if let Res::EnumCase(id, case) = self.checked.resolutions[e] {
             let declaration = self.ast.enum_cases[self.ast.enums[id].cases][case as usize];
             let fields = self.ast.params(declaration.fields);
@@ -1368,11 +1470,7 @@ impl Eval<'_> {
                 BinaryOp::Or => Ok(Value::Bool(
                     self.expr(host, lhs)?.bool() || self.expr(host, rhs)?.bool(),
                 )),
-                _ => {
-                    let a = self.expr(host, lhs)?;
-                    let b = self.expr(host, rhs)?;
-                    self.binary_values(op, a, b, span)
-                }
+                _ => self.binary_chain(host, op, lhs, rhs, span),
             },
             Expr::Call { callee, .. }
                 if matches!(
@@ -1739,6 +1837,9 @@ impl Eval<'_> {
                     }
                     value => value,
                 };
+                if let Value::Result(_, is_ok, payload) = subject {
+                    return self.match_result(host, id, subject, is_ok, payload);
+                }
                 let Value::Enum(enum_id, case, payload) = subject else {
                     let ast = self.ast;
                     for &arm in &ast.match_arms[node.arms] {
@@ -1883,6 +1984,9 @@ impl Eval<'_> {
         let mut pending = vec![(a, b)];
         while let Some((a, b)) = pending.pop() {
             match (a, b) {
+                (Value::Result(ta, ca, a), Value::Result(tb, cb, b)) if ta == tb && ca == cb => {
+                    pending.push((self.structs[a as usize][0], self.structs[b as usize][0]));
+                }
                 (Value::FixedScalar(ta, a), Value::FixedScalar(tb, b)) if ta == tb => {
                     pending.extend(
                         self.structs[a as usize]
@@ -1974,6 +2078,7 @@ impl Eval<'_> {
                 | Ty::FixedClass(_, _)
                 | Ty::FixedStruct(_, _)
                 | Ty::FixedEnum(_, _)
+                | Ty::Result(_)
                 | Ty::Struct(_)
                 | Ty::Enum(_)
         ) {
@@ -2111,8 +2216,15 @@ impl Eval<'_> {
         let caller = self.current.replace(f);
         let body = self.ast.fns[f].body.expect("script functions have bodies");
         let result = match self.block(host, body) {
-            // Falling off the end is only accepted for `void`.
-            Ok(_) => Ok(Value::Void),
+            Ok(_) => {
+                if let Ty::Result(id) = self.checked.signatures[f].ret {
+                    let index = self.structs.len() as u32;
+                    self.structs.push(vec![Value::Void]);
+                    Ok(Value::Result(id, true, index))
+                } else {
+                    Ok(Value::Void)
+                }
+            }
             Err(Unwind::Return(value)) => Ok(value),
             Err(fault) => Err(fault),
         };

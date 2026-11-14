@@ -70,6 +70,7 @@ pub enum Res {
     StringLiteral(u32),
     Struct(eitri_syntax::ast::StructId),
     EnumCase(eitri_syntax::ast::EnumId, u32),
+    ResultCase(u32, bool),
     Field(u32),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
@@ -95,6 +96,7 @@ pub struct Checked {
     /// For names and calls: what they refer to.
     pub resolutions: IndexVec<ExprId, Res>,
     pub optional_wrap: IndexVec<ExprId, bool>,
+    pub result_wrap: IndexVec<ExprId, Option<u32>>,
     pub result_types: Vec<(Ty, Ty)>,
     /// For `let`: the declared binding; for assignment: the target.
     pub stmt_bindings: IndexVec<StmtId, Option<BindingId>>,
@@ -133,6 +135,7 @@ impl Checked {
         self.types.clear();
         self.resolutions.clear();
         self.optional_wrap.clear();
+        self.result_wrap.clear();
         self.result_types.clear();
         self.stmt_bindings.clear();
         self.stmt_fields.clear();
@@ -227,6 +230,7 @@ impl CheckScratch {
             + c.types.capacity() * size_of::<Ty>()
             + c.resolutions.capacity() * size_of::<Res>()
             + c.optional_wrap.capacity() * size_of::<bool>()
+            + c.result_wrap.capacity() * size_of::<Option<u32>>()
             + c.result_types.capacity() * size_of::<(Ty, Ty)>()
             + c.stmt_bindings.capacity() * size_of::<Option<BindingId>>()
             + c.stmt_fields.capacity() * size_of::<Option<u32>>()
@@ -283,6 +287,8 @@ impl CheckScratch {
             .reserve_budgeted(count.saturating_sub(c.resolutions.len()), budget)?;
         c.optional_wrap
             .reserve_budgeted(count.saturating_sub(c.optional_wrap.len()), budget)?;
+        c.result_wrap
+            .reserve_budgeted(count.saturating_sub(c.result_wrap.len()), budget)?;
         c.stmt_bindings
             .reserve_budgeted(count.saturating_sub(c.stmt_bindings.len()), budget)?;
         c.stmt_fields
@@ -367,6 +373,7 @@ pub fn check<'s>(
     let ast = input.ast;
     scratch.checked.types.resize(ast.exprs.len(), Ty::Error);
     scratch.checked.optional_wrap.resize(ast.exprs.len(), false);
+    scratch.checked.result_wrap.resize(ast.exprs.len(), None);
     scratch
         .checked
         .resolutions
@@ -613,13 +620,7 @@ impl<'i> Checker<'_, 'i> {
                     self.out.result_types.push(pair);
                     index
                 };
-                self.report(
-                    Code::Unsupported,
-                    "not supported yet: result values",
-                    self.token_span(error),
-                );
-                let _ = index;
-                return Ty::Error;
+                return Ty::Result(index as u32);
             }
             TypeExpr::FixedI64(token)
             | TypeExpr::FixedString(token)
@@ -877,6 +878,13 @@ impl<'i> Checker<'_, 'i> {
                             self.token_span(field.name),
                         );
                     }
+                    if matches!(ty, Ty::Result(_)) {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: result fields",
+                            self.token_span(field.name),
+                        );
+                    }
                     types[index] = ty;
                 }
                 width = width.saturating_add(fields.len() as u32);
@@ -919,6 +927,13 @@ impl<'i> Checker<'_, 'i> {
                     self.report(
                         Code::DuplicateName,
                         "duplicate struct field",
+                        self.token_span(field.name),
+                    );
+                }
+                if matches!(ty, Ty::Result(_)) {
+                    self.report(
+                        Code::Unsupported,
+                        "not supported yet: result fields",
                         self.token_span(field.name),
                     );
                 }
@@ -1069,6 +1084,17 @@ impl<'i> Checker<'_, 'i> {
                     }
                     Ty::FixedEnum(size, id) => {
                         u32::from(size).saturating_mul(self.out.enum_widths[id])
+                    }
+                    Ty::Result(id) => {
+                        let (error, success) = self.out.result_types[id as usize];
+                        let width = |ty| match ty {
+                            Ty::Struct(id) => self.out.struct_widths[id],
+                            Ty::Enum(id) => self.out.enum_widths[id],
+                            Ty::Void => 0,
+                            _ => 1,
+                        };
+                        1u32.saturating_add(width(error))
+                            .saturating_add(width(success))
                     }
                     Ty::Struct(id) => self.out.struct_widths[id],
                     Ty::Enum(id) => self.out.enum_widths[id],
@@ -1420,7 +1446,9 @@ impl<'i> Checker<'_, 'i> {
         if let Some(body) = decl.body {
             self.statements(body);
             let ret = signature.ret;
-            if ret != Ty::Void && ret != Ty::Error && !self.returns(body) {
+            let result_void =
+                matches!(ret, Ty::Result(id) if self.out.result_types[id as usize].1 == Ty::Void);
+            if ret != Ty::Void && ret != Ty::Error && !result_void && !self.returns(body) {
                 if let Some(&last) = ast.block(body).last()
                     && let Stmt::Expr(tail) = ast.stmts[last]
                     && !matches!(self.out.types[tail], Ty::Void | Ty::Error)
@@ -1727,6 +1755,8 @@ impl<'i> Checker<'_, 'i> {
                     Some(value) => {
                         self.value(value, Some(ret));
                     }
+                    None if matches!(ret, Ty::Result(id) if self.out.result_types[id as usize].1 == Ty::Void) =>
+                        {}
                     None => self.mismatch(Ty::Void, ret, self.token_span(keyword)),
                 }
             }
@@ -1827,7 +1857,30 @@ impl<'i> Checker<'_, 'i> {
         } else {
             expected
         };
+        let result_id = match expected {
+            Some(Ty::Result(id)) => Some(id),
+            _ => None,
+        };
+        let shorthand = match self.ast().exprs[expr] {
+            Expr::EnumShorthand(name) => matches!(self.spelling(name), "Ok" | "Err"),
+            Expr::Call { callee, .. } | Expr::NamedCall { callee, .. } => {
+                matches!(self.ast().exprs[callee], Expr::EnumShorthand(name) if matches!(self.spelling(name), "Ok" | "Err"))
+            }
+            _ => false,
+        };
+        let guidance = if let Some(id) = result_id.filter(|_| !shorthand) {
+            Some(self.out.result_types[id as usize].1)
+        } else {
+            guidance
+        };
         let found = self.expr(expr, guidance, true);
+        if let Some(id) = result_id
+            && found == self.out.result_types[id as usize].1
+            && found != Ty::Void
+        {
+            self.out.result_wrap[expr] = Some(id);
+            return Ty::Result(id);
+        }
         if let Some(expected) = expected
             && (found.optional_of() == Some(expected)
                 || (expected == Ty::OptionalI64 && found == Ty::FindOffset))
@@ -2699,6 +2752,9 @@ impl<'i> Checker<'_, 'i> {
     ) -> Ty {
         let node = self.ast().matches[id];
         let subject = self.value(node.subject, None);
+        if let Ty::Result(result_id) = subject {
+            return self.result_match(expr, id, result_id, expected, used);
+        }
         let (enum_id, optional) = match subject {
             Ty::Enum(id) => (id, false),
             Ty::OptionalEnum(id) => (id, true),
@@ -2847,6 +2903,117 @@ impl<'i> Checker<'_, 'i> {
         }
     }
 
+    fn result_match(
+        &mut self,
+        expr: ExprId,
+        id: eitri_syntax::ast::MatchId,
+        result_id: u32,
+        expected: Option<Ty>,
+        used: bool,
+    ) -> Ty {
+        let node = self.ast().matches[id];
+        let (error, success) = self.out.result_types[result_id as usize];
+        let mut covered = [false; 2];
+        let mut fallback = false;
+        let mut result = expected;
+        for arm in &self.ast().match_arms[node.arms] {
+            let mark = self.mark();
+            if let Some(case) = arm.case {
+                let index = match self.spelling(case) {
+                    "Err" => 0,
+                    "Ok" => 1,
+                    _ => {
+                        self.report(
+                            Code::UnknownName,
+                            "unknown result case",
+                            self.token_span(case),
+                        );
+                        0
+                    }
+                };
+                let payload = if index == 0 { error } else { success };
+                let patterns = &self.ast().match_bindings[arm.bindings];
+                if arm.qualifier.is_some()
+                    || arm.literal.is_some()
+                    || (arm.parenthesized && patterns.len() != usize::from(payload != Ty::Void))
+                {
+                    self.report(
+                        Code::TypeMismatch,
+                        "invalid result pattern",
+                        self.span(expr),
+                    );
+                }
+                for pattern in patterns {
+                    if pattern.label.is_some()
+                        || pattern.literal.is_some()
+                        || pattern.nested_case.is_some()
+                    {
+                        self.report(
+                            Code::Unsupported,
+                            "not supported yet: nested result patterns",
+                            self.token_span(pattern.name),
+                        );
+                    } else if self.input.tokens.kind(pattern.name)
+                        != eitri_syntax::TokenKind::Wildcard
+                    {
+                        let binding = self.new_binding(pattern.name, false, payload);
+                        self.out.pattern_bindings[pattern.name] = Some(binding);
+                    }
+                }
+                if arm.guard.is_none() {
+                    covered[index] = true;
+                }
+            } else if arm.literal.is_some() {
+                self.report(
+                    Code::TypeMismatch,
+                    "result pattern requires a case",
+                    self.span(expr),
+                );
+            } else {
+                if let Some(token) = arm.catch_binding {
+                    let binding = self.new_binding(token, false, Ty::Result(result_id));
+                    self.out.pattern_bindings[token] = Some(binding);
+                }
+                if arm.guard.is_none() {
+                    fallback = true;
+                }
+            }
+            if let Some(guard) = arm.guard {
+                self.value(guard, Some(Ty::Bool));
+            }
+            let ty = match arm.body {
+                eitri_syntax::ast::MatchBody::Expr(body) => {
+                    if used {
+                        self.value(body, result)
+                    } else {
+                        self.expr(body, None, false);
+                        Ty::Void
+                    }
+                }
+                eitri_syntax::ast::MatchBody::Block(body) => {
+                    if used {
+                        self.block_value(body, result)
+                    } else {
+                        self.statements(body);
+                        Ty::Void
+                    }
+                }
+            };
+            if used && result.is_none() && ty != Ty::Error {
+                result = Some(ty);
+            }
+            self.restore(mark);
+        }
+        if !fallback && !covered.iter().all(|seen| *seen) {
+            self.report(Code::TypeMismatch, "non-exhaustive match", self.span(expr));
+        }
+        if used {
+            result.unwrap_or(Ty::Error)
+        } else {
+            Ty::Void
+        }
+    }
+
     fn scalar_match(
         &mut self,
         expr: ExprId,
@@ -2970,6 +3137,53 @@ impl<'i> Checker<'_, 'i> {
         args: Option<List<eitri_syntax::ast::FieldInit>>,
         positional: Option<List<ExprId>>,
     ) -> Ty {
+        if owner.is_none()
+            && let Some(Ty::Result(id)) = expected
+        {
+            let is_ok = match self.spelling(name) {
+                "Ok" => true,
+                "Err" => false,
+                _ => {
+                    self.report(
+                        Code::UnknownName,
+                        "unknown result case",
+                        self.token_span(name),
+                    );
+                    return Ty::Error;
+                }
+            };
+            let pair = self.out.result_types[id as usize];
+            let payload = if is_ok { pair.1 } else { pair.0 };
+            let mut values = Vec::new();
+            if let Some(args) = positional {
+                values.extend_from_slice(self.ast().args(args));
+            }
+            if let Some(args) = args {
+                for arg in &self.ast().field_inits[args] {
+                    if self.input.tokens.kind(arg.name) != eitri_syntax::TokenKind::LParen {
+                        self.report(
+                            Code::TypeMismatch,
+                            "result payload has no label",
+                            self.token_span(arg.name),
+                        );
+                    }
+                    values.push(arg.value);
+                }
+            }
+            let count = usize::from(payload != Ty::Void);
+            if values.len() != count {
+                self.report(
+                    Code::ArgumentCount,
+                    "wrong result payload count",
+                    self.span(expr),
+                );
+            }
+            for value in values {
+                self.value(value, Some(payload));
+            }
+            self.out.resolutions[expr] = Res::ResultCase(id, is_ok);
+            return Ty::Result(id);
+        }
         let id = owner.or(match expected {
             Some(Ty::Enum(id)) => Some(id),
             _ => None,

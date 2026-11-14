@@ -1,0 +1,28 @@
+//! host: test
+import test from "test"
+enum Problem { Missing, Message(text: string) }
+fn choose(ok: bool) -> Problem!i64 {
+    if ok { return 42 }
+    return .Err(Problem.Message("missing"))
+}
+test.check(match choose(true) { .Ok(value) => value == 42, .Err(error) => false })
+test.check(match choose(false) { .Ok(value) => false, .Err(error) => match error { .Missing => false, .Message(text) => text == "missing" } })
+fn forward(value: Problem!i64) -> Problem!i64 { return value }
+let good = forward(choose(true))
+let bad = forward(choose(false))
+test.check(match good { .Ok(value) => value == 42, .Err(error) => false })
+test.check(match bad { .Ok(value) => false, .Err(error) => match error { .Missing => false, .Message(text) => text == "missing" } })
+test.check(good == forward(choose(true)) && good != bad)
+fn finish() -> Problem!void { }
+fn finish_early() -> Problem!void { return }
+test.check(match finish() { .Ok => true, .Err => false })
+test.check(match finish_early() { .Ok => true, .Err => false })
+fn explicit() -> Problem!i64 { return .Ok(9) }
+test.check(match explicit() { .Ok(value) => value == 9, .Err => false })
+class Failure { message: string }
+fn text_result(ok: bool) -> Failure!string {
+    if ok { return "success" }
+    return .Err(Failure { message: "failure" })
+}
+test.check(match text_result(true) { .Ok(text) => text == "success", .Err => false })
+test.check(match text_result(false) { .Ok => false, .Err(err) => err.message == "failure" })

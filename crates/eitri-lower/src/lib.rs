@@ -260,6 +260,7 @@ fn lower_mode<const SIMPLE: bool>(
             plans: Vec::new(),
             loops: &mut scratch.loops,
             mutation_result: None,
+            current_ret: Ty::Void,
             default_depth: 0,
             default_expansions: 0,
             top: 0,
@@ -275,6 +276,7 @@ fn lower_mode<const SIMPLE: bool>(
             plans: Vec::new(),
             loops: &mut scratch.loops,
             mutation_result: None,
+            current_ret: Ty::Void,
             default_depth: 0,
             default_expansions: 0,
             top: 0,
@@ -640,6 +642,7 @@ struct Lowerer<'a, 'i, const R: bool, const SIMPLE: bool> {
     plans: Vec<String>,
     loops: &'a mut Vec<(Label, Label)>,
     mutation_result: Option<(u32, u32, u32)>,
+    current_ret: Ty,
     default_depth: u32,
     default_expansions: u32,
     /// The next free slot.
@@ -677,6 +680,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let (ast, checked) = (self.input.ast, self.checked);
         let decl = ast.fns[id];
         let types = checked.signatures[id];
+        self.current_ret = types.ret;
         let parameter_types = &checked.param_types[types.params];
         let count: usize = parameter_types
             .iter()
@@ -717,7 +721,12 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         };
         let body = decl.body.expect("script functions have bodies");
         self.statements(body)?;
-        if types.ret == Ty::Void {
+        if types.ret == Ty::Void
+            || matches!(types.ret, Ty::Result(id) if checked.result_types[id as usize].1 == Ty::Void)
+        {
+            if let Ty::Result(id) = types.ret {
+                self.result_value(None, id, true, None, Some(0), body.span.shrink_to_end())?;
+            }
             self.write_mutation_result(body.span.shrink_to_end())?;
             self.asm.ret(body.span.shrink_to_end())?;
         }
@@ -751,6 +760,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 | Ty::FixedClass(_, _)
                 | Ty::FixedStruct(_, _)
                 | Ty::FixedEnum(_, _)
+                | Ty::Result(_)
                 | Ty::Struct(_)
                 | Ty::Enum(_)
                 | Ty::Class(_)
@@ -766,6 +776,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedClass(_, _)
                         | Ty::FixedStruct(_, _)
                         | Ty::FixedEnum(_, _)
+                        | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
                         | Ty::Class(_)
@@ -805,6 +816,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
 
     fn width(&self, ty: Ty) -> u32 {
         match ty {
+            Ty::Result(id) => {
+                let (error, success) = self.checked.result_types[id as usize];
+                1 + self.width(error)
+                    + if success == Ty::Void {
+                        0
+                    } else {
+                        self.width(success)
+                    }
+            }
             Ty::FixedI64(size)
             | Ty::FixedString(size)
             | Ty::FixedScalar(size, _)
@@ -855,6 +875,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 | Ty::FixedClass(_, _)
                 | Ty::FixedStruct(_, _)
                 | Ty::FixedEnum(_, _)
+                | Ty::Result(_)
                 | Ty::Struct(_)
                 | Ty::Enum(_)
         ) {
@@ -883,6 +904,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             };
             match next {
+                Ty::Result(id) => {
+                    output.push(ValueType::I64);
+                    let (error, success) = self.checked.result_types[id as usize];
+                    if success != Ty::Void {
+                        pending.push(Work::Type(success, true));
+                    }
+                    pending.push(Work::Type(error, true));
+                }
                 Ty::Struct(id) => {
                     let fields = &self.checked.param_types[self.checked.struct_fields[id]];
                     if fields.is_empty() {
@@ -1177,6 +1206,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                                 | Ty::FixedClass(_, _)
                                 | Ty::FixedStruct(_, _)
                                 | Ty::FixedEnum(_, _)
+                                | Ty::Result(_)
                                 | Ty::Struct(_)
                                 | Ty::Enum(_)
                         ) || ty.tagged_optional_inner().is_some()
@@ -1465,6 +1495,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                                 | Ty::FixedClass(_, _)
                                 | Ty::FixedStruct(_, _)
                                 | Ty::FixedEnum(_, _)
+                                | Ty::Result(_)
                                 | Ty::Struct(_)
                                 | Ty::Enum(_)
                         ) || checked.types[target].tagged_optional_inner().is_some())
@@ -1664,6 +1695,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             Stmt::Return { keyword, value } => {
                 if let Some(value) = value {
                     self.expr(value, Some(0))?;
+                } else if let Some(Ty::Result(id)) = Some(self.current_ret) {
+                    self.result_value(
+                        None,
+                        id,
+                        true,
+                        None,
+                        Some(0),
+                        self.input.tokens.span(keyword),
+                    )?;
                 }
                 self.write_mutation_result(self.input.tokens.span(keyword))?;
                 self.asm.ret(self.input.tokens.span(keyword))?;
@@ -1833,6 +1873,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     /// Lower `e` into `dst` when given, or anywhere convenient; return the
     /// slot holding its value.
     fn expr(&mut self, e: ExprId, dst: Option<u32>) -> Lowered<u32> {
+        if let Some(id) = self.checked.result_wrap[e] {
+            return self.result_value(Some(e), id, true, Some(e), dst, self.input.ast.span(e));
+        }
         if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::FindOffset {
             let target = if let Some(dst) = dst {
                 dst
@@ -1878,6 +1921,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     | Ty::FixedClass(_, _)
                     | Ty::FixedStruct(_, _)
                     | Ty::FixedEnum(_, _)
+                    | Ty::Result(_)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
             ) {
@@ -1907,9 +1951,68 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         self.expr_inner(e, dst)
     }
 
+    fn result_value(
+        &mut self,
+        expr: Option<ExprId>,
+        id: u32,
+        is_ok: bool,
+        payload: Option<ExprId>,
+        dst: Option<u32>,
+        span: Span,
+    ) -> Lowered<u32> {
+        let ty = Ty::Result(id);
+        let width = self.width(ty);
+        let target = if let Some(dst) = dst {
+            dst
+        } else {
+            let target = self.top;
+            self.top += width;
+            target
+        };
+        let mut layout = self.asm.temporary_vec(width as usize)?;
+        self.flatten_type(ty, &mut layout)?;
+        for (offset, ty) in layout.into_iter().enumerate() {
+            let slot = target + offset as u32;
+            match ty {
+                ValueType::NullableRecord(id) => self.asm.emit(
+                    Op::RecordNull,
+                    Operands::abc(slot.into(), 0, id.into()),
+                    span,
+                )?,
+                ValueType::NullableString => {
+                    self.asm
+                        .emit(Op::NullableNull, Operands::abc(slot.into(), 0, 0), span)?
+                }
+                ty => self.asm.load(slot, 0, ty, span)?,
+            }
+        }
+        self.asm
+            .load(target, u64::from(is_ok), ValueType::I64, span)?;
+        if let Some(payload) = payload {
+            let (error, success) = self.checked.result_types[id as usize];
+            let payload_ty = if is_ok { success } else { error };
+            let source = if Some(payload) == expr {
+                self.expr_inner(payload, None)?
+            } else {
+                self.expr(payload, None)?
+            };
+            let dest = target + 1 + if is_ok { self.width(error) } else { 0 };
+            self.move_nullable(payload_ty, source, dest, true, span)?;
+        }
+        Ok(target)
+    }
+
     fn expr_inner(&mut self, e: ExprId, dst: Option<u32>) -> Lowered<u32> {
         let (ast, checked) = (self.input.ast, self.checked);
         let span = ast.span(e);
+        if let Res::ResultCase(id, is_ok) = checked.resolutions[e] {
+            let payload = match ast.exprs[e] {
+                Expr::Call { args, .. } => ast.args(args).first().copied(),
+                Expr::NamedCall { args, .. } => ast.field_inits[args].first().map(|arg| arg.value),
+                _ => None,
+            };
+            return self.result_value(Some(e), id, is_ok, payload, dst, span);
+        }
         if let Res::EnumCase(id, case) = checked.resolutions[e] {
             let width = self.width(Ty::Enum(id));
             let slot = match dst {
@@ -2317,6 +2420,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedClass(_, _)
                         | Ty::FixedStruct(_, _)
                         | Ty::FixedEnum(_, _)
+                        | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
                 ) || checked.types[e].tagged_optional_inner().is_some())
@@ -2395,6 +2499,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedClass(_, _)
                         | Ty::FixedStruct(_, _)
                         | Ty::FixedEnum(_, _)
+                        | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
                 ) || checked.types[e].tagged_optional_inner().is_some())
@@ -2592,6 +2697,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     | Ty::FixedClass(_, _)
                     | Ty::FixedStruct(_, _)
                     | Ty::FixedEnum(_, _)
+                    | Ty::Result(_)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
             ) || checked.types[lhs].tagged_optional_inner().is_some())
@@ -2842,6 +2948,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     | Ty::FixedClass(_, _)
                     | Ty::FixedStruct(_, _)
                     | Ty::FixedEnum(_, _)
+                    | Ty::Result(_)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
             ) {
@@ -2887,6 +2994,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             | Ty::FixedClass(_, _)
                             | Ty::FixedStruct(_, _)
                             | Ty::FixedEnum(_, _)
+                            | Ty::Result(_)
                             | Ty::Struct(_)
                             | Ty::Enum(_)
                     ) {
@@ -3714,6 +3822,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedClass(_, _)
                         | Ty::FixedStruct(_, _)
                         | Ty::FixedEnum(_, _)
+                        | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
                 ) {
@@ -4302,6 +4411,92 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         Ok(result)
     }
 
+    fn match_result(
+        &mut self,
+        id: eitri_syntax::ast::MatchId,
+        result_id: u32,
+        result: u32,
+        span: Span,
+        ty: Ty,
+    ) -> Lowered<u32> {
+        let ast = self.input.ast;
+        let node = ast.matches[id];
+        let subject = self.top;
+        self.top += self.width(Ty::Result(result_id));
+        self.expr(node.subject, Some(subject))?;
+        let end = self.asm.label();
+        let arms = &ast.match_arms[node.arms];
+        let arms = if arms.last().is_some_and(|arm| arm.guard.is_some()) {
+            &arms[..arms.len() - 1]
+        } else {
+            arms
+        };
+        let (error, success) = self.checked.result_types[result_id as usize];
+        for (index, arm) in arms.iter().enumerate() {
+            let mark = self.top;
+            let next = self.asm.label();
+            if let Some(case) = arm.case {
+                let is_ok = self.input.interner.resolve(self.input.tokens.symbol(case)) == "Ok";
+                if index + 1 != arms.len() {
+                    self.asm
+                        .branch_imm(Cond::Ne, subject, i64::from(is_ok), next, span)?;
+                }
+                if let Some(pattern) = ast.match_bindings[arm.bindings].first()
+                    && let Some(binding) = self.checked.pattern_bindings[pattern.name]
+                {
+                    let payload_ty = if is_ok { success } else { error };
+                    let source = subject + 1 + if is_ok { self.width(error) } else { 0 };
+                    let target = self.top;
+                    self.top += self.width(payload_ty);
+                    self.slots[binding] = target;
+                    self.move_nullable(payload_ty, source, target, false, span)?;
+                }
+            }
+            if let Some(token) = arm.catch_binding {
+                let binding = self.checked.pattern_bindings[token].expect("checked result binding");
+                let target = self.top;
+                let width = self.width(Ty::Result(result_id));
+                self.top += width;
+                self.slots[binding] = target;
+                for offset in 0..width {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc((target + offset).into(), (subject + offset).into(), 0),
+                        span,
+                    )?;
+                }
+            }
+            if let Some(guard) = arm.guard {
+                self.branch(guard, false, next)?;
+            }
+            match arm.body {
+                eitri_syntax::ast::MatchBody::Expr(body) => {
+                    if ty == Ty::Void {
+                        self.discard(body)?;
+                    } else {
+                        self.expr(body, Some(result))?;
+                    }
+                }
+                eitri_syntax::ast::MatchBody::Block(body) => {
+                    if ty == Ty::Void {
+                        self.statements(body)?;
+                    } else {
+                        self.block_value(body, result)?;
+                    }
+                }
+            }
+            let terminal =
+                matches!(arm.body, eitri_syntax::ast::MatchBody::Block(block) if self.ends(block));
+            if !terminal && index + 1 != arms.len() {
+                self.asm.jump(end, span);
+            }
+            self.asm.bind(next)?;
+            self.top = mark;
+        }
+        self.asm.bind(end)?;
+        Ok(result)
+    }
+
     fn match_value(
         &mut self,
         id: eitri_syntax::ast::MatchId,
@@ -4324,6 +4519,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
         };
         let subject_ty = self.checked.types[node.subject];
+        if let Ty::Result(result_id) = subject_ty {
+            return self.match_result(id, result_id, result, span, ty);
+        }
         let (enum_id, optional) = match subject_ty {
             Ty::Enum(id) => (id, false),
             Ty::OptionalEnum(id) => (id, true),

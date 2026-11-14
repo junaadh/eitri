@@ -1,0 +1,2 @@
+enum Problem { Missing }
+struct Holder { value: Problem!i64 }
