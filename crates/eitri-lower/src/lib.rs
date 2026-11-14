@@ -3200,13 +3200,16 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
             }
         };
-        let Ty::Enum(enum_id) = self.checked.types[node.subject] else {
-            return self.match_scalar(id, result, span, ty);
+        let subject_ty = self.checked.types[node.subject];
+        let (enum_id, optional) = match subject_ty {
+            Ty::Enum(id) => (id, false),
+            Ty::OptionalEnum(id) => (id, true),
+            _ => return self.match_scalar(id, result, span, ty),
         };
         // A guard may mutate the source lvalue. Match the value evaluated
         // before any arm or guard runs, even on the optimized lowering path.
         let subject = self.top;
-        self.top += self.width(Ty::Enum(enum_id));
+        self.top += self.width(subject_ty);
         self.expr(node.subject, Some(subject))?;
         let cases = &ast.enum_cases[ast.enums[enum_id].cases];
         let end = self.asm.label();
@@ -3221,7 +3224,14 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         for (arm_index, arm) in arms.iter().enumerate() {
             let next = self.asm.label();
             let mark = self.top;
-            if let Some(case_name) = arm.case {
+            if arm.literal.is_some() {
+                self.asm.branch_test(Test::True, subject, next, span);
+            } else if let Some(case_name) = arm.case {
+                let source = if optional {
+                    self.match_present(subject, subject_ty, next, span)?
+                } else {
+                    subject
+                };
                 let index = cases
                     .iter()
                     .position(|case| {
@@ -3231,12 +3241,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 if arm_index + 1 != arms.len() {
                     let tag = self.temp();
                     self.asm.load(tag, index as u64, ValueType::I64, span)?;
-                    self.asm.branch_if(Cond::Ne, subject, tag, next, span)?;
+                    self.asm.branch_if(Cond::Ne, source, tag, next, span)?;
                 }
-                self.match_payload(subject, enum_id, index, arm.bindings, next, span)?;
+                self.match_payload(source, enum_id, index, arm.bindings, next, span)?;
             }
             if let Some(token) = arm.catch_binding {
                 let binding = self.checked.pattern_bindings[token].expect("checked catch binding");
+                let source = if optional {
+                    self.match_present(subject, subject_ty, next, span)?
+                } else {
+                    subject
+                };
                 let width = self.width(Ty::Enum(enum_id));
                 let target = self.top;
                 self.top += width;
@@ -3244,7 +3259,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 for offset in 0..width {
                     self.asm.emit(
                         Op::Mov,
-                        Operands::abc((target + offset).into(), (subject + offset).into(), 0),
+                        Operands::abc((target + offset).into(), (source + offset).into(), 0),
                         span,
                     )?;
                 }
@@ -3271,15 +3286,20 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             let terminal =
                 matches!(arm.body, eitri_syntax::ast::MatchBody::Block(block) if self.ends(block));
             let last_partial = arm_index + 1 == arms.len()
-                && arm.case.is_some_and(|name| {
-                    let index = cases
-                        .iter()
-                        .position(|case| {
-                            self.input.tokens.symbol(case.name) == self.input.tokens.symbol(name)
-                        })
-                        .expect("checked case");
-                    self.match_payload_partial(enum_id, index, arm.bindings)
-                });
+                && ((optional
+                    && (arm.literal.is_some()
+                        || arm.case.is_some()
+                        || arm.catch_binding.is_some()))
+                    || arm.case.is_some_and(|name| {
+                        let index = cases
+                            .iter()
+                            .position(|case| {
+                                self.input.tokens.symbol(case.name)
+                                    == self.input.tokens.symbol(name)
+                            })
+                            .expect("checked case");
+                        self.match_payload_partial(enum_id, index, arm.bindings)
+                    }));
             if !terminal && (arm_index + 1 != arms.len() || last_partial) {
                 self.asm.jump(end, span);
             }

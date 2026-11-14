@@ -2387,8 +2387,10 @@ impl<'i> Checker<'_, 'i> {
     ) -> Ty {
         let node = self.ast().matches[id];
         let subject = self.value(node.subject, None);
-        let Ty::Enum(enum_id) = subject else {
-            return self.scalar_match(expr, id, subject, expected, used);
+        let (enum_id, optional) = match subject {
+            Ty::Enum(id) => (id, false),
+            Ty::OptionalEnum(id) => (id, true),
+            _ => return self.scalar_match(expr, id, subject, expected, used),
         };
         let cases = &self.ast().enum_cases[self.ast().enums[enum_id].cases];
         if cases.len() > 256 {
@@ -2400,15 +2402,23 @@ impl<'i> Checker<'_, 'i> {
         let mut finite = [(usize::MAX, usize::MAX, [0u64; 4]); 32];
         let mut finite_limit = false;
         let mut fallback = false;
+        let mut null_covered = false;
         let mut result = expected;
         for arm in &self.ast().match_arms[node.arms] {
             let mark = self.mark();
             if let Some(literal) = arm.literal {
-                self.report(
-                    Code::TypeMismatch,
-                    "literal pattern does not match enum",
-                    self.span(literal),
-                );
+                if optional && matches!(self.ast().exprs[literal], Expr::Null(_)) {
+                    self.value(literal, Some(subject));
+                    if arm.guard.is_none() {
+                        null_covered = true;
+                    }
+                } else {
+                    self.report(
+                        Code::TypeMismatch,
+                        "literal pattern does not match enum",
+                        self.span(literal),
+                    );
+                }
             } else if let Some(case) = arm.case {
                 if let Some(qualifier) = arm.qualifier
                     && self.symbol(qualifier) != self.symbol(self.ast().enums[enum_id].name)
@@ -2467,11 +2477,15 @@ impl<'i> Checker<'_, 'i> {
                     );
                 }
                 if let Some(token) = arm.catch_binding {
-                    let binding = self.new_binding(token, false, subject);
+                    let binding = self.new_binding(token, false, Ty::Enum(enum_id));
                     self.out.pattern_bindings[token] = Some(binding);
                 }
                 if arm.guard.is_none() {
-                    fallback = true;
+                    if optional && arm.catch_binding.is_some() {
+                        covered[..cases.len()].fill(true);
+                    } else {
+                        fallback = true;
+                    }
                 }
             }
             if let Some(guard) = arm.guard {
@@ -2500,7 +2514,10 @@ impl<'i> Checker<'_, 'i> {
             }
             self.restore(mark);
         }
-        if cases.len() > 256 || (!fallback && covered[..cases.len()].iter().any(|seen| !seen)) {
+        if cases.len() > 256
+            || (!fallback
+                && ((optional && !null_covered) || covered[..cases.len()].iter().any(|seen| !seen)))
+        {
             if finite_limit {
                 self.report(
                     Code::Limit,

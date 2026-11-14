@@ -1313,7 +1313,36 @@ impl Eval<'_> {
             }
             Expr::Match(id) => {
                 let node = self.ast.matches[id];
-                let subject = self.expr(host, node.subject)?;
+                let subject = match self.expr(host, node.subject)? {
+                    Value::OptionalEnum(id, Some((tag, payload))) => Value::Enum(id, tag, payload),
+                    Value::OptionalEnum(_, None) => {
+                        let ast = self.ast;
+                        for &arm in &ast.match_arms[node.arms] {
+                            let matches = arm
+                                .literal
+                                .is_some_and(|e| matches!(ast.exprs[e], Expr::Null(_)))
+                                || (arm.literal.is_none()
+                                    && arm.case.is_none()
+                                    && arm.catch_binding.is_none());
+                            if !matches {
+                                continue;
+                            }
+                            if let Some(guard) = arm.guard
+                                && !self.expr(host, guard)?.bool()
+                            {
+                                continue;
+                            }
+                            return match arm.body {
+                                eitri_syntax::ast::MatchBody::Expr(expr) => self.expr(host, expr),
+                                eitri_syntax::ast::MatchBody::Block(block) => {
+                                    self.block(host, block)
+                                }
+                            };
+                        }
+                        unreachable!("checked optional enum match is exhaustive")
+                    }
+                    value => value,
+                };
                 let Value::Enum(enum_id, case, payload) = subject else {
                     let ast = self.ast;
                     for &arm in &ast.match_arms[node.arms] {
@@ -1384,6 +1413,9 @@ impl Eval<'_> {
                 let name = self.tokens.symbol(cases[case as usize].name);
                 let ast = self.ast;
                 for &arm in &ast.match_arms[node.arms] {
+                    if arm.literal.is_some() {
+                        continue;
+                    }
                     if arm
                         .case
                         .is_some_and(|token| self.tokens.symbol(token) != name)

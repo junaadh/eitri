@@ -1,0 +1,16 @@
+//! host: test
+import test from "test"
+enum Item { Empty, Text(value: string) }
+enum Box { Value(item: ?Item) }
+fn show(value: ?Item) -> string {
+    return match value { null => "null", .Empty => "empty", .Text(text) => text }
+}
+fn nested(value: Box) -> string {
+    return match value { .Value(null) => "null", .Value(.Empty) => "empty", .Value(.Text(text)) => text }
+}
+test.check(show(null) == "null" && show(Item.Empty) == "empty" && show(Item.Text("ok")) == "ok")
+test.check(nested(Box.Value(null)) == "null")
+test.check(nested(Box.Value(Item.Empty)) == "empty")
+test.check(nested(Box.Value(Item.Text("yes"))) == "yes")
+fn bind(value: ?Item) -> bool { return match value { item => item == Item.Empty, null => false } }
+test.check(bind(Item.Empty) && !bind(null))

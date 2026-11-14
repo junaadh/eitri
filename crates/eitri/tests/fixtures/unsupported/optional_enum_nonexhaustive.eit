@@ -1,0 +1,3 @@
+enum Item { Empty }
+let value: ?Item = null
+let result = match value { .Empty => 1 }

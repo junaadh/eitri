@@ -2481,3 +2481,17 @@ execution 250/292 ns, total 10.2/10.5 µs; retained context memory was
 30,898 B. This benchmark does not exercise optional aggregates. Samples:
 `/private/tmp/eitri-t017-47-samples.csv`; report:
 `/private/tmp/eitri-t017-47-bench.txt`.
+
+### T017-48 optional enum case patterns
+
+Optional enum subjects and enum payload fields match null or nested enum cases;
+the finite coverage check accounts for the null state and all enum cases.
+Patterns, managed strings and present bindings run under forced collection on
+both interpreters and lowerers.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 9,792/10,200 ns,
+execution 250/292 ns, total 10.0/10.5 µs; retained context memory was
+30,898 B. This benchmark does not exercise optional enum patterns. Samples:
+`/private/tmp/eitri-t017-48-samples.csv`; report:
+`/private/tmp/eitri-t017-48-bench.txt`.

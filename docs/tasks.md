@@ -804,6 +804,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
+- T017-48: optional enum subjects and payloads support nested case matching,
+  with null included in exhaustiveness and forced-collection fixtures.
 - T017-47: optional structs and enums use tagged inline payloads with nullable
   managed fields; calls, coalescing, equality, patterns, forced collection and
   recursive inline cycle rejection are covered.
