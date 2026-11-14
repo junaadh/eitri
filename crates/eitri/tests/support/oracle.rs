@@ -1615,6 +1615,28 @@ impl Eval<'_> {
             return Ok(Value::Enum(id, case, index));
         }
         match self.ast.exprs[e] {
+            Expr::TryMapBlock(id) | Expr::RecoverBlock(id) => {
+                let node = self.ast.recoveries[id];
+                let Value::Result(_, is_ok, payload) = self.expr(host, node.operand)? else {
+                    unreachable!()
+                };
+                let value = self.structs[payload as usize][0];
+                if is_ok {
+                    Ok(value)
+                } else {
+                    if let Some(binding) = self.checked.pattern_bindings[node.binding] {
+                        self.locals[binding.index()] = Some(value);
+                    }
+                    let mapped = self.block(host, node.block)?;
+                    if let Res::TryMapResult(id) = self.checked.resolutions[e] {
+                        let payload = self.structs.len() as u32;
+                        self.structs.push(vec![mapped]);
+                        Err(Unwind::Return(Value::Result(id, false, payload)))
+                    } else {
+                        Ok(mapped)
+                    }
+                }
+            }
             Expr::TryMap {
                 operand,
                 binding,
@@ -2436,15 +2458,37 @@ impl Eval<'_> {
                                     continue;
                                 };
                                 let expected = self.expr(host, literal)?;
-                                if !self
-                                    .binary_values(
+                                let matches = if let Some((end, inclusive)) = arm.range_end {
+                                    let limit = self.expr(host, end)?;
+                                    self.binary_values(
+                                        BinaryOp::GtEq,
+                                        value,
+                                        expected,
+                                        ast.span(literal),
+                                    )?
+                                    .bool()
+                                        && self
+                                            .binary_values(
+                                                if inclusive {
+                                                    BinaryOp::LtEq
+                                                } else {
+                                                    BinaryOp::Lt
+                                                },
+                                                value,
+                                                limit,
+                                                ast.span(end),
+                                            )?
+                                            .bool()
+                                } else {
+                                    self.binary_values(
                                         BinaryOp::Eq,
                                         value,
                                         expected,
                                         ast.span(literal),
                                     )?
                                     .bool()
-                                {
+                                };
+                                if !matches {
                                     continue;
                                 }
                             }

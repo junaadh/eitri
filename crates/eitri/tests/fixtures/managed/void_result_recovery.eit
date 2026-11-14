@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+fn action(ok: bool) -> Problem!void {
+    if ok { return }
+    return .Err(Problem.Bad("bad"))
+}
+fn fallback() -> void { test.emit(1) }
+action(true) else _ => fallback()
+action(false) else _ => fallback()
+action(false) else error => {
+    test.check(match error { .Bad(text) => text == "bad" })
+}
+test.check(true)

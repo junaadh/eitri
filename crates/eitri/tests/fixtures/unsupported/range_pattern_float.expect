@@ -1,0 +1,2 @@
+error[E0301] 46..50: range pattern requires an integer or character
+error[E0301] 46..50: type mismatch: expected `u8`, found `f64`

@@ -714,6 +714,13 @@ impl Dumper<'_> {
                     vec![base],
                 )
             }
+            Expr::TryMapBlock(id) | Expr::RecoverBlock(id) => {
+                let node = ast.recoveries[id];
+                (
+                    format!("{} {range} {ty}", self.paint(STMT, "RecoveryBlock")),
+                    vec![Node::Expr(node.operand), Node::Block(node.block)],
+                )
+            }
             Expr::TryMap {
                 operand, fallback, ..
             } => (

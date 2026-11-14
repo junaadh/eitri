@@ -1,6 +1,7 @@
 # Pattern matching
 
-The current implementation supports exhaustive scalar matches with literals and
+The current implementation supports exhaustive scalar matches with literals,
+integer and character range patterns, and
 catch-all arms (including boolean exhaustiveness), struct binding and wildcard
 arms, and enum matches using `.Case` or `Type.Case`,
 positional or labeled payload bindings, literals, qualified or shorthand nested
@@ -10,7 +11,9 @@ case patterns must supply exactly one pattern per payload field. Guards are
 supported; guards do not contribute to coverage. Optional subjects and payload patterns can match `null`, bind present values,
 or match cases of a present enum. The checker recognizes full
 coverage of one boolean or nested-enum payload field per pattern group, with
-up to 32 such groups per match; other partial patterns remain conservative. The remaining patterns
+up to 32 such groups per match. Exhaustiveness combines unguarded literals and
+ranges for `i8` and `u8`; other integer and character ranges require a catch-all.
+The remaining patterns
 below are the language contract for later work.
 
 ## `match`

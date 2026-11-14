@@ -305,6 +305,24 @@ impl Printer<'_> {
             ),
             Expr::SelfValue(token) | Expr::Name(token) => self.token(token).to_owned(),
             Expr::Member { base, name } => format!("{}.{}", self.expr(base), self.token(name)),
+            Expr::TryMapBlock(id) => {
+                let node = self.ast.recoveries[id];
+                format!(
+                    "(try-map-block {} {} {})",
+                    self.expr(node.operand),
+                    self.token(node.binding),
+                    self.block(node.block)
+                )
+            }
+            Expr::RecoverBlock(id) => {
+                let node = self.ast.recoveries[id];
+                format!(
+                    "(recover-block {} {} {})",
+                    self.expr(node.operand),
+                    self.token(node.binding),
+                    self.block(node.block)
+                )
+            }
             Expr::TryMap {
                 operand,
                 binding,

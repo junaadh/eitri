@@ -807,6 +807,16 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-96: fixed arrays nest to 32 dimensions for construction, copies, reads
+  and calls, with inline-cycle checking and managed roots; deeper writes remain.
+- T017-95: exhaustive `i8` and `u8` matches combine unguarded literals and
+  ranges using bounded coverage; optional matches additionally require null.
+- T017-94: integer and character range patterns support inclusive and exclusive
+  endpoints, optional subjects and signed and unsigned boundaries.
+- T017-93: `E!void` recovery executes expression or block fallbacks only on
+  errors, preserving ordered effects and managed payload roots.
+- T017-92: block-form result recovery and error mapping evaluate scoped
+  statements and preserve managed payloads and effect order.
 - T017-91: expression-form `try ... else` maps errors between named types
   and propagates the mapped value, preserving managed payloads and effects.
 - T017-90: expression-form result recovery with `else` binds the error and

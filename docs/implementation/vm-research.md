@@ -2937,3 +2937,44 @@ Mapped errors reuse the inline result payload and preserve early-return mutation
 results. The 1001-sample release harness in the isolated workspace measured fresh
 module compile p50/p99 13.6/16.3 µs and source-to-result 13.9/16.8 µs on the
 general workload. Raw samples: `/private/tmp/eitri-t017-91-samples.csv`.
+
+### T017-92 block recovery and mapping
+
+Block recovery uses the same result branch and scoped bindings as expression
+recovery. The 1001-sample release harness in the isolated workspace measured
+fresh module compile p50/p99 13.5/16.8 µs and source-to-result 13.9/17.2 µs on
+the general workload. Raw samples: `/private/tmp/eitri-t017-92-samples.csv`.
+
+### T017-93 void-result recovery
+
+Void recovery skips value moves and preserves the same conditional fallback and
+error-binding behavior. The 1001-sample release harness in the isolated
+workspace measured fresh module compile p50/p99 12.4/19.0 µs and source-to-result
+12.7/19.4 µs on the general workload. Raw output and samples are retained in
+`/private/tmp/eitri-t017-93-bench.txt` and `/private/tmp/eitri-t017-93-samples.csv`.
+
+### T017-94 scalar range patterns
+
+Range patterns branch directly on the checked subject, with unsigned comparisons
+for unsigned integers and characters. The 1001-sample release harness in the
+isolated workspace measured fresh module compile p50/p99 12.2/14.7 µs and
+source-to-result 12.5/15.0 µs on the general workload. Raw output and samples:
+`/private/tmp/eitri-t017-94-bench.txt` and `/private/tmp/eitri-t017-94-samples.csv`.
+
+### T017-95 byte-range coverage
+
+Exhaustiveness tracks the 256 possible byte values in four machine words, with
+at most 256 updates per pattern even for invalid literals. The 1001-sample
+release harness in the isolated workspace measured fresh module compile p50/p99
+12.2/15.4 µs and source-to-result 12.5/15.8 µs on the general workload. Raw
+output and samples: `/private/tmp/eitri-t017-95-bench.txt` and
+`/private/tmp/eitri-t017-95-samples.csv`.
+
+### T017-96 deeper fixed-array layouts
+
+Nested type parsing and inline-layout traversal are iterative, with a 32-dimension
+limit; existing lowering retains the bounded nested layouts and traces managed
+payloads. The 1001-sample release harness in the isolated workspace measured
+fresh module compile p50/p99 12.2/15.5 µs and source-to-result 12.5/15.9 µs on
+the general workload. Raw output and samples: `/private/tmp/eitri-t017-96-bench.txt`
+and `/private/tmp/eitri-t017-96-samples.csv`.

@@ -718,33 +718,38 @@ impl<'i> Checker<'_, 'i> {
                 return if let Some(size) = size {
                     match ty {
                         TypeExpr::FixedNested(_, inner_size, element) => {
+                            let last_size = TokenId::from_u32(element.as_u32() - 2);
                             let symbol = self.symbol(element);
                             let written = if symbol == eitri_base::sym::I64 {
-                                TypeExpr::FixedI64(inner_size)
+                                TypeExpr::FixedI64(last_size)
                             } else if symbol == eitri_base::sym::STRING {
-                                TypeExpr::FixedString(inner_size)
+                                TypeExpr::FixedString(last_size)
                             } else if symbol.is_type_name() {
-                                TypeExpr::FixedScalar(inner_size, element)
+                                TypeExpr::FixedScalar(last_size, element)
                             } else {
-                                TypeExpr::FixedNamed(inner_size, element)
+                                TypeExpr::FixedNamed(last_size, element)
                             };
-                            let inner = self.ty(written, false);
+                            let mut inner = self.ty(written, false);
+                            let mut at = last_size.as_u32();
+                            while inner != Ty::Error && at > inner_size.as_u32() {
+                                at -= 3;
+                                let token = TokenId::from_u32(at);
+                                let text = &self.input.text[self.token_span(token).range()];
+                                let Some(size) = text.parse::<u16>().ok().filter(|&n| n <= 256)
+                                else {
+                                    self.report(
+                                        Code::Limit,
+                                        "implementation limit: fixed array size must be 0 to 256",
+                                        self.token_span(token),
+                                    );
+                                    return Ty::Error;
+                                };
+                                inner = self.nested_fixed(size, inner);
+                            }
                             if inner == Ty::Error {
                                 Ty::Error
                             } else {
-                                let index = if let Some(index) = self
-                                    .out
-                                    .nested_fixed_types
-                                    .iter()
-                                    .position(|&item| item == inner)
-                                {
-                                    index
-                                } else {
-                                    let index = self.out.nested_fixed_types.len();
-                                    self.out.nested_fixed_types.push(inner);
-                                    index
-                                };
-                                Ty::FixedNested(size, index as u32)
+                                self.nested_fixed(size, inner)
                             }
                         }
                         TypeExpr::FixedOptional(_, element) => {
@@ -1084,23 +1089,7 @@ impl<'i> Checker<'_, 'i> {
                             | Ty::FixedString(size)
                             | Ty::FixedScalar(size, _)
                             | Ty::FixedClass(size, _) => u32::from(size).max(1),
-                            Ty::FixedNested(size, id) => {
-                                let inner = self.out.nested_fixed_types[id as usize];
-                                let width = match inner {
-                                    Ty::FixedI64(n)
-                                    | Ty::FixedString(n)
-                                    | Ty::FixedScalar(n, _)
-                                    | Ty::FixedClass(n, _) => u32::from(n).max(1),
-                                    Ty::FixedStruct(n, id) => u32::from(n)
-                                        .saturating_mul(self.out.struct_widths[id])
-                                        .max(1),
-                                    Ty::FixedEnum(n, id) => {
-                                        u32::from(n).saturating_mul(self.out.enum_widths[id]).max(1)
-                                    }
-                                    _ => 1,
-                                };
-                                u32::from(size).saturating_mul(width).max(1)
-                            }
+                            Ty::FixedNested(size, id) => self.nested_width(size, id),
                             Ty::OptionalFixed(id) => {
                                 let inner = self.out.optional_fixed_types[id as usize];
                                 1 + match inner {
@@ -1281,23 +1270,7 @@ impl<'i> Checker<'_, 'i> {
                     | Ty::FixedString(size)
                     | Ty::FixedScalar(size, _)
                     | Ty::FixedClass(size, _) => u32::from(size).max(1),
-                    Ty::FixedNested(size, id) => {
-                        let inner = self.out.nested_fixed_types[id as usize];
-                        let width = match inner {
-                            Ty::FixedI64(n)
-                            | Ty::FixedString(n)
-                            | Ty::FixedScalar(n, _)
-                            | Ty::FixedClass(n, _) => u32::from(n).max(1),
-                            Ty::FixedStruct(n, id) => u32::from(n)
-                                .saturating_mul(self.out.struct_widths[id])
-                                .max(1),
-                            Ty::FixedEnum(n, id) => {
-                                u32::from(n).saturating_mul(self.out.enum_widths[id]).max(1)
-                            }
-                            _ => 1,
-                        };
-                        u32::from(size).saturating_mul(width).max(1)
-                    }
+                    Ty::FixedNested(size, id) => self.nested_width(size, id),
                     Ty::OptionalFixed(id) => {
                         let inner = self.out.optional_fixed_types[id as usize];
                         1 + match inner {
@@ -1605,7 +1578,10 @@ impl<'i> Checker<'_, 'i> {
                 }
                 let child = fields[field];
                 let child_node = if let Ty::FixedNested(_, id) = child {
-                    let inner = self.out.nested_fixed_types[id as usize];
+                    let mut inner = self.out.nested_fixed_types[id as usize];
+                    while let Ty::FixedNested(_, id) = inner {
+                        inner = self.out.nested_fixed_types[id as usize];
+                    }
                     inner.fixed_inner().map_or(inner, |(_, inner)| inner)
                 } else if let Ty::OptionalFixed(id) = child {
                     let inner = self.out.optional_fixed_types[id as usize];
@@ -1672,23 +1648,7 @@ impl<'i> Checker<'_, 'i> {
                         | Ty::FixedString(size)
                         | Ty::FixedScalar(size, _)
                         | Ty::FixedClass(size, _) => u32::from(size).max(1),
-                        Ty::FixedNested(size, id) => {
-                            let inner = self.out.nested_fixed_types[id as usize];
-                            let width = match inner {
-                                Ty::FixedI64(n)
-                                | Ty::FixedString(n)
-                                | Ty::FixedScalar(n, _)
-                                | Ty::FixedClass(n, _) => u32::from(n).max(1),
-                                Ty::FixedStruct(n, id) => u32::from(n)
-                                    .saturating_mul(self.out.struct_widths[id])
-                                    .max(1),
-                                Ty::FixedEnum(n, id) => {
-                                    u32::from(n).saturating_mul(self.out.enum_widths[id]).max(1)
-                                }
-                                _ => 1,
-                            };
-                            u32::from(size).saturating_mul(width).max(1)
-                        }
+                        Ty::FixedNested(size, id) => self.nested_width(size, id),
                         Ty::OptionalFixed(id) => {
                             let inner = self.out.optional_fixed_types[id as usize];
                             1 + match inner {
@@ -1887,6 +1847,27 @@ impl<'i> Checker<'_, 'i> {
     // ---- statements ------------------------------------------------------
 
     /// A block in its own scope, values discarded.
+    fn reject_deep_index_write(&mut self, mut target: ExprId) {
+        loop {
+            match self.ast().exprs[target] {
+                Expr::Index { base, .. } => {
+                    if let Ty::FixedNested(_, id) = self.out.types[base]
+                        && matches!(
+                            self.out.nested_fixed_types[id as usize],
+                            Ty::FixedNested(_, _)
+                        )
+                    {
+                        self.report(Code::Unsupported, "not supported yet: writes through fixed arrays deeper than two dimensions", self.span(target));
+                        return;
+                    }
+                    target = base;
+                }
+                Expr::Member { base, .. } => target = base,
+                _ => return,
+            }
+        }
+    }
+
     fn statements(&mut self, block: Block) {
         let mark = self.mark();
         for &stmt in self.input.ast.block(block) {
@@ -1930,6 +1911,7 @@ impl<'i> Checker<'_, 'i> {
                 target, op, value, ..
             } => {
                 let element_ty = self.value(target, None);
+                self.reject_deep_index_write(target);
                 let Expr::Index { base, .. } = self.ast().exprs[target] else {
                     unreachable!()
                 };
@@ -1988,6 +1970,7 @@ impl<'i> Checker<'_, 'i> {
                 target, op, value, ..
             } => {
                 let ty = self.value(target, None);
+                self.reject_deep_index_write(target);
                 let Expr::Member { base, .. } = self.ast().exprs[target] else {
                     unreachable!()
                 };
@@ -2229,6 +2212,55 @@ impl<'i> Checker<'_, 'i> {
 
     /// Check `expr` as a value against `expected`, reporting a mismatch at
     /// its span. Returns its own type.
+    fn nested_fixed(&mut self, size: u16, inner: Ty) -> Ty {
+        let index = if let Some(index) = self
+            .out
+            .nested_fixed_types
+            .iter()
+            .position(|&item| item == inner)
+        {
+            index
+        } else {
+            let index = self.out.nested_fixed_types.len();
+            self.out.nested_fixed_types.push(inner);
+            index
+        };
+        Ty::FixedNested(size, index as u32)
+    }
+
+    fn nested_width(&self, mut size: u16, mut id: u32) -> u32 {
+        let mut factor = 1u32;
+        loop {
+            if size == 0 {
+                return factor;
+            }
+            factor = factor.saturating_mul(u32::from(size));
+            match self.out.nested_fixed_types[id as usize] {
+                Ty::FixedNested(next_size, next_id) => {
+                    size = next_size;
+                    id = next_id;
+                }
+                Ty::FixedI64(n)
+                | Ty::FixedString(n)
+                | Ty::FixedScalar(n, _)
+                | Ty::FixedClass(n, _) => return factor.saturating_mul(u32::from(n).max(1)),
+                Ty::FixedStruct(n, id) => {
+                    return factor.saturating_mul(
+                        u32::from(n)
+                            .saturating_mul(self.out.struct_widths[id])
+                            .max(1),
+                    );
+                }
+                Ty::FixedEnum(n, id) => {
+                    return factor.saturating_mul(
+                        u32::from(n).saturating_mul(self.out.enum_widths[id]).max(1),
+                    );
+                }
+                _ => return factor,
+            }
+        }
+    }
+
     fn fixed_inner(&self, ty: Ty) -> Option<(u16, Ty)> {
         match ty {
             Ty::FixedOptional(size, id) => Some((size, self.out.fixed_optional_types[id as usize])),
@@ -2335,6 +2367,68 @@ impl<'i> Checker<'_, 'i> {
                 }
                 Ty::Char
             }
+            Expr::TryMapBlock(id) => {
+                let node = self.ast().recoveries[id];
+                let source = self.value(node.operand, None);
+                let enclosing = self.current.map(|f| f.ret);
+                match (source, enclosing) {
+                    (Ty::Result(source_id), Some(Ty::Result(target_id))) => {
+                        let (source_error, success) = self.out.result_types[source_id as usize];
+                        let (target_error, _) = self.out.result_types[target_id as usize];
+                        let mark = self.mark();
+                        if self.input.tokens.kind(node.binding) != eitri_syntax::TokenKind::Wildcard
+                        {
+                            let binding = self.new_binding(node.binding, false, source_error);
+                            self.out.pattern_bindings[node.binding] = Some(binding);
+                        }
+                        self.block_value(node.block, Some(target_error));
+                        self.restore(mark);
+                        self.out.resolutions[expr] = Res::TryMapResult(target_id);
+                        success
+                    }
+                    (Ty::Error, _) => Ty::Error,
+                    _ => {
+                        self.report(
+                            Code::TypeMismatch,
+                            "try mapping requires a result inside a result-returning function",
+                            self.span(expr),
+                        );
+                        Ty::Error
+                    }
+                }
+            }
+            Expr::RecoverBlock(id) => {
+                let node = self.ast().recoveries[id];
+                let source = self.value(node.operand, None);
+                if let Ty::Result(id) = source {
+                    let (error, success) = self.out.result_types[id as usize];
+                    {
+                        let mark = self.mark();
+                        if self.input.tokens.kind(node.binding) != eitri_syntax::TokenKind::Wildcard
+                        {
+                            let binding = self.new_binding(node.binding, false, error);
+                            self.out.pattern_bindings[node.binding] = Some(binding);
+                        }
+                        if success == Ty::Void {
+                            self.statements(node.block);
+                        } else {
+                            self.block_value(node.block, Some(success));
+                        }
+                        self.restore(mark);
+                        self.out.resolutions[expr] = Res::RecoverResult(id);
+                        success
+                    }
+                } else {
+                    if source != Ty::Error {
+                        self.report(
+                            Code::TypeMismatch,
+                            "else recovery requires a result",
+                            self.span(expr),
+                        );
+                    }
+                    Ty::Error
+                }
+            }
             Expr::TryMap {
                 operand,
                 binding,
@@ -2375,14 +2469,7 @@ impl<'i> Checker<'_, 'i> {
                 let source = self.value(operand, None);
                 if let Ty::Result(id) = source {
                     let (error, success) = self.out.result_types[id as usize];
-                    if success == Ty::Void {
-                        self.report(
-                            Code::Unsupported,
-                            "not supported yet: recovery of void",
-                            self.span(expr),
-                        );
-                        Ty::Error
-                    } else {
+                    {
                         let mark = self.mark();
                         if self.input.tokens.kind(binding) != eitri_syntax::TokenKind::Wildcard {
                             let id = self.new_binding(binding, false, error);
@@ -3296,6 +3383,20 @@ impl<'i> Checker<'_, 'i> {
     ) -> Ty {
         let node = self.ast().matches[id];
         let subject = self.value(node.subject, None);
+        if matches!(
+            subject,
+            Ty::Enum(_) | Ty::OptionalEnum(_) | Ty::Result(_) | Ty::OptionalResult(_)
+        ) {
+            for arm in &self.ast().match_arms[node.arms] {
+                if let Some((end, _)) = arm.range_end {
+                    self.report(
+                        Code::TypeMismatch,
+                        "range pattern requires an integer or character",
+                        self.span(end),
+                    );
+                }
+            }
+        }
         if let Ty::Result(result_id) | Ty::OptionalResult(result_id) = subject {
             return self.result_match(
                 expr,
@@ -3713,6 +3814,8 @@ impl<'i> Checker<'_, 'i> {
         let mut present = false;
         let mut null = false;
         let mut booleans = [false; 2];
+        // Bounded work: at most 256 bit updates per pattern and four words of storage.
+        let mut narrow_coverage = [0u64; 4];
         let mut result = expected;
         for arm in &self.ast().match_arms[node.arms] {
             let mark = self.mark();
@@ -3726,6 +3829,46 @@ impl<'i> Checker<'_, 'i> {
                         inner.unwrap_or(subject)
                     }),
                 );
+                if let Some((end, _)) = arm.range_end {
+                    let ty = inner.unwrap_or(subject);
+                    if (!ty.integer() && ty != Ty::Char)
+                        || !matches!(self.ast().exprs[literal], Expr::Int { .. } | Expr::Char(_))
+                        || !matches!(self.ast().exprs[end], Expr::Int { .. } | Expr::Char(_))
+                    {
+                        self.report(
+                            Code::TypeMismatch,
+                            "range pattern requires an integer or character",
+                            self.span(end),
+                        );
+                    }
+                    self.value(end, Some(ty));
+                }
+                let scalar = inner.unwrap_or(subject);
+                if arm.guard.is_none()
+                    && matches!(scalar, Ty::I8 | Ty::U8)
+                    && let Some(first) = self.out.int_value(literal)
+                {
+                    let end = if let Some((end, inclusive)) = arm.range_end {
+                        self.out
+                            .int_value(end)
+                            .map(|last| last.saturating_sub(i64::from(!inclusive)))
+                    } else {
+                        Some(first)
+                    };
+                    if let Some(end) = end {
+                        let offset = if scalar == Ty::I8 { 128 } else { 0 };
+                        // Clamp even invalid literals: diagnostics must not permit
+                        // hostile spellings to turn coverage into an unbounded loop.
+                        let first = first.max(-offset);
+                        let end = end.min(255 - offset);
+                        for value in first..=end {
+                            let index = (value + offset) as usize;
+                            if index < 256 {
+                                narrow_coverage[index / 64] |= 1 << (index % 64);
+                            }
+                        }
+                    }
+                }
                 if arm.guard.is_none() && is_null && inner.is_some() {
                     null = true;
                 }
@@ -3788,11 +3931,13 @@ impl<'i> Checker<'_, 'i> {
             self.restore(mark);
         }
         let bool_covered = inner.unwrap_or(subject) == Ty::Bool && booleans.iter().all(|x| *x);
+        let narrow_covered = matches!(inner.unwrap_or(subject), Ty::I8 | Ty::U8)
+            && narrow_coverage.iter().all(|&word| word == u64::MAX);
         if !fallback
             && !(if inner.is_some() {
-                null && (present || bool_covered)
+                null && (present || bool_covered || narrow_covered)
             } else {
-                bool_covered
+                bool_covered || narrow_covered
             })
             && subject != Ty::Error
         {

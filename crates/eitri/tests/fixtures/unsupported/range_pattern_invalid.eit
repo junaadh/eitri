@@ -1,0 +1,2 @@
+let x: ?i64 = null
+let a = match x { null..=2 => 1, _ => 0 }

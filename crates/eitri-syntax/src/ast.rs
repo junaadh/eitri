@@ -27,6 +27,7 @@ eitri_base::newtype_index! {
     pub struct StructId;
     pub struct EnumId;
     pub struct MatchId;
+    pub struct RecoveryId;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +110,8 @@ pub enum Expr {
         name: TokenId,
     },
     Try(ExprId),
+    TryMapBlock(RecoveryId),
+    RecoverBlock(RecoveryId),
     TryMap {
         operand: ExprId,
         binding: TokenId,
@@ -147,6 +150,13 @@ pub enum Expr {
     Match(MatchId),
     /// An unsupported or malformed construct, already reported.
     Error,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecoveryBlock {
+    pub operand: ExprId,
+    pub binding: TokenId,
+    pub block: Block,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,6 +294,7 @@ pub struct MatchBinding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MatchArm {
     pub literal: Option<ExprId>,
+    pub range_end: Option<(ExprId, bool)>,
     pub case: Option<TokenId>,
     pub qualifier: Option<TokenId>,
     pub catch_binding: Option<TokenId>,
@@ -362,6 +373,7 @@ pub struct Ast {
     pub stmts: IndexVec<StmtId, Stmt>,
     pub exprs: IndexVec<ExprId, Expr>,
     pub ifs: IndexVec<IfId, IfExpr>,
+    pub recoveries: IndexVec<RecoveryId, RecoveryBlock>,
     pub fors: IndexVec<ForId, ForStmt>,
     pub expr_spans: IndexVec<ExprId, Span>,
     pub expr_lists: ListPool<ExprId>,
@@ -391,6 +403,7 @@ impl Ast {
             + self.stmts.capacity() * size_of::<Stmt>()
             + self.exprs.capacity() * size_of::<Expr>()
             + self.ifs.capacity() * size_of::<IfExpr>()
+            + self.recoveries.capacity() * size_of::<RecoveryBlock>()
             + self.fors.capacity() * size_of::<ForStmt>()
             + self.expr_spans.capacity() * size_of::<Span>()
             + self.expr_lists.heap_bytes()
@@ -427,6 +440,8 @@ impl Ast {
             .reserve_budgeted(count.saturating_sub(self.exprs.len()), budget)?;
         self.ifs
             .reserve_budgeted(count.saturating_sub(self.ifs.len()), budget)?;
+        self.recoveries
+            .reserve_budgeted(count.saturating_sub(self.recoveries.len()), budget)?;
         self.fors
             .reserve_budgeted(count.saturating_sub(self.fors.len()), budget)?;
         self.expr_spans
@@ -451,6 +466,7 @@ impl Ast {
         self.stmts.clear();
         self.exprs.clear();
         self.ifs.clear();
+        self.recoveries.clear();
         self.fors.clear();
         self.expr_spans.clear();
         self.expr_lists.clear();

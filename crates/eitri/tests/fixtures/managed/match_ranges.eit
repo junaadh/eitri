@@ -1,0 +1,19 @@
+//! host: test
+import test from "test"
+fn classify(x: i64) -> i64 {
+    return match x { -3..0 => 1, 0..=3 => 2, _ => 3 }
+}
+fn letter(c: char) -> bool { return match c { 'a'..='z' => true, _ => false } }
+fn upper(x: u64) -> bool { return match x { 9223372036854775808..=18446744073709551615 => true, _ => false } }
+fn optional(x: ?i64) -> i64 { return match x { null => 0, 1..=2 => 1, _ => 2 } }
+test.check(classify(-3) == 1)
+test.check(classify(0) == 2)
+test.check(classify(3) == 2)
+test.check(classify(4) == 3)
+test.check(letter('z'))
+test.check(!letter('A'))
+test.check(upper(18446744073709551615))
+test.check(!upper(4))
+test.check(optional(null) == 0)
+test.check(optional(2) == 1)
+test.check(optional(3) == 2)

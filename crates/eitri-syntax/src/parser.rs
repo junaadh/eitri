@@ -640,6 +640,17 @@ impl Parser<'_> {
                 } else {
                     None
                 };
+                let range_end =
+                    if literal.is_some() && matches!(self.kind(), T::DotDot | T::DotDotEq) {
+                        let inclusive = self.at(T::DotDotEq);
+                        self.bump();
+                        if !matches!(self.kind(), T::Int | T::Char | T::Minus) {
+                            return Err(self.expected("an integer or character literal"));
+                        }
+                        Some((self.prefix(true)?, inclusive))
+                    } else {
+                        None
+                    };
                 let (case, qualifier, catch_binding) =
                     if literal.is_some() || self.eat(T::Wildcard).is_some() {
                         (None, None, None)
@@ -676,6 +687,7 @@ impl Parser<'_> {
                 };
                 self.match_arms.push(crate::ast::MatchArm {
                     literal,
+                    range_end,
                     case,
                     qualifier,
                     catch_binding,
@@ -941,22 +953,40 @@ impl Parser<'_> {
     }
 
     fn type_expr(&mut self) -> Parsed<TypeExpr> {
-        if self.at(T::LBracket)
-            && self.nth(1) == T::Int
-            && self.nth(2) == T::RBracket
-            && self.nth(3) == T::LBracket
-            && self.nth(4) == T::Int
-            && self.nth(5) == T::RBracket
-            && self.nth(6) == T::Ident
+        // Scan a nested fixed-array type iteratively so source nesting cannot
+        // grow the parser stack. Lowering has a bounded type nesting limit.
+        let mut dimensions = 0u32;
+        while self.nth(dimensions * 3) == T::LBracket
+            && self.nth(dimensions * 3 + 1) == T::Int
+            && self.nth(dimensions * 3 + 2) == T::RBracket
         {
-            self.bump();
-            let outer = self.bump();
-            self.bump();
-            self.bump();
-            let inner = self.bump();
-            self.bump();
+            dimensions += 1;
+        }
+        if dimensions >= 2 && self.nth(dimensions * 3) == T::Ident {
+            let start = self.current_span();
+            let mut outer = None;
+            let mut inner = None;
+            for index in 0..dimensions {
+                self.bump();
+                let size = self.bump();
+                self.bump();
+                if index == 0 {
+                    outer = Some(size);
+                }
+                if index == 1 {
+                    inner = Some(size);
+                }
+            }
             let element = self.bump();
-            return Ok(TypeExpr::FixedNested(outer, inner, element));
+            if dimensions > 32 {
+                self.unsupported(start, "fixed array nesting beyond 32 dimensions");
+                return Ok(TypeExpr::Error);
+            }
+            return Ok(TypeExpr::FixedNested(
+                outer.unwrap(),
+                inner.unwrap(),
+                element,
+            ));
         }
         if self.at(T::QuestionBracket)
             && self.nth(1) == T::Int
@@ -1585,6 +1615,10 @@ impl Parser<'_> {
             let operand = self.postfix(ns);
             self.leave();
             let operand = operand?;
+            if !optional && let Expr::RecoverBlock(id) = self.ast.exprs[operand] {
+                let block = self.ast.recoveries[id].block;
+                return Ok(self.ast.expr(Expr::TryMapBlock(id), start.to(block.span)));
+            }
             if !optional
                 && let Expr::Recover {
                     operand,
@@ -1721,6 +1755,15 @@ impl Parser<'_> {
                     self.bump();
                     let binding = self.bump();
                     self.bump();
+                    if self.at(T::LBrace) {
+                        let block = self.block()?;
+                        let id = self.ast.recoveries.push(crate::ast::RecoveryBlock {
+                            operand: expr,
+                            binding,
+                            block,
+                        });
+                        return Ok(self.ast.expr(Expr::RecoverBlock(id), start.to(block.span)));
+                    }
                     let fallback = self.expr(false)?;
                     let span = start.to(self.ast.span(fallback));
                     return Ok(self.ast.expr(

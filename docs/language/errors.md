@@ -4,12 +4,12 @@ The current implementation supports named `E!T` results in script functions
 and locals, implicit and explicit success, explicit errors, matching, equality,
 and `void` or fixed-array success, including fields of structs, classes, and enums. Optional
 results `?<E!T>` preserve null, success, and error states. Compound
-result type syntax, some result pattern coverage, block-form recovery and mapping, and host
+result type syntax, some result pattern coverage and host
 result signatures remain future work.
 Plain `try` propagates matching errors from script functions, and expression-form
 `try ... else` maps errors; `try?` yields an
 optional value for supported success types, including optional successes with
-collapse. Expression-form `else` recovery supports non-void success values.
+collapse. `else` recovery supports expression and block fallbacks, including for `void` success values.
 
 Eitri separates two kinds of failure:
 

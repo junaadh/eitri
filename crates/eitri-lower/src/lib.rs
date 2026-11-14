@@ -2709,6 +2709,97 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             return Ok(slot);
         }
         match ast.exprs[e] {
+            Expr::TryMapBlock(node_id) => {
+                let node = ast.recoveries[node_id];
+                let Ty::Result(source_id) = checked.types[node.operand] else {
+                    unreachable!()
+                };
+                let Res::TryMapResult(target_id) = checked.resolutions[e] else {
+                    unreachable!()
+                };
+                let (source_error, success) = checked.result_types[source_id as usize];
+                let (target_error, _) = checked.result_types[target_id as usize];
+                let target = if success == Ty::Void {
+                    0
+                } else if let Some(dst) = dst {
+                    dst
+                } else {
+                    let slot = self.top;
+                    self.top += self.width(success);
+                    slot
+                };
+                let source = self.expr(node.operand, None)?;
+                let ok = self.asm.label();
+                self.asm.branch_imm(Cond::Ne, source, 0, ok, span)?;
+                if let Some(binding) = checked.pattern_bindings[node.binding] {
+                    let slot = self.top;
+                    self.top += self.width(source_error);
+                    self.slots[binding] = slot;
+                    self.move_nullable(source_error, source + 1, slot, false, span)?;
+                }
+                let mapped = self.top;
+                self.top += self.width(target_error);
+                self.block_value(node.block, mapped)?;
+                self.result_value(None, target_id, false, None, Some(0), span)?;
+                self.move_nullable(target_error, mapped, 1, true, span)?;
+                self.write_mutation_result(span)?;
+                self.asm.ret(span)?;
+                self.asm.bind(ok)?;
+                if success != Ty::Void {
+                    self.move_nullable(
+                        success,
+                        source + 1 + self.width(source_error),
+                        target,
+                        false,
+                        span,
+                    )?;
+                }
+                Ok(target)
+            }
+            Expr::RecoverBlock(node_id) => {
+                let node = ast.recoveries[node_id];
+                let Res::RecoverResult(id) = checked.resolutions[e] else {
+                    unreachable!()
+                };
+                let (error, success) = checked.result_types[id as usize];
+                let target = if success == Ty::Void {
+                    0
+                } else if let Some(dst) = dst {
+                    dst
+                } else {
+                    let slot = self.top;
+                    self.top += self.width(success);
+                    slot
+                };
+                let source = self.expr(node.operand, None)?;
+                let failure = self.asm.label();
+                let done = self.asm.label();
+                self.asm.branch_imm(Cond::Eq, source, 0, failure, span)?;
+                if success != Ty::Void {
+                    self.move_nullable(
+                        success,
+                        source + 1 + self.width(error),
+                        target,
+                        false,
+                        span,
+                    )?;
+                }
+                self.asm.jump(done, span);
+                self.asm.bind(failure)?;
+                if let Some(binding) = checked.pattern_bindings[node.binding] {
+                    let slot = self.top;
+                    self.top += self.width(error);
+                    self.slots[binding] = slot;
+                    self.move_nullable(error, source + 1, slot, false, span)?;
+                }
+                if success == Ty::Void {
+                    self.statements(node.block)?;
+                } else {
+                    self.block_value(node.block, target)?;
+                }
+                self.asm.bind(done)?;
+                Ok(target)
+            }
             Expr::TryMap {
                 operand,
                 binding,
@@ -2766,7 +2857,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     unreachable!("checked recovery")
                 };
                 let (error, success) = checked.result_types[id as usize];
-                let target = if let Some(dst) = dst {
+                let target = if success == Ty::Void {
+                    0
+                } else if let Some(dst) = dst {
                     dst
                 } else {
                     let slot = self.top;
@@ -2777,7 +2870,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let failure = self.asm.label();
                 let done = self.asm.label();
                 self.asm.branch_imm(Cond::Eq, source, 0, failure, span)?;
-                self.move_nullable(success, source + 1 + self.width(error), target, false, span)?;
+                if success != Ty::Void {
+                    self.move_nullable(
+                        success,
+                        source + 1 + self.width(error),
+                        target,
+                        false,
+                        span,
+                    )?;
+                }
                 self.asm.jump(done, span);
                 self.asm.bind(failure)?;
                 if let Some(binding) = checked.pattern_bindings[binding] {
@@ -2786,7 +2887,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     self.slots[binding] = error_slot;
                     self.move_nullable(error, source + 1, error_slot, false, span)?;
                 }
-                self.expr(fallback, Some(target))?;
+                if success == Ty::Void {
+                    self.discard(fallback)?;
+                } else {
+                    self.expr(fallback, Some(target))?;
+                }
                 self.asm.bind(done)?;
                 Ok(target)
             }
@@ -5084,7 +5189,24 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     let source = self.match_present(subject, subject_ty, next, span)?;
                     let compare_ty = inner.unwrap_or(subject_ty);
                     let value = self.expr(literal, None)?;
-                    if compare_ty == Ty::String {
+                    if let Some((end, inclusive)) = arm.range_end {
+                        let unsigned = !compare_ty.signed();
+                        self.asm.branch_if(
+                            if unsigned { Cond::Lo } else { Cond::Lt },
+                            source,
+                            value,
+                            next,
+                            span,
+                        )?;
+                        let limit = self.expr(end, None)?;
+                        let cond = match (unsigned, inclusive) {
+                            (false, true) => Cond::Lt,
+                            (true, true) => Cond::Lo,
+                            (false, false) => Cond::Le,
+                            (true, false) => Cond::Ls,
+                        };
+                        self.asm.branch_if(cond, limit, source, next, span)?;
+                    } else if compare_ty == Ty::String {
                         let cmp = self.temp();
                         let zero = self.temp();
                         self.asm.load(zero, 0, ValueType::I64, span)?;

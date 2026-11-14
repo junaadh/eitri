@@ -1,0 +1,8 @@
+//! host: test
+import test from "test"
+fn byte(x: u8) -> i64 { return match x { 0..128 => 1, 128..=255 => 2 } }
+fn signed(x: i8) -> i64 { return match x { -128..0 => -1, 0..=126 => 0, 127 => 1 } }
+fn maybe(x: ?u8) -> i64 { return match x { null => 0, 0..=255 => 1 } }
+test.check(byte(127) == 1 && byte(255) == 2)
+test.check(signed(-128) == -1 && signed(127) == 1)
+test.check(maybe(null) == 0 && maybe(255) == 1)

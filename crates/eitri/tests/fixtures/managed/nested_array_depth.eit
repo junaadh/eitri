@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+struct Cell { name: string }
+struct Box { values: [2][2][2]Cell, other: i64 }
+fn copy(a: [2][2][2]Cell) -> [2][2][2]Cell { return a }
+let a: [2][2][2]Cell = [[[Cell { name: "a" }, Cell { name: "b" }], [Cell { name: "c" }, Cell { name: "d" }]], [[Cell { name: "e" }, Cell { name: "f" }], [Cell { name: "g" }, Cell { name: "h" }]]]
+let b = Box { values: copy(a), other: 42 }
+test.check(b.values[1][0][1].name == "f")
+test.check(b.values[0][1][1].name == "d")
+test.check(b.other == 42)
+let empty: [2][0][1]Cell = [[], []]
+struct EmptyHolder { a: [2][0][1]Cell, b: string }
+let holder = EmptyHolder { a: empty, b: "after" }
+test.check(holder.b == "after")
