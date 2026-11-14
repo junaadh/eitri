@@ -2907,3 +2907,11 @@ fixed windows. The 1001-sample release harness in the isolated workspace
 measured fresh module compile p50/p99 14.2/19.2 µs and source-to-result
 14.5/19.6 µs on the general workload. Raw samples:
 `/private/tmp/eitri-t017-87-samples.csv`.
+
+### T017-88 two-index fixed-array writes
+
+Indexed writes select and refresh the row and element through bounded windows,
+preserving source-order effects and sibling changes. The 1001-sample release
+harness in the isolated workspace measured fresh module compile p50/p99
+13.6/19.9 µs and source-to-result 14.0/20.2 µs on the general workload. Raw
+samples: `/private/tmp/eitri-t017-88-samples.csv`.

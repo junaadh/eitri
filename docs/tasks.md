@@ -807,6 +807,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-88: two-index writes update nested fixed arrays in locals, structs
+  and classes, preserving bounds faults and host-effect order.
 - T017-87: two-dimensional fixed arrays support construction, value copies,
   reads, row updates, aggregate fields, empty dimensions and cycle rejection.
 - T017-86: optional fixed arrays support null, value conversion, coalescing,

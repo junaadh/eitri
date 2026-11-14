@@ -1,0 +1,20 @@
+//! host: test
+import test from "test"
+var values: [2][2]i64 = [[1, 2], [3, 4]]
+let copy = values
+values[0][1] = 9
+values[1][0] += 5
+test.check(values[0][1] == 9 && values[1][0] == 8 && copy[0][1] == 2)
+struct Holder { values: [2][2]string }
+var holder = Holder { values: [["a", "b"], ["c", "d"]] }
+holder.values[1][0] = "changed"
+test.check(holder.values[1][0] == "changed")
+class Store { values: [2][2]string }
+let store = Store { values: [["a", "b"], ["c", "d"]] }
+store.values[0][1] = "updated"
+test.check(store.values[0][1] == "updated")
+fn row() -> i64 { test.emit(1); return 0 }
+fn col() -> i64 { test.emit(2); return 1 }
+fn replacement() -> i64 { test.emit(3); return 12 }
+values[row()][col()] = replacement()
+test.check(values[0][1] == 12)

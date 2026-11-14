@@ -495,6 +495,10 @@ impl Eval<'_> {
                 let Expr::Index { base, index } = self.ast.exprs[target] else {
                     unreachable!()
                 };
+                if matches!(self.ast.exprs[base], Expr::Index { .. }) {
+                    self.assign_nested_index(host, id, target, op, value, span)?;
+                    return Ok(Value::Void);
+                }
                 let binding = self.checked.stmt_bindings[id].expect("checked array binding");
                 let class_target = if let Some((object_expr, implicit, field, root)) =
                     self.class_field_root(base)
@@ -1038,6 +1042,152 @@ impl Eval<'_> {
             }
         }
         Ok(true)
+    }
+
+    fn assign_nested_index(
+        &mut self,
+        host: &mut dyn Host,
+        id: eitri_syntax::ast::StmtId,
+        target: ExprId,
+        op: AssignOp,
+        value: ExprId,
+        span: Span,
+    ) -> Flow<()> {
+        let Expr::Index {
+            base: row_expr,
+            index: col_expr,
+        } = self.ast.exprs[target]
+        else {
+            unreachable!()
+        };
+        let Expr::Index {
+            base,
+            index: row_expr_index,
+        } = self.ast.exprs[row_expr]
+        else {
+            unreachable!()
+        };
+        let binding = self.checked.stmt_bindings[id].unwrap();
+        let class_target =
+            if let Some((object_expr, implicit, field, root)) = self.class_field_root(base) {
+                let object = if let Some(expr) = object_expr {
+                    self.expr(host, expr)?
+                } else {
+                    self.read(implicit.unwrap())
+                };
+                let Value::Class(_, object) = object else {
+                    unreachable!()
+                };
+                let mut path = Vec::new();
+                let mut cursor = base;
+                while cursor != root {
+                    let Expr::Member { base, .. } = self.ast.exprs[cursor] else {
+                        unreachable!()
+                    };
+                    let Res::Field(index) = self.checked.resolutions[cursor] else {
+                        unreachable!()
+                    };
+                    path.push(index as usize);
+                    cursor = base;
+                }
+                path.reverse();
+                Some((object, field as usize, path))
+            } else {
+                None
+            };
+        let row_index = self.expr(host, row_expr_index)?.int();
+        let outer = if let Some((object, field, path)) = &class_target {
+            let mut current = self.structs[*object as usize][*field];
+            for &index in path {
+                let Value::Struct(_, nested) = current else {
+                    unreachable!()
+                };
+                current = self.structs[nested as usize][index];
+            }
+            current
+        } else {
+            self.expr(host, base)?
+        };
+        let Value::FixedScalar(Ty::FixedNested(rows, _), outer_id) = outer else {
+            unreachable!()
+        };
+        if row_index < 0 || row_index as u64 >= u64::from(rows) {
+            return Err(self.fault("index out of bounds", self.ast.span(row_expr)));
+        }
+        let col_index = self.expr(host, col_expr)?.int();
+        let row = self.structs[outer_id as usize][row_index as usize];
+        let (size, row_id) = match row {
+            Value::FixedI64(size, id) | Value::FixedString(size, id) => (size, id),
+            Value::FixedScalar(ty, id) => (ty.fixed_inner().unwrap().0, id),
+            _ => unreachable!(),
+        };
+        if col_index < 0 || col_index as u64 >= u64::from(size) {
+            return Err(self.fault("index out of bounds", self.ast.span(target)));
+        }
+        let old = self.structs[row_id as usize][col_index as usize];
+        let rhs = self.expr(host, value)?;
+        let result = match op {
+            AssignOp::Set => rhs,
+            AssignOp::Compound(op) => self.binary_values(op, old, rhs, span)?,
+        };
+        let refreshed = if let Some((object, field, path)) = &class_target {
+            let mut current = self.structs[*object as usize][*field];
+            for &index in path {
+                let Value::Struct(_, nested) = current else {
+                    unreachable!()
+                };
+                current = self.structs[nested as usize][index];
+            }
+            current
+        } else {
+            self.expr(host, base)?
+        };
+        let Value::FixedScalar(outer_ty, outer_id) = refreshed else {
+            unreachable!()
+        };
+        let row = self.structs[outer_id as usize][row_index as usize];
+        let (row_ty, row_id) = match row {
+            Value::FixedI64(size, id) => (Ty::FixedI64(size), id),
+            Value::FixedString(size, id) => (Ty::FixedString(size), id),
+            Value::FixedScalar(ty, id) => (ty, id),
+            _ => unreachable!(),
+        };
+        let mut items = self.structs[row_id as usize].clone();
+        items[col_index as usize] = result;
+        let next_row = self.structs.len() as u32;
+        self.structs.push(items);
+        let row = match row_ty {
+            Ty::FixedI64(size) => Value::FixedI64(size, next_row),
+            Ty::FixedString(size) => Value::FixedString(size, next_row),
+            ty => Value::FixedScalar(ty, next_row),
+        };
+        let mut rows = self.structs[outer_id as usize].clone();
+        rows[row_index as usize] = row;
+        let next_outer = self.structs.len() as u32;
+        self.structs.push(rows);
+        let mut updated = Value::FixedScalar(outer_ty, next_outer);
+        if let Some((object, field, path)) = class_target {
+            let mut current = self.structs[object as usize][field];
+            let mut parents = Vec::new();
+            for index in path {
+                let Value::Struct(ty, nested) = current else {
+                    unreachable!()
+                };
+                parents.push((ty, nested, index));
+                current = self.structs[nested as usize][index];
+            }
+            for (ty, nested, index) in parents.into_iter().rev() {
+                let mut fields = self.structs[nested as usize].clone();
+                fields[index] = updated;
+                let next = self.structs.len() as u32;
+                self.structs.push(fields);
+                updated = Value::Struct(ty, next);
+            }
+            self.structs[object as usize][field] = updated;
+        } else {
+            self.write_lvalue(base, binding, updated);
+        }
+        Ok(())
     }
 
     fn read(&self, binding: BindingId) -> Value {

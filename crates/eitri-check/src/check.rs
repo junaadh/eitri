@@ -1933,9 +1933,17 @@ impl<'i> Checker<'_, 'i> {
                 };
                 let mut root = base;
                 let mut through_class = false;
-                while let Expr::Member { base, .. } = self.ast().exprs[root] {
-                    through_class |= matches!(self.out.types[base], Ty::Class(_));
-                    root = base;
+                loop {
+                    match self.ast().exprs[root] {
+                        Expr::Member { base, .. } => {
+                            through_class |= matches!(self.out.types[base], Ty::Class(_));
+                            root = base;
+                        }
+                        Expr::Index { base, .. } => {
+                            root = base;
+                        }
+                        _ => break,
+                    }
                 }
                 let binding = match self.out.resolutions[root] {
                     Res::Binding(binding) | Res::SelfField(binding, _) => Some(binding),

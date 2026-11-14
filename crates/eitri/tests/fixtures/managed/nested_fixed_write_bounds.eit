@@ -1,0 +1,7 @@
+//! host: test
+import test from "test"
+fn row() -> i64 { test.emit(1); return 2 }
+fn col() -> i64 { test.emit(2); return 0 }
+fn replacement() -> i64 { test.emit(3); return 9 }
+var values: [2][2]i64 = [[1, 2], [3, 4]]
+values[row()][col()] = replacement()
