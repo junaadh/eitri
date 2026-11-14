@@ -730,15 +730,20 @@ impl Parser<'_> {
             let symbol = self
                 .tokens
                 .symbol(TokenId::from_u32(self.pos + optional_tokens));
-            if symbol == eitri_base::sym::STRING || symbol == eitri_base::sym::I64 {
+            if matches!(
+                symbol,
+                eitri_base::sym::STRING | eitri_base::sym::I64 | eitri_base::sym::BOOL
+            ) {
                 for _ in 0..optional_tokens {
                     self.bump();
                 }
                 let token = self.bump();
                 return Ok(if symbol == eitri_base::sym::STRING {
                     TypeExpr::OptionalString(token)
-                } else {
+                } else if symbol == eitri_base::sym::I64 {
                     TypeExpr::OptionalI64(token)
+                } else {
+                    TypeExpr::OptionalBool(token)
                 });
             }
         }

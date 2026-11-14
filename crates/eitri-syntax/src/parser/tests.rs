@@ -116,7 +116,9 @@ impl Printer<'_> {
     fn ty(&self, ty: TypeExpr) -> String {
         match ty {
             TypeExpr::Named(token) => self.token(token).to_owned(),
-            TypeExpr::OptionalString(token) | TypeExpr::OptionalI64(token) => {
+            TypeExpr::OptionalString(token)
+            | TypeExpr::OptionalI64(token)
+            | TypeExpr::OptionalBool(token) => {
                 format!("?{}", self.token(token))
             }
             TypeExpr::Error => "<error>".into(),
@@ -378,7 +380,7 @@ fn syntax_errors_resynchronize() {
 fn unsupported_features_are_reported_once_and_dropped() {
     let cases: &[(&str, &str)] = &[
         (
-            "fn f(x: ?bool) -> void {\n}",
+            "fn f(x: ?u8) -> void {\n}",
             "E0001 8..9 not supported yet: optional types",
         ),
         (

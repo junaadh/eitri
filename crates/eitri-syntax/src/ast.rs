@@ -160,6 +160,7 @@ pub enum TypeExpr {
     Named(TokenId),
     OptionalString(TokenId),
     OptionalI64(TokenId),
+    OptionalBool(TokenId),
     /// Unsupported, already reported.
     Error,
 }

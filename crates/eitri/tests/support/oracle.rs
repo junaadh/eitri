@@ -207,6 +207,7 @@ enum Value {
     String(u32),
     OptionalString(Option<u32>),
     OptionalI64(Option<i64>),
+    OptionalBool(Option<bool>),
     Struct(eitri_syntax::ast::StructId, u32),
     Enum(eitri_syntax::ast::EnumId, u32, u32),
     Void,
@@ -249,6 +250,7 @@ impl Value {
             Self::String(_) => Ty::String,
             Self::OptionalString(_) => Ty::OptionalString,
             Self::OptionalI64(_) => Ty::OptionalI64,
+            Self::OptionalBool(_) => Ty::OptionalBool,
             Self::Struct(id, _) => Ty::Struct(id),
             Self::Enum(id, _, _) => Ty::Enum(id),
             Self::Scalar(ty, _) => ty,
@@ -300,6 +302,7 @@ impl Value {
             Value::String(_)
             | Value::OptionalString(_)
             | Value::OptionalI64(_)
+            | Value::OptionalBool(_)
             | Value::Struct(_, _)
             | Value::Enum(_, _, _)
             | Value::Void => {
@@ -668,8 +671,11 @@ impl Eval<'_> {
                 let expected = self.expr(host, literal)?;
                 let actual = match self.structs[payload as usize][index] {
                     Value::OptionalI64(Some(value)) => Value::Int(value),
+                    Value::OptionalBool(Some(value)) => Value::Bool(value),
                     Value::OptionalString(Some(value)) => Value::String(value),
-                    Value::OptionalI64(None) | Value::OptionalString(None) => return Ok(false),
+                    Value::OptionalI64(None)
+                    | Value::OptionalString(None)
+                    | Value::OptionalBool(None) => return Ok(false),
                     value => value,
                 };
                 if !self
@@ -681,8 +687,11 @@ impl Eval<'_> {
             } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
                 let value = match self.structs[payload as usize][index] {
                     Value::OptionalI64(Some(value)) => Value::Int(value),
+                    Value::OptionalBool(Some(value)) => Value::Bool(value),
                     Value::OptionalString(Some(value)) => Value::String(value),
-                    Value::OptionalI64(None) | Value::OptionalString(None) => return Ok(false),
+                    Value::OptionalI64(None)
+                    | Value::OptionalString(None)
+                    | Value::OptionalBool(None) => return Ok(false),
                     value => value,
                 };
                 self.locals[binding.index()] = Some(value);
@@ -703,6 +712,12 @@ impl Eval<'_> {
             return Ok(Value::OptionalI64(
                 (word as i64 != -1).then_some(word as i64),
             ));
+        }
+        if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::Bool {
+            let Value::Bool(value) = self.expr_inner(host, e)? else {
+                unreachable!()
+            };
+            return Ok(Value::OptionalBool(Some(value)));
         }
         if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::I64 {
             let Value::Int(value) = self.expr_inner(host, e)? else {
@@ -831,6 +846,9 @@ impl Eval<'_> {
                 self.convert(e, value)
             }
             Expr::Bool(value) => Ok(Value::Bool(value)),
+            Expr::Null(_) if self.checked.types[e] == Ty::OptionalBool => {
+                Ok(Value::OptionalBool(None))
+            }
             Expr::Null(_) if self.checked.types[e] == Ty::OptionalI64 => {
                 Ok(Value::OptionalI64(None))
             }
@@ -876,6 +894,14 @@ impl Eval<'_> {
                             self.expr(host, rhs)
                         } else {
                             Ok(Value::Int(word as i64))
+                        }
+                    } else if let Value::OptionalBool(value) = value {
+                        match value {
+                            Some(value) if self.checked.types[e] == Ty::OptionalBool => {
+                                Ok(Value::OptionalBool(Some(value)))
+                            }
+                            Some(value) => Ok(Value::Bool(value)),
+                            None => self.expr(host, rhs),
                         }
                     } else if let Value::OptionalI64(value) = value {
                         match value {
@@ -1295,6 +1321,10 @@ impl Eval<'_> {
         let ty = a.ty();
         if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
             let equal = self.aggregate_equal(a, b);
+            return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
+        }
+        if let (Value::OptionalBool(left), Value::OptionalBool(right)) = (a, b) {
+            let equal = left == right;
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
         }
         if let (Value::OptionalI64(left), Value::OptionalI64(right)) = (a, b) {

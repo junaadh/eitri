@@ -17,6 +17,7 @@ pub enum Ty {
     String,
     OptionalString,
     OptionalI64,
+    OptionalBool,
     Struct(eitri_syntax::ast::StructId),
     Enum(eitri_syntax::ast::EnumId),
     /// A find result: null or a nonnegative UTF-8 byte offset.
@@ -41,7 +42,9 @@ impl Ty {
             Self::Bool => S::Bool,
             Self::String => return Some(TypeDesc::String),
             Self::Struct(_) | Self::Enum(_) => return None,
-            Self::FindOffset | Self::OptionalString | Self::OptionalI64 => return None,
+            Self::FindOffset | Self::OptionalString | Self::OptionalI64 | Self::OptionalBool => {
+                return None;
+            }
             Self::Void => return Some(TypeDesc::Void),
             Self::Error => return None,
         }))
@@ -79,6 +82,7 @@ impl Ty {
             Ty::String => "`string`",
             Ty::OptionalString => "`?string`",
             Ty::OptionalI64 => "`?i64`",
+            Ty::OptionalBool => "`?bool`",
             Ty::Struct(_) => "a struct",
             Ty::Enum(_) => "an enum",
             Ty::FindOffset => "`?i64`",

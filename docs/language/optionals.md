@@ -1,11 +1,12 @@
 # Optionals
 
-The current implementation supports `?string` and `?i64`, including collapsed repeated
-optional markers, `null`, implicit string conversion, equality, and `??` with
-matching scalar or optional fallbacks.
-These optional values can be stored in structs and enum payloads and passed through
-script calls; optional host signatures are not supported yet. Optional payload bindings and literal patterns match only present values; `_`
-also matches null. Other optional types and operations remain future work.
+The current implementation supports `?string`, `?i64` and `?bool`, including
+collapsed repeated optional markers, `null`, implicit conversion, equality,
+and `??` with matching scalar or optional fallbacks. These values can be stored
+in structs and enum payloads and passed through script calls; optional host
+signatures are not supported yet. Optional payload bindings and literal patterns
+match only present values; `_` also matches null. Other optional types and
+operations remain future work.
 
 `?T` holds either a `T` or `null`. A `T` converts to `?T` implicitly.
 

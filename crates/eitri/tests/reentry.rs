@@ -125,7 +125,7 @@ fn optional_signature_cannot_be_called_as_scalar() {
             Ok(())
         }
     }
-    for ty in ["?string", "?i64"] {
+    for ty in ["?string", "?i64", "?bool"] {
         let source = format!(
             "import h from \"h\"\nfn callback(value: {ty}) -> i64 {{ return 1 }}\nh.probe()\n"
         );
@@ -161,6 +161,16 @@ fn optional_host_signatures_are_rejected() {
     assert!(
         context
             .register_host_module("h", "pub fn f() -> ?i64\n")
+            .is_err()
+    );
+    assert!(
+        context
+            .register_host_module("h", "pub fn f(value: ?bool) -> void\n")
+            .is_err()
+    );
+    assert!(
+        context
+            .register_host_module("h", "pub fn f() -> ?bool\n")
             .is_err()
     );
 }

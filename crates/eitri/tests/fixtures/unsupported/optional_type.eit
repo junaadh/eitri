@@ -1,2 +1,2 @@
-fn f(x: ?bool) -> void {
+fn f(x: ?u8) -> void {
 }

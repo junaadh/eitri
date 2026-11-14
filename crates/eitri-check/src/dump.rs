@@ -171,6 +171,7 @@ impl Dumper<'_> {
             Ty::String => "'string'",
             Ty::OptionalString => "'?string'",
             Ty::OptionalI64 => "'?i64'",
+            Ty::OptionalBool => "'?bool'",
             Ty::Struct(_) => "'struct'",
             Ty::Enum(_) => "'enum'",
             Ty::FindOffset => "'?i64'",
@@ -193,6 +194,7 @@ impl Dumper<'_> {
             Ty::String => "string",
             Ty::OptionalString => "?string",
             Ty::OptionalI64 => "?i64",
+            Ty::OptionalBool => "?bool",
             Ty::Struct(_) => "struct",
             Ty::Enum(_) => "enum",
             Ty::FindOffset => "?i64",
@@ -219,7 +221,9 @@ impl Dumper<'_> {
     fn written_type(&self, ty: TypeExpr) -> String {
         match ty {
             TypeExpr::Named(token) => self.paint(TYPE, &format!("'{}'", self.token(token))),
-            TypeExpr::OptionalString(token) | TypeExpr::OptionalI64(token) => {
+            TypeExpr::OptionalString(token)
+            | TypeExpr::OptionalI64(token)
+            | TypeExpr::OptionalBool(token) => {
                 self.paint(TYPE, &format!("'?{}'", self.token(token)))
             }
             TypeExpr::Error => self.paint(TYPE, "'<error>'"),
@@ -326,7 +330,8 @@ impl Dumper<'_> {
                 let end = match param.ty {
                     TypeExpr::Named(token)
                     | TypeExpr::OptionalString(token)
-                    | TypeExpr::OptionalI64(token) => tokens.span(token),
+                    | TypeExpr::OptionalI64(token)
+                    | TypeExpr::OptionalBool(token) => tokens.span(token),
                     TypeExpr::Error => tokens.span(param.name),
                 };
                 let range = self.range(tokens.span(param.name).to(end));

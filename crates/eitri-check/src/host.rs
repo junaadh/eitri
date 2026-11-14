@@ -243,7 +243,10 @@ fn value_type(
     interner: &Interner,
     diagnostics: &mut Diagnostics,
 ) -> Ty {
-    if let TypeExpr::OptionalString(token) | TypeExpr::OptionalI64(token) = ty {
+    if let TypeExpr::OptionalString(token)
+    | TypeExpr::OptionalI64(token)
+    | TypeExpr::OptionalBool(token) = ty
+    {
         diagnostics.push(error(
             Code::Unsupported,
             "not supported yet: optional host types",

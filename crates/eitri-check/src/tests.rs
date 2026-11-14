@@ -268,11 +268,13 @@ fn observe(text: &str, reference: bool) -> Option<String> {
                 function.ret,
                 eitri_syntax::ast::TypeExpr::OptionalString(_)
                     | eitri_syntax::ast::TypeExpr::OptionalI64(_)
+                    | eitri_syntax::ast::TypeExpr::OptionalBool(_)
             ) || ast.params(function.params).iter().any(|param| {
                 matches!(
                     param.ty,
                     eitri_syntax::ast::TypeExpr::OptionalString(_)
                         | eitri_syntax::ast::TypeExpr::OptionalI64(_)
+                        | eitri_syntax::ast::TypeExpr::OptionalBool(_)
                 )
             })
         })
@@ -284,6 +286,7 @@ fn observe(text: &str, reference: bool) -> Option<String> {
                         ty: Some(
                             eitri_syntax::ast::TypeExpr::OptionalString(_)
                                 | eitri_syntax::ast::TypeExpr::OptionalI64(_)
+                                | eitri_syntax::ast::TypeExpr::OptionalBool(_)
                         ),
                         ..
                     }

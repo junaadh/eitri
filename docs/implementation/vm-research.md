@@ -2397,3 +2397,17 @@ execution 209/292 ns, total 8,625/10,600 ns; retained context memory was
 30,898 B. This scalar workload does not exercise optionals. Samples:
 `/private/tmp/eitri-t017-41-samples.csv`; report:
 `/private/tmp/eitri-t017-41-bench.txt`.
+
+### T017-42 optional booleans
+
+Collapsed `?bool` uses a tag and boolean payload. Null, implicit conversion,
+equality, coalescing, calls and aggregate fields work; optional host signatures
+and reentry reject. Payload bindings narrow only present values. Forced GC
+covers both interpreters and lowerers.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 8,458/14,100 ns,
+execution 209/375 ns, total 8,667/14,500 ns; retained context memory was
+30,898 B. This scalar workload does not exercise optionals. Samples:
+`/private/tmp/eitri-t017-42-samples.csv`; report:
+`/private/tmp/eitri-t017-42-bench.txt`.

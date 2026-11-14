@@ -1,0 +1,20 @@
+//! host: test
+import test from "test"
+struct Box { flag: ?bool, text: string }
+enum Choice { Value(item: ?bool) }
+fn identity(value: ?bool) -> ?bool { return value }
+let yes = Box { flag: true, text: "yes" }
+let no = Box { flag: false, text: "no" }
+let absent = Box { flag: null, text: "none" }
+let value = Choice.Value(identity(yes.flag))
+test.check((yes.flag ?? false) && !(no.flag ?? true) && (absent.flag ?? true))
+test.check(yes.flag != no.flag && absent.flag == null && true == yes.flag)
+test.check(match value { .Value(flag) => flag, .Value(_) => false })
+test.check(yes == Box { flag: true, text: "yes" })
+let collapsed: ???bool = false
+test.check((collapsed ?? true) == false)
+let plain = true
+let picked: ?bool = absent.flag ?? yes.flag
+let neither: ?bool = null ?? null
+test.check(plain == yes.flag && true != null && null != false)
+test.check((picked ?? false) && neither == null)

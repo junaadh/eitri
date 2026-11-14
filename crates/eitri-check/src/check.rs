@@ -581,6 +581,7 @@ impl<'i> Checker<'_, 'i> {
         match ty {
             TypeExpr::OptionalString(_) => return Ty::OptionalString,
             TypeExpr::OptionalI64(_) => return Ty::OptionalI64,
+            TypeExpr::OptionalBool(_) => return Ty::OptionalBool,
             _ => {}
         }
         let TypeExpr::Named(token) = ty else {
@@ -891,7 +892,7 @@ impl<'i> Checker<'_, 'i> {
                     Ty::Void => 0,
                     Ty::Struct(id) => self.out.struct_widths[id],
                     Ty::Enum(id) => self.out.enum_widths[id],
-                    Ty::OptionalI64 => 2,
+                    Ty::OptionalI64 | Ty::OptionalBool => 2,
                     _ => 1,
                 })
                 .fold(0u32, u32::saturating_add);
@@ -1121,7 +1122,7 @@ impl<'i> Checker<'_, 'i> {
                     match child {
                         Ty::Struct(id) => self.out.struct_widths[id],
                         Ty::Enum(id) => self.out.enum_widths[id],
-                        Ty::OptionalI64 => 2,
+                        Ty::OptionalI64 | Ty::OptionalBool => 2,
                         _ => 1,
                     }
                 };
@@ -1522,6 +1523,7 @@ impl<'i> Checker<'_, 'i> {
             (expected, found),
             (Some(Ty::OptionalString), Ty::String)
                 | (Some(Ty::OptionalI64), Ty::I64 | Ty::FindOffset)
+                | (Some(Ty::OptionalBool), Ty::Bool)
         ) {
             self.out.optional_wrap[expr] = true;
             return expected.unwrap();
@@ -1620,7 +1622,10 @@ impl<'i> Checker<'_, 'i> {
             Expr::Convert { callee, value } => self.conversion(expr, callee, &[value], false),
             Expr::Bool(_) => Ty::Bool,
             Expr::Null(token) => {
-                if matches!(expected, Some(Ty::OptionalString | Ty::OptionalI64)) {
+                if matches!(
+                    expected,
+                    Some(Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool)
+                ) {
                     expected.unwrap()
                 } else {
                     self.report(
@@ -1728,6 +1733,11 @@ impl<'i> Checker<'_, 'i> {
             || matches!(self.hint(tail), Some(Ty::I64 | Ty::OptionalI64))
         {
             Some(Ty::OptionalI64)
+        } else if matches!(expected, Some(Ty::Bool | Ty::OptionalBool))
+            || matches!(self.ast().exprs[tail], Expr::Bool(_))
+            || matches!(self.hint(tail), Some(Ty::Bool | Ty::OptionalBool))
+        {
+            Some(Ty::OptionalBool)
         } else {
             None
         };
@@ -1761,7 +1771,11 @@ impl<'i> Checker<'_, 'i> {
             }
             if !matches!(
                 found,
-                Ty::FindOffset | Ty::OptionalString | Ty::OptionalI64 | Ty::Error
+                Ty::FindOffset
+                    | Ty::OptionalString
+                    | Ty::OptionalI64
+                    | Ty::OptionalBool
+                    | Ty::Error
             ) {
                 self.report(
                     Code::TypeMismatch,
@@ -1781,7 +1795,7 @@ impl<'i> Checker<'_, 'i> {
         }
         let source_kind = source_kind.unwrap_or(Ty::Error);
         let result = match source_kind {
-            Ty::OptionalString | Ty::OptionalI64 => {
+            Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool => {
                 let hint = if matches!(self.ast().exprs[node], Expr::Null(_)) {
                     Some(source_kind)
                 } else {
@@ -1792,10 +1806,10 @@ impl<'i> Checker<'_, 'i> {
                     self.out.optional_wrap[node] = true;
                     found = Ty::OptionalI64;
                 }
-                let inner = if source_kind == Ty::OptionalString {
-                    Ty::String
-                } else {
-                    Ty::I64
+                let inner = match source_kind {
+                    Ty::OptionalString => Ty::String,
+                    Ty::OptionalBool => Ty::Bool,
+                    _ => Ty::I64,
                 };
                 if found != inner && found != source_kind && found != Ty::Error {
                     self.mismatch(found, inner, self.span(node));
@@ -2154,6 +2168,7 @@ impl<'i> Checker<'_, 'i> {
             let narrowed = match ty {
                 Ty::OptionalString => Ty::String,
                 Ty::OptionalI64 => Ty::I64,
+                Ty::OptionalBool => Ty::Bool,
                 _ => ty,
             };
             if let Some(literal) = pattern.literal {
@@ -2212,7 +2227,7 @@ impl<'i> Checker<'_, 'i> {
             };
             if matches!(
                 self.out.param_types[types].get(index),
-                Some(Ty::OptionalString | Ty::OptionalI64)
+                Some(Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool)
             ) {
                 return false;
             }
@@ -3260,10 +3275,19 @@ impl<'i> Checker<'_, 'i> {
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
             && matches!(
                 self.hint(first_rhs),
-                Some(Ty::OptionalString | Ty::OptionalI64)
+                Some(Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool)
             )
         {
             self.hint(first_rhs)
+        } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
+            && ((matches!(ast.exprs[first_rhs], Expr::Null(_))
+                && (matches!(ast.exprs[leftmost], Expr::Bool(_))
+                    || self.hint(leftmost) == Some(Ty::Bool)))
+                || (matches!(ast.exprs[leftmost], Expr::Null(_))
+                    && (matches!(ast.exprs[first_rhs], Expr::Bool(_))
+                        || self.hint(first_rhs) == Some(Ty::Bool))))
+        {
+            Some(Ty::OptionalBool)
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
             && matches!(ast.exprs[first_rhs], Expr::Null(_))
             && matches!(self.hint(leftmost), Some(Ty::I64 | Ty::FindOffset))
@@ -3310,7 +3334,10 @@ impl<'i> Checker<'_, 'i> {
         } else {
             guidance
         };
-        let mut lhs_ty = if matches!(guidance, Some(Ty::OptionalString | Ty::OptionalI64)) {
+        let mut lhs_ty = if matches!(
+            guidance,
+            Some(Ty::OptionalString | Ty::OptionalI64 | Ty::OptionalBool)
+        ) {
             self.value(leftmost, guidance)
         } else {
             self.expr(leftmost, guidance, true)
