@@ -1,7 +1,7 @@
 # Optionals
 
 The current implementation supports optional strings, supported scalars, structs,
-and enums, including collapsed repeated optional markers, `null`, implicit
+enums, and class references, including collapsed repeated optional markers, `null`, implicit
 conversion, equality, and `??` with matching value or optional fallbacks. These values can be stored
 in structs and enum payloads and passed through script calls; optional host
 signatures are not supported yet. Optional payload bindings and literal patterns

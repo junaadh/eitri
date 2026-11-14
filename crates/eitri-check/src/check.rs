@@ -822,16 +822,6 @@ impl<'i> Checker<'_, 'i> {
             let mut field_count = 0;
             for field in ast.params(decl.fields) {
                 let ty = self.ty(field.ty, false);
-                if decl.is_class
-                    && (matches!(ty, Ty::Struct(_) | Ty::Enum(_))
-                        || ty.tagged_optional_inner().is_some())
-                {
-                    self.report(
-                        Code::Unsupported,
-                        "not supported yet: multi-slot class fields",
-                        self.token_span(field.name),
-                    );
-                }
                 if ast
                     .params(decl.fields)
                     .iter()
@@ -853,6 +843,15 @@ impl<'i> Checker<'_, 'i> {
         }
 
         self.struct_layouts();
+        for (id, decl) in ast.structs.iter_enumerated() {
+            if decl.is_class && self.out.struct_widths[id] > 256 {
+                self.report(
+                    Code::Limit,
+                    "implementation limit: class exceeds 256 slots",
+                    self.token_span(decl.name),
+                );
+            }
+        }
         for (id, decl) in ast.fns.iter_enumerated() {
             if decl.receiver.is_some() {
                 self.methods.push(id);
@@ -3546,6 +3545,16 @@ impl<'i> Checker<'_, 'i> {
                 .is_some_and(|ty| ty.optional_inner().is_some())
         {
             self.hint(first_rhs)
+        } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
+            && matches!(ast.exprs[first_rhs], Expr::Null(_))
+            && self.hint(leftmost).and_then(Ty::optional_of).is_some()
+        {
+            self.hint(leftmost).and_then(Ty::optional_of)
+        } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
+            && matches!(ast.exprs[leftmost], Expr::Null(_))
+            && self.hint(first_rhs).and_then(Ty::optional_of).is_some()
+        {
+            self.hint(first_rhs).and_then(Ty::optional_of)
         } else if matches!(first_op, BinaryOp::Eq | BinaryOp::NotEq)
             && ((matches!(ast.exprs[first_rhs], Expr::Null(_))
                 && (matches!(ast.exprs[leftmost], Expr::Bool(_))

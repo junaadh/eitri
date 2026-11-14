@@ -2546,3 +2546,18 @@ execution 250/458 ns, total 10.1/17.7 µs; retained context was 31,047 B.
 This benchmark does not exercise class methods. Samples:
 `/private/tmp/eitri-t017-51-samples.csv`; report:
 `/private/tmp/eitri-t017-51-bench.txt`.
+
+### T017-52 optional class references
+
+Optional class references use a nullable managed slot, permitting recursive
+class graphs and cycles. Null, conversion, identity equality, coalescing,
+matching and script calls run on both interpreters and lowerers with forced
+collection. The collector's record-graph test confirms unrooted cycles are
+reclaimed.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 8,709/11,100 ns,
+execution 209/333 ns, total 8,958/11,400 ns; retained context was 31,047 B.
+This scalar benchmark does not exercise class references. Samples:
+`/private/tmp/eitri-t017-52-samples.csv`; report:
+`/private/tmp/eitri-t017-52-bench.txt`.

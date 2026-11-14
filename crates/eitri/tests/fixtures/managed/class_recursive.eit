@@ -1,0 +1,20 @@
+//! host: test
+import test from "test"
+class Node { value: i64, name: string, next: ?Node = null }
+let first = Node { value: 1, name: "one" }
+let second = Node { value: 2, name: "two", next: first }
+first.next = second
+let maybe: ?Node = first
+let empty: ?Node = null
+test.check(maybe == first && empty == null && maybe != empty)
+test.check((maybe ?? second) == first && (empty ?? first) == first)
+test.check(match first.next { null => false, node => node.value == 2 })
+enum Entry { Item(node: ?Node) }
+test.check(match Entry.Item(first.next) { .Item(null) => false, .Item(node) => node == second })
+test.check(match Entry.Item(null) { .Item(null) => true, .Item(node) => false })
+test.check(first != null && null != first)
+fn identity(node: ?Node) -> ?Node { return node }
+fn choose(node: ?Node, fallback: Node) -> Node { return node ?? fallback }
+test.check(identity(first) == maybe && choose(null, second) == second)
+let picked: ?Node = empty ?? maybe
+test.check(picked == first)
