@@ -1356,8 +1356,13 @@ impl<'i> Checker<'_, 'i> {
                     unreachable!()
                 };
                 let mut root = base;
+                let mut through_class = matches!(self.out.types[base], Ty::Class(_));
                 while let Expr::Member { base, .. } = self.ast().exprs[root] {
+                    through_class |= matches!(self.out.types[base], Ty::Class(_));
                     root = base;
+                }
+                if let Res::SelfField(binding, _) = self.out.resolutions[root] {
+                    through_class |= matches!(self.out.bindings[binding].ty, Ty::Class(_));
                 }
                 let binding = match self.ast().exprs[root] {
                     Expr::Name(_) | Expr::SelfValue(_) => match self.out.resolutions[root] {
@@ -1366,9 +1371,7 @@ impl<'i> Checker<'_, 'i> {
                     },
                     _ => None,
                 };
-                if !matches!(self.out.types[base], Ty::Class(_))
-                    && !binding.is_some_and(|b| self.out.bindings[b].mutable)
-                {
+                if !through_class && !binding.is_some_and(|b| self.out.bindings[b].mutable) {
                     self.report(
                         Code::AssignToImmutable,
                         "cannot assign through an immutable value",
@@ -2918,7 +2921,7 @@ impl<'i> Checker<'_, 'i> {
             expr = base;
         }
         if let Res::SelfField(binding, index) = self.out.resolutions[expr] {
-            let Ty::Struct(id) = self.out.bindings[binding].ty else {
+            let (Ty::Struct(id) | Ty::Class(id)) = self.out.bindings[binding].ty else {
                 unreachable!()
             };
             if self.input.ast.params(self.input.ast.structs[id].fields)[index as usize].readonly {
@@ -3119,6 +3122,22 @@ impl<'i> Checker<'_, 'i> {
                     }
                     if ast.fns[method].mutating {
                         self.check_readonly_path(base);
+                        let mut path = base;
+                        let mut class_field = false;
+                        while let Expr::Member { base, .. } = ast.exprs[path] {
+                            class_field |= matches!(self.out.types[base], Ty::Class(_));
+                            path = base;
+                        }
+                        if let Res::SelfField(binding, _) = self.out.resolutions[path] {
+                            class_field |= matches!(self.out.bindings[binding].ty, Ty::Class(_));
+                        }
+                        if class_field {
+                            self.report(
+                                Code::Unsupported,
+                                "not supported yet: mutating methods on class value fields",
+                                self.span(base),
+                            );
+                        }
                         let mut root = base;
                         while let Expr::Member { base, .. } = ast.exprs[root] {
                             root = base;

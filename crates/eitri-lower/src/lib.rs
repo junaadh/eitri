@@ -339,13 +339,22 @@ fn lower_with<const R: bool, const SIMPLE: bool>(
         .map_err(|error| lowering_error(error, input, "<module>", Span::default()))?;
     if has_classes {
         for (id, decl) in ast.structs.iter_enumerated() {
-            let fields = &lowerer.checked.param_types[lowerer.checked.struct_fields[id]];
+            let fields = lowerer.checked.struct_fields[id];
             let mut shape = lowerer
                 .asm
-                .temporary_vec(if decl.is_class { fields.len() } else { 0 })
+                .temporary_vec(if decl.is_class {
+                    lowerer.checked.struct_widths[id] as usize
+                } else {
+                    0
+                })
                 .map_err(|error| lowering_error(error, input, "<module>", Span::default()))?;
             if decl.is_class {
-                shape.extend(fields.iter().copied().map(value_type));
+                for index in 0..lowerer.checked.param_types[fields].len() {
+                    let ty = lowerer.checked.param_types[fields][index];
+                    lowerer.flatten_type(ty, &mut shape).map_err(|error| {
+                        lowering_error(error, input, "<module>", Span::default())
+                    })?;
+                }
             }
             record_shapes.push(shape.into_boxed_slice());
         }
@@ -581,6 +590,13 @@ pub fn install_verified_roots(
 }
 
 type Lowered<T> = Result<T, AsmError>;
+type ClassFieldRoot = (
+    Option<ExprId>,
+    Option<BindingId>,
+    eitri_syntax::ast::StructId,
+    u32,
+    ExprId,
+);
 
 struct Lowerer<'a, 'i, const R: bool, const SIMPLE: bool> {
     input: &'a Input<'i>,
@@ -1008,34 +1024,24 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let binding = checked.stmt_bindings[id].unwrap();
                 let index = checked.stmt_fields[id].unwrap();
                 let object = self.slots[binding];
+                let Ty::Class(owner) = checked.bindings[binding].ty else {
+                    unreachable!()
+                };
+                let ty = checked.param_types[checked.struct_fields[owner]][index as usize];
                 let old = if matches!(op, AssignOp::Compound(_)) {
-                    let slot = self.temp();
-                    self.asm.emit(
-                        Op::RecordGet,
-                        Operands::abc(slot.into(), object.into(), index.into()),
-                        span,
-                    )?;
-                    Some(slot)
+                    Some(self.class_read_field(object, owner, index, ty, None, span)?)
                 } else {
                     None
                 };
                 let rhs = self.expr(value, None)?;
                 let result = if let AssignOp::Compound(binary) = op {
-                    let Ty::Class(owner) = checked.bindings[binding].ty else {
-                        unreachable!()
-                    };
-                    let ty = checked.param_types[checked.struct_fields[owner]][index as usize];
                     let slot = self.temp();
                     self.operate(binary, ty, slot, old.unwrap(), rhs, span)?;
                     slot
                 } else {
                     rhs
                 };
-                self.asm.emit(
-                    Op::RecordSet,
-                    Operands::abc(object.into(), result.into(), index.into()),
-                    span,
-                )?;
+                self.class_store_field(object, owner, index, ty, result, span)?;
             }
             Stmt::Assign {
                 op, value, span, ..
@@ -1098,23 +1104,36 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 op,
                 value,
                 span,
-            } if matches!(ast.exprs[target], Expr::Member { base, .. } if matches!(checked.types[base], Ty::Class(_))) =>
+            } if self.class_field_root(target).is_some()
+                && !matches!(ast.exprs[target], Expr::Member { base, .. } if matches!(checked.types[base], Ty::Class(_))) =>
             {
-                let Expr::Member { base, .. } = ast.exprs[target] else {
-                    unreachable!()
+                let (base, implicit, owner, index, root) = self.class_field_root(target).unwrap();
+                let object = if let Some(base) = base {
+                    self.expr(base, None)?
+                } else {
+                    self.slots[implicit.unwrap()]
                 };
-                let Res::Field(index) = checked.resolutions[target] else {
-                    unreachable!()
-                };
-                let object = self.expr(base, None)?;
+                let root_ty = checked.types[root];
+                let mut cursor = target;
+                let mut nested_offset = 0;
+                while cursor != root {
+                    let Expr::Member { base, .. } = ast.exprs[cursor] else {
+                        unreachable!()
+                    };
+                    let Ty::Struct(struct_id) = checked.types[base] else {
+                        unreachable!()
+                    };
+                    let Res::Field(field) = checked.resolutions[cursor] else {
+                        unreachable!()
+                    };
+                    nested_offset += self.field_offset(struct_id, field);
+                    cursor = base;
+                }
                 let old = if matches!(op, AssignOp::Compound(_)) {
-                    let slot = self.temp();
-                    self.asm.emit(
-                        Op::RecordGet,
-                        Operands::abc(slot.into(), object.into(), index.into()),
-                        span,
-                    )?;
-                    Some(slot)
+                    Some(
+                        self.class_read_field(object, owner, index, root_ty, None, span)?
+                            + nested_offset,
+                    )
                 } else {
                     None
                 };
@@ -1126,11 +1145,52 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 } else {
                     rhs
                 };
-                self.asm.emit(
-                    Op::RecordSet,
-                    Operands::abc(object.into(), result.into(), index.into()),
-                    span,
-                )?;
+                let root_slot = self.class_read_field(object, owner, index, root_ty, None, span)?;
+                for part in 0..self.width(checked.types[target]) {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(
+                            (root_slot + nested_offset + part).into(),
+                            (result + part).into(),
+                            0,
+                        ),
+                        span,
+                    )?;
+                }
+                self.class_store_field(object, owner, index, root_ty, root_slot, span)?;
+            }
+            Stmt::AssignField {
+                target,
+                op,
+                value,
+                span,
+            } if matches!(ast.exprs[target], Expr::Member { base, .. } if matches!(checked.types[base], Ty::Class(_))) =>
+            {
+                let Expr::Member { base, .. } = ast.exprs[target] else {
+                    unreachable!()
+                };
+                let Res::Field(index) = checked.resolutions[target] else {
+                    unreachable!()
+                };
+                let Ty::Class(owner) = checked.types[base] else {
+                    unreachable!()
+                };
+                let field_ty = checked.types[target];
+                let object = self.expr(base, None)?;
+                let old = if matches!(op, AssignOp::Compound(_)) {
+                    Some(self.class_read_field(object, owner, index, field_ty, None, span)?)
+                } else {
+                    None
+                };
+                let rhs = self.expr(value, None)?;
+                let result = if let AssignOp::Compound(binary) = op {
+                    let slot = self.temp();
+                    self.operate(binary, checked.types[target], slot, old.unwrap(), rhs, span)?;
+                    slot
+                } else {
+                    rhs
+                };
+                self.class_store_field(object, owner, index, field_ty, result, span)?;
             }
             Stmt::AssignField {
                 target,
@@ -1838,14 +1898,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let Res::Field(index) = checked.resolutions[e] else {
                     unreachable!()
                 };
+                let Ty::Class(owner) = checked.types[base] else {
+                    unreachable!()
+                };
                 let source = self.expr(base, None)?;
-                let target = self.dst(dst);
-                self.asm.emit(
-                    Op::RecordGet,
-                    Operands::abc(target.into(), source.into(), index.into()),
-                    span,
-                )?;
-                Ok(target)
+                self.class_read_field(source, owner, index, checked.types[e], dst, span)
             }
             Expr::Member { base, .. } if matches!(checked.resolutions[e], Res::Field(_)) => {
                 let Res::Field(index) = checked.resolutions[e] else {
@@ -1901,13 +1958,17 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let Res::SelfField(binding, index) = checked.resolutions[e] else {
                     unreachable!()
                 };
-                let target = self.dst(dst);
-                self.asm.emit(
-                    Op::RecordGet,
-                    Operands::abc(target.into(), self.slots[binding].into(), index.into()),
+                let Ty::Class(owner) = checked.bindings[binding].ty else {
+                    unreachable!()
+                };
+                self.class_read_field(
+                    self.slots[binding],
+                    owner,
+                    index,
+                    checked.types[e],
+                    dst,
                     span,
-                )?;
-                Ok(target)
+                )
             }
             Expr::SelfValue(_) | Expr::Name(_) => {
                 let slot = match checked.resolutions[e] {
@@ -3337,6 +3398,86 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         Ok(())
     }
 
+    fn class_field_root(&self, mut expr: ExprId) -> Option<ClassFieldRoot> {
+        loop {
+            match self.input.ast.exprs[expr] {
+                Expr::Member { base, .. } => {
+                    if let Ty::Class(owner) = self.checked.types[base] {
+                        let Res::Field(index) = self.checked.resolutions[expr] else {
+                            return None;
+                        };
+                        return Some((Some(base), None, owner, index, expr));
+                    }
+                    expr = base;
+                }
+                _ => {
+                    if let Res::SelfField(binding, index) = self.checked.resolutions[expr]
+                        && let Ty::Class(owner) = self.checked.bindings[binding].ty
+                    {
+                        return Some((None, Some(binding), owner, index, expr));
+                    }
+                    return None;
+                }
+            }
+        }
+    }
+
+    fn class_read_field(
+        &mut self,
+        object: u32,
+        owner: eitri_syntax::ast::StructId,
+        index: u32,
+        ty: Ty,
+        dst: Option<u32>,
+        span: Span,
+    ) -> Lowered<u32> {
+        let width = self.width(ty);
+        let target = if let Some(dst) = dst {
+            dst
+        } else {
+            let slot = self.top;
+            self.top += width;
+            slot
+        };
+        let offset = self.field_offset(owner, index);
+        for part in 0..width {
+            self.asm.emit(
+                Op::RecordGet,
+                Operands::abc(
+                    (target + part).into(),
+                    object.into(),
+                    (offset + part).into(),
+                ),
+                span,
+            )?;
+        }
+        Ok(target)
+    }
+
+    fn class_store_field(
+        &mut self,
+        object: u32,
+        owner: eitri_syntax::ast::StructId,
+        index: u32,
+        ty: Ty,
+        source: u32,
+        span: Span,
+    ) -> Lowered<()> {
+        let offset = self.field_offset(owner, index);
+        for part in 0..self.width(ty) {
+            self.asm.emit(
+                Op::RecordSet,
+                Operands::abc(
+                    object.into(),
+                    (source + part).into(),
+                    (offset + part).into(),
+                ),
+                span,
+            )?;
+        }
+        Ok(())
+    }
+
     fn class_literal(
         &mut self,
         id: eitri_syntax::ast::StructId,
@@ -3349,7 +3490,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let declared = ast.params(ast.structs[id].fields);
         let entries = &ast.field_inits[fields];
         let first = self.top;
-        self.top += (declared.len() as u32).max(1);
+        self.top += self.checked.struct_widths[id];
         let end = self.top;
         if declared.is_empty() {
             self.asm.load(first, 0, ValueType::I64, span)?;
@@ -3364,7 +3505,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     self.input.tokens.symbol(item.name) == self.input.tokens.symbol(field.name)
                 })
                 .expect("checked field");
-            self.expr(field.value, Some(first + index as u32))?;
+            self.expr(
+                field.value,
+                Some(first + self.field_offset(id, index as u32)),
+            )?;
             self.top = end;
         }
         let base = entries
@@ -3379,15 +3523,19 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         && self.input.tokens.symbol(init.name)
                             == self.input.tokens.symbol(field.name)
                 }) {
-                    self.asm.emit(
-                        Op::RecordGet,
-                        Operands::abc(
-                            (first + index as u32).into(),
-                            source.into(),
-                            (index as u32).into(),
-                        ),
-                        span,
-                    )?;
+                    let offset = self.field_offset(id, index as u32);
+                    let ty = self.checked.param_types[self.checked.struct_fields[id]][index];
+                    for part in 0..self.width(ty) {
+                        self.asm.emit(
+                            Op::RecordGet,
+                            Operands::abc(
+                                (first + offset + part).into(),
+                                source.into(),
+                                (offset + part).into(),
+                            ),
+                            span,
+                        )?;
+                    }
                 }
             }
             self.top = end;
@@ -3406,7 +3554,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
                 self.default_depth += 1;
                 self.default_expansions += 1;
-                let value = self.expr(default, Some(first + index as u32));
+                let value = self.expr(default, Some(first + self.field_offset(id, index as u32)));
                 self.default_depth -= 1;
                 value?;
                 self.top = end;

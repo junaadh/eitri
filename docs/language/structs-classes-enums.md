@@ -1,10 +1,11 @@
 # Structs, classes, and enums
 
-Classes with single-slot scalar, string, optional-string, or class-reference fields
-support construction, defaults, update literals, identity equality, shared field
-mutation, script calls, and methods declared with `extend`. Class references can
-appear inside structs, enums, and optional aggregate values. Optional class
-references support recursive graphs. Aggregate class fields and host class
+Classes with up to 256 flattened field slots support construction, defaults,
+update literals, identity equality, shared field mutation, script calls, and
+methods declared with `extend`. Their fields can contain structs, enums,
+optionals, strings, and class references. Class references can appear inside
+structs, enums, and optional aggregate values, and optional references support
+recursive graphs. Mutating struct methods on class value fields and host class
 signatures are not yet supported. Class objects
 and their reference graph are traced by the collector.
 

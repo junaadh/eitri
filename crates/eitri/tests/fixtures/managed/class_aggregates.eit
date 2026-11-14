@@ -1,0 +1,20 @@
+//! host: test
+import test from "test"
+struct Point { x: i64, label: string }
+enum Mode { Off, On(name: string) }
+class Panel { point: Point, mode: Mode, note: ?i64 }
+let p = Panel { point: Point { x: 1, label: "one" }, mode: Mode.On("lit"), note: null }
+let copy = p.point
+p.point = Point { x: 4, label: "four" }
+test.check(copy.x == 1 && p.point.x == 4 && p.point.label == "four")
+p.point.x = 9
+test.check(p.point.x == 9 && copy.x == 1)
+test.check(match p.mode { .Off => false, .On(name) => name == "lit" })
+p.mode = Mode.Off
+p.note = 42
+test.check((p.note ?? 0) == 42)
+fn change_label(panel: Panel) -> i64 { panel.point.label = "changed"; return 12 }
+extend Panel { fn increment() -> void { point.x += 1 } }
+p.point.x = change_label(p)
+p.increment()
+test.check(p.point.x == 13 && p.point.label == "changed")

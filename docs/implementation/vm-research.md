@@ -2561,3 +2561,18 @@ execution 209/333 ns, total 8,958/11,400 ns; retained context was 31,047 B.
 This scalar benchmark does not exercise class references. Samples:
 `/private/tmp/eitri-t017-52-samples.csv`; report:
 `/private/tmp/eitri-t017-52-bench.txt`.
+
+### T017-53 aggregate class fields
+
+Class records store flattened structs, enums and optionals, with a checked
+256-slot class layout bound. Field reads and writes retain value semantics;
+nested writes reload after the right-hand side so its effects on sibling
+fields are preserved. The fixture covers both interpreters and lowerers under
+forced collection. Mutating struct methods on class value fields remain open.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the T011 benchmark
+command and environment measured reused `module` compile p50/p99 10.2/10.8 µs,
+execution 250/334 ns, total 10.5/11.1 µs; retained context was 31,047 B.
+This scalar benchmark does not exercise class fields. Samples:
+`/private/tmp/eitri-t017-53-samples.csv`; report:
+`/private/tmp/eitri-t017-53-bench.txt`.

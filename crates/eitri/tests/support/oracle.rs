@@ -473,6 +473,66 @@ impl Eval<'_> {
                 op,
                 value,
                 span,
+            } if self.class_field_root(target).is_some()
+                && !matches!(self.ast.exprs[target], Expr::Member { base, .. } if matches!(self.checked.types[base], Ty::Class(_))) =>
+            {
+                let (base, implicit, field, root) = self.class_field_root(target).unwrap();
+                let object = if let Some(base) = base {
+                    self.expr(host, base)?
+                } else {
+                    self.read(implicit.unwrap())
+                };
+                let Value::Class(_, index) = object else {
+                    unreachable!()
+                };
+                let mut path = Vec::new();
+                let mut cursor = target;
+                while cursor != root {
+                    let Expr::Member { base, .. } = self.ast.exprs[cursor] else {
+                        unreachable!()
+                    };
+                    let Res::Field(field) = self.checked.resolutions[cursor] else {
+                        unreachable!()
+                    };
+                    path.push(field as usize);
+                    cursor = base;
+                }
+                path.reverse();
+                let mut old = self.structs[index as usize][field as usize];
+                for &part in &path {
+                    let Value::Struct(_, nested) = old else {
+                        unreachable!()
+                    };
+                    old = self.structs[nested as usize][part];
+                }
+                let rhs = self.expr(host, value)?;
+                let mut updated = match op {
+                    AssignOp::Set => rhs,
+                    AssignOp::Compound(op) => self.binary_values(op, old, rhs, span)?,
+                };
+                let mut current = self.structs[index as usize][field as usize];
+                let mut parents = Vec::new();
+                for &part in &path {
+                    let Value::Struct(ty, nested) = current else {
+                        unreachable!()
+                    };
+                    parents.push((ty, nested, part));
+                    current = self.structs[nested as usize][part];
+                }
+                for (ty, nested, part) in parents.into_iter().rev() {
+                    let mut fields = self.structs[nested as usize].clone();
+                    fields[part] = updated;
+                    let next = self.structs.len() as u32;
+                    self.structs.push(fields);
+                    updated = Value::Struct(ty, next);
+                }
+                self.structs[index as usize][field as usize] = updated;
+            }
+            Stmt::AssignField {
+                target,
+                op,
+                value,
+                span,
             } if matches!(self.ast.exprs[target], Expr::Member { base, .. } if matches!(self.checked.types[base], Ty::Class(_))) =>
             {
                 let Expr::Member { base, .. } = self.ast.exprs[target] else {
@@ -690,6 +750,33 @@ impl Eval<'_> {
             updated = Value::Struct(ty, next);
         }
         self.locals[binding.index()] = Some(updated);
+    }
+
+    fn class_field_root(
+        &self,
+        mut expr: ExprId,
+    ) -> Option<(Option<ExprId>, Option<BindingId>, u32, ExprId)> {
+        loop {
+            match self.ast.exprs[expr] {
+                Expr::Member { base, .. } => {
+                    if matches!(self.checked.types[base], Ty::Class(_)) {
+                        let Res::Field(index) = self.checked.resolutions[expr] else {
+                            return None;
+                        };
+                        return Some((Some(base), None, index, expr));
+                    }
+                    expr = base;
+                }
+                _ => {
+                    if let Res::SelfField(binding, index) = self.checked.resolutions[expr]
+                        && matches!(self.checked.bindings[binding].ty, Ty::Class(_))
+                    {
+                        return Some((None, Some(binding), index, expr));
+                    }
+                    return None;
+                }
+            }
+        }
     }
 
     fn match_payload(
