@@ -19,3 +19,13 @@ test.check(wrapper.choice == choice && choice != null)
 enum Container { Wrapped(item: ?Item) }
 test.check(match Container.Wrapped(original) { .Wrapped(item) => item.text == "alive", .Wrapped(null) => false })
 test.check(match Container.Wrapped(null) { .Wrapped(item) => false, .Wrapped(null) => true })
+fn keep(value: ?Item) -> ?Item { return value }
+let outer: ?Wrapper = wrapper
+let default_wrapper = Wrapper { item: null, choice: null }
+test.check((outer ?? default_wrapper) == wrapper)
+test.check((keep(original) ?? original) == original)
+var changing: ?Item = null
+changing = original
+test.check(changing == value)
+changing = null
+test.check(changing == null)

@@ -1900,3 +1900,28 @@ fn optional_enum_patterns_survive_collection() {
         }
     }
 }
+
+#[test]
+fn aggregate_match_binding_survives_collection() {
+    let source = include_str!("fixtures/managed/aggregate_match_binding.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/aggregate_match_binding.expect")
+            );
+        }
+    }
+}

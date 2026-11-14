@@ -804,6 +804,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
+- T017-49: struct and optional struct match bindings preserve managed fields;
+  string bindings use the correct managed slot type.
 - T017-48: optional enum subjects and payloads support nested case matching,
   with null included in exhaustiveness and forced-collection fixtures.
 - T017-47: optional structs and enums use tagged inline payloads with nullable

@@ -3127,16 +3127,12 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let target = self.top;
                 self.top += self.width(narrowed);
                 self.slots[binding] = target;
-                if inner.is_some() {
-                    for offset in 0..self.width(narrowed) {
-                        self.asm.emit(
-                            Op::Mov,
-                            Operands::abc((target + offset).into(), (source + offset).into(), 0),
-                            span,
-                        )?;
-                    }
-                } else {
-                    self.move_nullable(subject_ty, source, target, false, span)?;
+                for offset in 0..self.width(narrowed) {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc((target + offset).into(), (source + offset).into(), 0),
+                        span,
+                    )?;
                 }
             }
             if let Some(guard) = arm.guard {

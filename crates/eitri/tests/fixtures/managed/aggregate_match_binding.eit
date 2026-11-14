@@ -1,0 +1,9 @@
+//! host: test
+import test from "test"
+struct Entry { count: i64, text: string }
+fn describe(entry: Entry) -> string { return match entry { e => e.text } }
+fn optional(entry: ?Entry) -> i64 { return match entry { null => 0, e => e.count } }
+let entry = Entry { count: 7, text: "kept" }
+test.check(describe(entry) == "kept")
+test.check(optional(entry) == 7 && optional(null) == 0)
+test.check(match "rooted" { word => word == "rooted" })

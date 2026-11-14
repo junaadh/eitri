@@ -2495,3 +2495,17 @@ execution 250/292 ns, total 10.0/10.5 µs; retained context memory was
 30,898 B. This benchmark does not exercise optional enum patterns. Samples:
 `/private/tmp/eitri-t017-48-samples.csv`; report:
 `/private/tmp/eitri-t017-48-bench.txt`.
+
+### T017-49 aggregate match bindings
+
+Structs and optional structs support catch-all match bindings; managed string
+bindings copy their existing slot type correctly. Additional optional aggregate
+fixtures cover nested layouts, assignments and returns. Both interpreters and
+lowerers run the fixtures with forced collection.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 9,250/9,709 ns,
+execution 209/292 ns, total 9,459/9,959 ns; retained context memory was
+30,898 B. This benchmark does not exercise match bindings. Samples:
+`/private/tmp/eitri-t017-49-samples.csv`; report:
+`/private/tmp/eitri-t017-49-bench.txt`.

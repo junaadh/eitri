@@ -2544,7 +2544,7 @@ impl<'i> Checker<'_, 'i> {
         used: bool,
     ) -> Ty {
         let node = self.ast().matches[id];
-        if matches!(subject, Ty::Struct(_) | Ty::Void | Ty::FindOffset) {
+        if matches!(subject, Ty::Void | Ty::FindOffset) {
             self.report(
                 Code::TypeMismatch,
                 "match subject type is not supported",

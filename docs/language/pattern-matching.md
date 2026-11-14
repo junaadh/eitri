@@ -1,7 +1,8 @@
 # Pattern matching
 
 The current implementation supports exhaustive scalar matches with literals and
-catch-all arms (including boolean exhaustiveness), and enum matches using `.Case` or `Type.Case`,
+catch-all arms (including boolean exhaustiveness), struct binding and wildcard
+arms, and enum matches using `.Case` or `Type.Case`,
 positional or labeled payload bindings, literals, qualified or shorthand nested
 cases, or `_`,
 and catch-all `_` or binding arms. Parenthesized
