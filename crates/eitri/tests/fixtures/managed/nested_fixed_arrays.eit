@@ -1,0 +1,19 @@
+//! host: test
+import test from "test"
+let values: [2][2]string = [["a", "b"], ["c", "d"]]
+let copy = values
+test.check(values[0][1] == "b" && values[1][0] == "c")
+test.check(values == copy)
+struct Holder { values: [2][2]string, marker: i64 }
+let holder = Holder { values: values, marker: 9 }
+test.check(holder.marker == 9 && holder.values[1][1] == "d")
+var mutable: [2][2]string = values
+mutable[0] = ["x", "y"]
+test.check(mutable[0][0] == "x" && copy[0][0] == "a")
+struct Item { text: string }
+struct Forward { values: [2][2]Item, marker: i64 }
+let forward = Forward { values: [[Item { text: "a" }, Item { text: "b" }], [Item { text: "c" }, Item { text: "d" }]], marker: 8 }
+test.check(forward.marker == 8 && forward.values[1][1].text == "d")
+let empty_outer: [0][2]string = []
+let empty_inner: [2][0]string = [[], []]
+test.check(empty_outer == empty_outer && empty_inner == empty_inner)

@@ -762,6 +762,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 | Ty::FixedEnum(_, _)
                 | Ty::FixedResult(_, _)
                 | Ty::FixedOptional(_, _)
+                | Ty::FixedNested(_, _)
                 | Ty::Result(_)
                 | Ty::Struct(_)
                 | Ty::Enum(_)
@@ -780,6 +781,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedEnum(_, _)
                         | Ty::FixedResult(_, _)
                         | Ty::FixedOptional(_, _)
+                        | Ty::FixedNested(_, _)
                         | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
@@ -840,6 +842,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             Ty::FixedOptional(size, id) => {
                 Some((size, self.checked.fixed_optional_types[id as usize]))
             }
+            Ty::FixedNested(size, id) => Some((size, self.checked.nested_fixed_types[id as usize])),
             _ => ty.fixed_inner(),
         }
     }
@@ -861,6 +864,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     fn width(&self, ty: Ty) -> u32 {
         match ty {
             Ty::OptionalFixed(id) => 1 + self.width(self.checked.optional_fixed_types[id as usize]),
+            Ty::FixedNested(size, id) => u32::from(size)
+                .saturating_mul(self.width(self.checked.nested_fixed_types[id as usize]))
+                .max(1),
             Ty::FixedOptional(size, id) => u32::from(size)
                 .saturating_mul(self.width(self.checked.fixed_optional_types[id as usize]))
                 .max(1),
@@ -912,6 +918,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         }
         if let Some((size, inner)) = self.fixed_inner(ty)
             && !matches!(inner, Ty::Struct(_) | Ty::Enum(_) | Ty::Result(_))
+            && self.fixed_inner(inner).is_none()
             && inner.optional_inner().is_none()
         {
             let element = match inner {
@@ -936,6 +943,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 | Ty::FixedEnum(_, _)
                 | Ty::FixedResult(_, _)
                 | Ty::FixedOptional(_, _)
+                | Ty::FixedNested(_, _)
                 | Ty::Result(_)
                 | Ty::Struct(_)
                 | Ty::Enum(_)
@@ -1273,6 +1281,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                                 | Ty::FixedEnum(_, _)
                                 | Ty::FixedResult(_, _)
                                 | Ty::FixedOptional(_, _)
+                                | Ty::FixedNested(_, _)
                                 | Ty::Result(_)
                                 | Ty::Struct(_)
                                 | Ty::Enum(_)
@@ -1570,6 +1579,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                                 | Ty::FixedEnum(_, _)
                                 | Ty::FixedResult(_, _)
                                 | Ty::FixedOptional(_, _)
+                                | Ty::FixedNested(_, _)
                                 | Ty::Result(_)
                                 | Ty::Struct(_)
                                 | Ty::Enum(_)
@@ -2002,6 +2012,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     | Ty::FixedEnum(_, _)
                     | Ty::FixedResult(_, _)
                     | Ty::FixedOptional(_, _)
+                    | Ty::FixedNested(_, _)
                     | Ty::Result(_)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
@@ -2605,6 +2616,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedEnum(_, _)
                         | Ty::FixedResult(_, _)
                         | Ty::FixedOptional(_, _)
+                        | Ty::FixedNested(_, _)
                         | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
@@ -2686,6 +2698,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedEnum(_, _)
                         | Ty::FixedResult(_, _)
                         | Ty::FixedOptional(_, _)
+                        | Ty::FixedNested(_, _)
                         | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
@@ -2886,6 +2899,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     | Ty::FixedEnum(_, _)
                     | Ty::FixedResult(_, _)
                     | Ty::FixedOptional(_, _)
+                    | Ty::FixedNested(_, _)
                     | Ty::Result(_)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
@@ -3141,6 +3155,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     | Ty::FixedEnum(_, _)
                     | Ty::FixedResult(_, _)
                     | Ty::FixedOptional(_, _)
+                    | Ty::FixedNested(_, _)
                     | Ty::Result(_)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
@@ -3192,6 +3207,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             | Ty::FixedEnum(_, _)
                             | Ty::FixedResult(_, _)
                             | Ty::FixedOptional(_, _)
+                            | Ty::FixedNested(_, _)
                             | Ty::Result(_)
                             | Ty::Struct(_)
                             | Ty::Enum(_)
@@ -4022,6 +4038,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedEnum(_, _)
                         | Ty::FixedResult(_, _)
                         | Ty::FixedOptional(_, _)
+                        | Ty::FixedNested(_, _)
                         | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)

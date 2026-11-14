@@ -2899,3 +2899,11 @@ Optional fixed arrays use a presence tag plus nullable inline elements. The
 1001-sample release harness in the isolated workspace measured fresh module
 compile p50/p99 14.2/23.1 µs and source-to-result 14.5/23.6 µs on the general
 workload. Raw samples: `/private/tmp/eitri-t017-86-samples.csv`.
+
+### T017-87 two-dimensional fixed arrays
+
+Two-dimensional arrays flatten inline, with indexing implemented using bounded
+fixed windows. The 1001-sample release harness in the isolated workspace
+measured fresh module compile p50/p99 14.2/19.2 µs and source-to-result
+14.5/19.6 µs on the general workload. Raw samples:
+`/private/tmp/eitri-t017-87-samples.csv`.

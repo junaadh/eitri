@@ -182,6 +182,7 @@ pub enum TypeExpr {
     FixedResult(TokenId, TokenId, TokenId),
     FixedOptional(TokenId, TokenId),
     OptionalFixed(TokenId, TokenId),
+    FixedNested(TokenId, TokenId, TokenId),
     /// Unsupported, already reported.
     Error,
 }

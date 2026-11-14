@@ -757,6 +757,23 @@ impl Parser<'_> {
     }
 
     fn type_expr(&mut self) -> Parsed<TypeExpr> {
+        if self.at(T::LBracket)
+            && self.nth(1) == T::Int
+            && self.nth(2) == T::RBracket
+            && self.nth(3) == T::LBracket
+            && self.nth(4) == T::Int
+            && self.nth(5) == T::RBracket
+            && self.nth(6) == T::Ident
+        {
+            self.bump();
+            let outer = self.bump();
+            self.bump();
+            self.bump();
+            let inner = self.bump();
+            self.bump();
+            let element = self.bump();
+            return Ok(TypeExpr::FixedNested(outer, inner, element));
+        }
         if self.at(T::QuestionBracket)
             && self.nth(1) == T::Int
             && self.nth(2) == T::RBracket

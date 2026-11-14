@@ -101,6 +101,7 @@ pub struct Checked {
     pub result_types: Vec<(Ty, Ty)>,
     pub fixed_optional_types: Vec<Ty>,
     pub optional_fixed_types: Vec<Ty>,
+    pub nested_fixed_types: Vec<Ty>,
     /// For `let`: the declared binding; for assignment: the target.
     pub stmt_bindings: IndexVec<StmtId, Option<BindingId>>,
     /// Field index for a bare receiver-field assignment.
@@ -142,6 +143,7 @@ impl Checked {
         self.result_types.clear();
         self.fixed_optional_types.clear();
         self.optional_fixed_types.clear();
+        self.nested_fixed_types.clear();
         self.stmt_bindings.clear();
         self.stmt_fields.clear();
         self.signatures.clear();
@@ -239,6 +241,7 @@ impl CheckScratch {
             + c.result_types.capacity() * size_of::<(Ty, Ty)>()
             + c.fixed_optional_types.capacity() * size_of::<Ty>()
             + c.optional_fixed_types.capacity() * size_of::<Ty>()
+            + c.nested_fixed_types.capacity() * size_of::<Ty>()
             + c.stmt_bindings.capacity() * size_of::<Option<BindingId>>()
             + c.stmt_fields.capacity() * size_of::<Option<u32>>()
             + c.signatures.capacity() * size_of::<Signature>()
@@ -310,6 +313,8 @@ impl CheckScratch {
             .reserve_budgeted(count.saturating_sub(c.enum_starts.len()), budget)?;
         c.enum_widths
             .reserve_budgeted(count.saturating_sub(c.enum_widths.len()), budget)?;
+        let nested_fixed_count = count.saturating_sub(c.nested_fixed_types.len());
+        budget.reserve_vec(&mut c.nested_fixed_types, nested_fixed_count)?;
         let optional_fixed_count = count.saturating_sub(c.optional_fixed_types.len());
         budget.reserve_vec(&mut c.optional_fixed_types, optional_fixed_count)?;
         let fixed_optional_count = count.saturating_sub(c.fixed_optional_types.len());
@@ -699,7 +704,8 @@ impl<'i> Checker<'_, 'i> {
                 };
                 return Ty::Result(index as u32);
             }
-            TypeExpr::FixedOptional(token, _)
+            TypeExpr::FixedNested(token, _, _)
+            | TypeExpr::FixedOptional(token, _)
             | TypeExpr::FixedResult(token, _, _)
             | TypeExpr::FixedI64(token)
             | TypeExpr::FixedString(token)
@@ -709,6 +715,36 @@ impl<'i> Checker<'_, 'i> {
                 let size = text.parse::<u16>().ok().filter(|&size| size <= 256);
                 return if let Some(size) = size {
                     match ty {
+                        TypeExpr::FixedNested(_, inner_size, element) => {
+                            let symbol = self.symbol(element);
+                            let written = if symbol == eitri_base::sym::I64 {
+                                TypeExpr::FixedI64(inner_size)
+                            } else if symbol == eitri_base::sym::STRING {
+                                TypeExpr::FixedString(inner_size)
+                            } else if symbol.is_type_name() {
+                                TypeExpr::FixedScalar(inner_size, element)
+                            } else {
+                                TypeExpr::FixedNamed(inner_size, element)
+                            };
+                            let inner = self.ty(written, false);
+                            if inner == Ty::Error {
+                                Ty::Error
+                            } else {
+                                let index = if let Some(index) = self
+                                    .out
+                                    .nested_fixed_types
+                                    .iter()
+                                    .position(|&item| item == inner)
+                                {
+                                    index
+                                } else {
+                                    let index = self.out.nested_fixed_types.len();
+                                    self.out.nested_fixed_types.push(inner);
+                                    index
+                                };
+                                Ty::FixedNested(size, index as u32)
+                            }
+                        }
                         TypeExpr::FixedOptional(_, element) => {
                             let inner = self.ty(TypeExpr::OptionalNamed(element), false);
                             if inner == Ty::Error {
@@ -1046,6 +1082,23 @@ impl<'i> Checker<'_, 'i> {
                             | Ty::FixedString(size)
                             | Ty::FixedScalar(size, _)
                             | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                            Ty::FixedNested(size, id) => {
+                                let inner = self.out.nested_fixed_types[id as usize];
+                                let width = match inner {
+                                    Ty::FixedI64(n)
+                                    | Ty::FixedString(n)
+                                    | Ty::FixedScalar(n, _)
+                                    | Ty::FixedClass(n, _) => u32::from(n).max(1),
+                                    Ty::FixedStruct(n, id) => u32::from(n)
+                                        .saturating_mul(self.out.struct_widths[id])
+                                        .max(1),
+                                    Ty::FixedEnum(n, id) => {
+                                        u32::from(n).saturating_mul(self.out.enum_widths[id]).max(1)
+                                    }
+                                    _ => 1,
+                                };
+                                u32::from(size).saturating_mul(width).max(1)
+                            }
                             Ty::OptionalFixed(id) => {
                                 let inner = self.out.optional_fixed_types[id as usize];
                                 1 + match inner {
@@ -1226,6 +1279,23 @@ impl<'i> Checker<'_, 'i> {
                     | Ty::FixedString(size)
                     | Ty::FixedScalar(size, _)
                     | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                    Ty::FixedNested(size, id) => {
+                        let inner = self.out.nested_fixed_types[id as usize];
+                        let width = match inner {
+                            Ty::FixedI64(n)
+                            | Ty::FixedString(n)
+                            | Ty::FixedScalar(n, _)
+                            | Ty::FixedClass(n, _) => u32::from(n).max(1),
+                            Ty::FixedStruct(n, id) => u32::from(n)
+                                .saturating_mul(self.out.struct_widths[id])
+                                .max(1),
+                            Ty::FixedEnum(n, id) => {
+                                u32::from(n).saturating_mul(self.out.enum_widths[id]).max(1)
+                            }
+                            _ => 1,
+                        };
+                        u32::from(size).saturating_mul(width).max(1)
+                    }
                     Ty::OptionalFixed(id) => {
                         let inner = self.out.optional_fixed_types[id as usize];
                         1 + match inner {
@@ -1532,7 +1602,10 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 }
                 let child = fields[field];
-                let child_node = if let Ty::OptionalFixed(id) = child {
+                let child_node = if let Ty::FixedNested(_, id) = child {
+                    let inner = self.out.nested_fixed_types[id as usize];
+                    inner.fixed_inner().map_or(inner, |(_, inner)| inner)
+                } else if let Ty::OptionalFixed(id) = child {
                     let inner = self.out.optional_fixed_types[id as usize];
                     inner.fixed_inner().map_or(inner, |(_, inner)| inner)
                 } else if let Ty::FixedOptional(_, id) = child {
@@ -1597,6 +1670,23 @@ impl<'i> Checker<'_, 'i> {
                         | Ty::FixedString(size)
                         | Ty::FixedScalar(size, _)
                         | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                        Ty::FixedNested(size, id) => {
+                            let inner = self.out.nested_fixed_types[id as usize];
+                            let width = match inner {
+                                Ty::FixedI64(n)
+                                | Ty::FixedString(n)
+                                | Ty::FixedScalar(n, _)
+                                | Ty::FixedClass(n, _) => u32::from(n).max(1),
+                                Ty::FixedStruct(n, id) => u32::from(n)
+                                    .saturating_mul(self.out.struct_widths[id])
+                                    .max(1),
+                                Ty::FixedEnum(n, id) => {
+                                    u32::from(n).saturating_mul(self.out.enum_widths[id]).max(1)
+                                }
+                                _ => 1,
+                            };
+                            u32::from(size).saturating_mul(width).max(1)
+                        }
                         Ty::OptionalFixed(id) => {
                             let inner = self.out.optional_fixed_types[id as usize];
                             1 + match inner {
@@ -2124,6 +2214,7 @@ impl<'i> Checker<'_, 'i> {
     fn fixed_inner(&self, ty: Ty) -> Option<(u16, Ty)> {
         match ty {
             Ty::FixedOptional(size, id) => Some((size, self.out.fixed_optional_types[id as usize])),
+            Ty::FixedNested(size, id) => Some((size, self.out.nested_fixed_types[id as usize])),
             _ => ty.fixed_inner(),
         }
     }

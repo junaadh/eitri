@@ -197,6 +197,7 @@ impl Dumper<'_> {
             Ty::FixedEnum(_, _) => "'[N]enum'",
             Ty::FixedResult(_, _) => "'[N]result'",
             Ty::FixedOptional(_, _) => "'[N]optional'",
+            Ty::FixedNested(_, _) => "'[N][M]T'",
             Ty::Bool => "'bool'",
             Ty::Void => "'void'",
             Ty::Error => "'<error>'",
@@ -241,6 +242,7 @@ impl Dumper<'_> {
             Ty::FixedEnum(_, _) => "[N]enum",
             Ty::FixedResult(_, _) => "[N]result",
             Ty::FixedOptional(_, _) => "[N]optional",
+            Ty::FixedNested(_, _) => "[N][M]T",
             Ty::Bool => "bool",
             Ty::Void => "void",
             Ty::Error => "<error>",
@@ -287,7 +289,8 @@ impl Dumper<'_> {
                 TYPE,
                 &format!("'{}!{}'", self.token(error), self.token(success)),
             ),
-            TypeExpr::OptionalFixed(size, _)
+            TypeExpr::FixedNested(size, _, _)
+            | TypeExpr::OptionalFixed(size, _)
             | TypeExpr::FixedOptional(size, _)
             | TypeExpr::FixedResult(size, _, _)
             | TypeExpr::FixedNamed(size, _)
@@ -413,6 +416,7 @@ impl Dumper<'_> {
                     | TypeExpr::OptionalResultNamed(_, token)
                     | TypeExpr::ResultOptional(_, token)
                     | TypeExpr::ResultNamed(_, token)
+                    | TypeExpr::FixedNested(token, _, _)
                     | TypeExpr::OptionalFixed(token, _)
                     | TypeExpr::FixedOptional(token, _)
                     | TypeExpr::FixedResult(token, _, _)
