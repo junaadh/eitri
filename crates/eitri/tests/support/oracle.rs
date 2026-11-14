@@ -541,7 +541,8 @@ impl Eval<'_> {
                     | Ty::FixedClass(size, _)
                     | Ty::FixedStruct(size, _)
                     | Ty::FixedEnum(size, _)
-                    | Ty::FixedResult(size, _),
+                    | Ty::FixedResult(size, _)
+                    | Ty::FixedOptional(size, _),
                     array,
                 )) = before
                 else {
@@ -584,7 +585,8 @@ impl Eval<'_> {
                     | Ty::FixedClass(_, _)
                     | Ty::FixedStruct(_, _)
                     | Ty::FixedEnum(_, _)
-                    | Ty::FixedResult(_, _)) => Value::FixedScalar(ty, next),
+                    | Ty::FixedResult(_, _)
+                    | Ty::FixedOptional(_, _)) => Value::FixedScalar(ty, next),
                     _ => Value::FixedI64(size, next),
                 };
                 if let Some((object, field, path)) = class_target {
@@ -1356,7 +1358,8 @@ impl Eval<'_> {
                     | Ty::FixedClass(size, _)
                     | Ty::FixedStruct(size, _)
                     | Ty::FixedEnum(size, _)
-                    | Ty::FixedResult(size, _),
+                    | Ty::FixedResult(size, _)
+                    | Ty::FixedOptional(size, _),
                     array,
                 )) = self.expr(host, base)?
                 else {
@@ -1382,7 +1385,8 @@ impl Eval<'_> {
                     | Ty::FixedClass(_, _)
                     | Ty::FixedStruct(_, _)
                     | Ty::FixedEnum(_, _)
-                    | Ty::FixedResult(_, _)) => Value::FixedScalar(ty, id),
+                    | Ty::FixedResult(_, _)
+                    | Ty::FixedOptional(_, _)) => Value::FixedScalar(ty, id),
                     _ => Value::FixedI64(size, id),
                 })
             }
@@ -2252,6 +2256,7 @@ impl Eval<'_> {
                 | Ty::FixedStruct(_, _)
                 | Ty::FixedEnum(_, _)
                 | Ty::FixedResult(_, _)
+                | Ty::FixedOptional(_, _)
                 | Ty::Result(_)
                 | Ty::Struct(_)
                 | Ty::Enum(_)

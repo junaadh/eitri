@@ -28,6 +28,7 @@ pub enum Ty {
     FixedStruct(u16, eitri_syntax::ast::StructId),
     FixedEnum(u16, eitri_syntax::ast::EnumId),
     FixedResult(u16, u32),
+    FixedOptional(u16, u32),
     I8,
     U8,
     U64,
@@ -80,6 +81,7 @@ impl Ty {
             | Self::FixedStruct(_, _)
             | Self::FixedEnum(_, _)
             | Self::FixedResult(_, _)
+            | Self::FixedOptional(_, _)
             | Self::Struct(_)
             | Self::Class(_)
             | Self::Enum(_)
@@ -205,6 +207,7 @@ impl Ty {
             Ty::FixedStruct(_, _) => "a fixed struct array",
             Ty::FixedEnum(_, _) => "a fixed enum array",
             Ty::FixedResult(_, _) => "a fixed result array",
+            Ty::FixedOptional(_, _) => "a fixed optional array",
             Ty::I8 => "`i8`",
             Ty::U8 => "`u8`",
             Ty::U64 => "`u64`",

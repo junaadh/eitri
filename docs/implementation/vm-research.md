@@ -2885,3 +2885,10 @@ inline dependencies. The 1001-sample release harness in the isolated workspace
 measured fresh module compile p50/p99 14.5/21.8 µs and source-to-result
 14.9/22.6 µs on the general workload. Raw samples:
 `/private/tmp/eitri-t017-84-samples.csv`.
+
+### T017-85 fixed arrays of optionals
+
+Optional element layouts use checked element widths and nullable managed slots.
+The 1001-sample release harness in the isolated workspace measured fresh module
+compile p50/p99 13.4/19.8 µs and source-to-result 13.7/20.2 µs on the general
+workload. Raw samples: `/private/tmp/eitri-t017-85-samples.csv`.

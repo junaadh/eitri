@@ -99,6 +99,7 @@ pub struct Checked {
     pub optional_wrap: IndexVec<ExprId, bool>,
     pub result_wrap: IndexVec<ExprId, Option<u32>>,
     pub result_types: Vec<(Ty, Ty)>,
+    pub fixed_optional_types: Vec<Ty>,
     /// For `let`: the declared binding; for assignment: the target.
     pub stmt_bindings: IndexVec<StmtId, Option<BindingId>>,
     /// Field index for a bare receiver-field assignment.
@@ -138,6 +139,7 @@ impl Checked {
         self.optional_wrap.clear();
         self.result_wrap.clear();
         self.result_types.clear();
+        self.fixed_optional_types.clear();
         self.stmt_bindings.clear();
         self.stmt_fields.clear();
         self.signatures.clear();
@@ -233,6 +235,7 @@ impl CheckScratch {
             + c.optional_wrap.capacity() * size_of::<bool>()
             + c.result_wrap.capacity() * size_of::<Option<u32>>()
             + c.result_types.capacity() * size_of::<(Ty, Ty)>()
+            + c.fixed_optional_types.capacity() * size_of::<Ty>()
             + c.stmt_bindings.capacity() * size_of::<Option<BindingId>>()
             + c.stmt_fields.capacity() * size_of::<Option<u32>>()
             + c.signatures.capacity() * size_of::<Signature>()
@@ -304,6 +307,8 @@ impl CheckScratch {
             .reserve_budgeted(count.saturating_sub(c.enum_starts.len()), budget)?;
         c.enum_widths
             .reserve_budgeted(count.saturating_sub(c.enum_widths.len()), budget)?;
+        let fixed_optional_count = count.saturating_sub(c.fixed_optional_types.len());
+        budget.reserve_vec(&mut c.fixed_optional_types, fixed_optional_count)?;
         let result_count = count.saturating_sub(c.result_types.len());
         budget.reserve_vec(&mut c.result_types, result_count)?;
         let enum_cases = count.saturating_sub(c.enum_case_types.len());
@@ -660,7 +665,8 @@ impl<'i> Checker<'_, 'i> {
                 };
                 return Ty::Result(index as u32);
             }
-            TypeExpr::FixedResult(token, _, _)
+            TypeExpr::FixedOptional(token, _)
+            | TypeExpr::FixedResult(token, _, _)
             | TypeExpr::FixedI64(token)
             | TypeExpr::FixedString(token)
             | TypeExpr::FixedScalar(token, _)
@@ -669,6 +675,26 @@ impl<'i> Checker<'_, 'i> {
                 let size = text.parse::<u16>().ok().filter(|&size| size <= 256);
                 return if let Some(size) = size {
                     match ty {
+                        TypeExpr::FixedOptional(_, element) => {
+                            let inner = self.ty(TypeExpr::OptionalNamed(element), false);
+                            if inner == Ty::Error {
+                                Ty::Error
+                            } else {
+                                let index = if let Some(index) = self
+                                    .out
+                                    .fixed_optional_types
+                                    .iter()
+                                    .position(|&item| item == inner)
+                                {
+                                    index
+                                } else {
+                                    let index = self.out.fixed_optional_types.len();
+                                    self.out.fixed_optional_types.push(inner);
+                                    index
+                                };
+                                Ty::FixedOptional(size, index as u32)
+                            }
+                        }
                         TypeExpr::FixedResult(_, error, success) => {
                             match self.ty(TypeExpr::ResultNamed(error, success), false) {
                                 Ty::Result(id) => Ty::FixedResult(size, id),
@@ -986,6 +1012,16 @@ impl<'i> Checker<'_, 'i> {
                             | Ty::FixedString(size)
                             | Ty::FixedScalar(size, _)
                             | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                            Ty::FixedOptional(size, id) => {
+                                let inner = self.out.fixed_optional_types[id as usize];
+                                let width = match inner {
+                                    Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                                    Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
+                                    ty if ty.tagged_optional_inner().is_some() => 2,
+                                    _ => 1,
+                                };
+                                u32::from(size).saturating_mul(width).max(1)
+                            }
                             Ty::FixedStruct(size, id) => u32::from(size)
                                 .saturating_mul(self.out.struct_widths[id])
                                 .max(1),
@@ -1140,6 +1176,16 @@ impl<'i> Checker<'_, 'i> {
                     | Ty::FixedString(size)
                     | Ty::FixedScalar(size, _)
                     | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                    Ty::FixedOptional(size, id) => {
+                        let inner = self.out.fixed_optional_types[id as usize];
+                        let width = match inner {
+                            Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                            Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
+                            ty if ty.tagged_optional_inner().is_some() => 2,
+                            _ => 1,
+                        };
+                        u32::from(size).saturating_mul(width).max(1)
+                    }
                     Ty::FixedStruct(size, id) => u32::from(size)
                         .saturating_mul(self.out.struct_widths[id])
                         .max(1),
@@ -1420,28 +1466,32 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 }
                 let child = fields[field];
-                let child_node =
-                    if let Ty::Result(id) | Ty::OptionalResult(id) | Ty::FixedResult(_, id) = child
-                    {
-                        let (error, success) = self.out.result_types[id as usize];
-                        [error, success]
-                            .into_iter()
-                            .filter_map(|ty| {
-                                let ty = ty.fixed_inner().map_or(ty, |(_, inner)| inner);
-                                let ty = ty.tagged_optional_inner().unwrap_or(ty);
-                                let index = match ty {
-                                    Ty::Struct(id) => id.index(),
-                                    Ty::Enum(id) => structs + id.index(),
-                                    _ => return None,
-                                };
-                                (self.struct_states[index] != 2)
-                                    .then_some((ty, self.struct_states[index]))
-                            })
-                            .min_by_key(|(_, state)| if *state == 1 { 0 } else { 1 })
-                            .map_or(Ty::Error, |(ty, _)| ty)
-                    } else {
-                        child.fixed_inner().map_or(child, |(_, inner)| inner)
-                    };
+                let child_node = if let Ty::FixedOptional(_, id) = child {
+                    self.out.fixed_optional_types[id as usize]
+                        .tagged_optional_inner()
+                        .unwrap_or(Ty::Error)
+                } else if let Ty::Result(id) | Ty::OptionalResult(id) | Ty::FixedResult(_, id) =
+                    child
+                {
+                    let (error, success) = self.out.result_types[id as usize];
+                    [error, success]
+                        .into_iter()
+                        .filter_map(|ty| {
+                            let ty = ty.fixed_inner().map_or(ty, |(_, inner)| inner);
+                            let ty = ty.tagged_optional_inner().unwrap_or(ty);
+                            let index = match ty {
+                                Ty::Struct(id) => id.index(),
+                                Ty::Enum(id) => structs + id.index(),
+                                _ => return None,
+                            };
+                            (self.struct_states[index] != 2)
+                                .then_some((ty, self.struct_states[index]))
+                        })
+                        .min_by_key(|(_, state)| if *state == 1 { 0 } else { 1 })
+                        .map_or(Ty::Error, |(ty, _)| ty)
+                } else {
+                    child.fixed_inner().map_or(child, |(_, inner)| inner)
+                };
                 let child_node = child_node
                     .tagged_optional_inner()
                     .filter(|ty| matches!(ty, Ty::Struct(_) | Ty::Enum(_)))
@@ -1478,6 +1528,16 @@ impl<'i> Checker<'_, 'i> {
                         | Ty::FixedString(size)
                         | Ty::FixedScalar(size, _)
                         | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                        Ty::FixedOptional(size, id) => {
+                            let inner = self.out.fixed_optional_types[id as usize];
+                            let width = match inner {
+                                Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                                Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
+                                ty if ty.tagged_optional_inner().is_some() => 2,
+                                _ => 1,
+                            };
+                            u32::from(size).saturating_mul(width).max(1)
+                        }
                         Ty::FixedStruct(size, id) => u32::from(size)
                             .saturating_mul(self.out.struct_widths[id])
                             .max(1),
@@ -1976,6 +2036,13 @@ impl<'i> Checker<'_, 'i> {
 
     /// Check `expr` as a value against `expected`, reporting a mismatch at
     /// its span. Returns its own type.
+    fn fixed_inner(&self, ty: Ty) -> Option<(u16, Ty)> {
+        match ty {
+            Ty::FixedOptional(size, id) => Some((size, self.out.fixed_optional_types[id as usize])),
+            _ => ty.fixed_inner(),
+        }
+    }
+
     fn value(&mut self, expr: ExprId, expected: Option<Ty>) -> Ty {
         let guidance = if matches!(
             self.input.ast.exprs[expr],
@@ -2120,7 +2187,7 @@ impl<'i> Checker<'_, 'i> {
             Expr::Index { base, index } => {
                 let ty = self.value(base, None);
                 self.value(index, Some(Ty::I64));
-                if let Some((_, inner)) = ty.fixed_inner() {
+                if let Some((_, inner)) = self.fixed_inner(ty) {
                     inner
                 } else {
                     if ty != Ty::Error {
@@ -2135,7 +2202,9 @@ impl<'i> Checker<'_, 'i> {
             }
             Expr::FixedArray(elements) => {
                 let values = self.input.ast.args(elements);
-                let expected_size = expected.and_then(Ty::fixed_inner).map(|(size, _)| size);
+                let expected_size = expected
+                    .and_then(|ty| self.fixed_inner(ty))
+                    .map(|(size, _)| size);
                 if expected_size.is_none() {
                     self.report(
                         Code::Unsupported,
@@ -2158,7 +2227,7 @@ impl<'i> Checker<'_, 'i> {
                     );
                 }
                 let element_ty = expected
-                    .and_then(Ty::fixed_inner)
+                    .and_then(|ty| self.fixed_inner(ty))
                     .map_or(Ty::I64, |(_, ty)| ty);
                 for &element in values {
                     self.value(element, Some(element_ty));

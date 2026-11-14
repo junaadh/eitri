@@ -941,6 +941,19 @@ impl Parser<'_> {
     }
 
     fn type_expr(&mut self) -> Parsed<TypeExpr> {
+        if self.at(T::LBracket)
+            && self.nth(1) == T::Int
+            && self.nth(2) == T::RBracket
+            && self.nth(3) == T::Question
+            && self.nth(4) == T::Ident
+        {
+            self.bump();
+            let size = self.bump();
+            self.bump();
+            self.bump();
+            let element = self.bump();
+            return Ok(TypeExpr::FixedOptional(size, element));
+        }
         if self.at(T::Ident)
             && self.nth(1) == T::Bang
             && self.nth(2) == T::LBracket

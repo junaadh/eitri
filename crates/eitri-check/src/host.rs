@@ -256,7 +256,8 @@ fn value_type(
         ));
         return Ty::Error;
     }
-    if let TypeExpr::FixedResult(token, _, _)
+    if let TypeExpr::FixedOptional(token, _)
+    | TypeExpr::FixedResult(token, _, _)
     | TypeExpr::FixedI64(token)
     | TypeExpr::FixedString(token)
     | TypeExpr::FixedScalar(token, _)

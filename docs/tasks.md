@@ -807,6 +807,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-85: fixed arrays of optionals support scalar and managed aggregates,
+  indexing, updates, value copies and recursive-layout rejection.
 - T017-84: results with fixed-array success values support calls, matching,
   aggregate fields, zero-length arrays and recursive-layout rejection.
 - T017-83: fixed arrays of results support copies, indexing, mutation,

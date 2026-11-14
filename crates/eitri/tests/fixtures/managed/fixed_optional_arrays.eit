@@ -1,0 +1,31 @@
+//! host: test
+import test from "test"
+struct Item { text: string }
+var numbers: [2]?i64 = [null, 7]
+let copy = numbers
+numbers[0] = 4
+test.check(copy[0] == null && copy[1] == 7 && numbers[0] == 4)
+var texts: [2]?string = ["yes", null]
+test.check(texts[0] == "yes" && texts[1] == null)
+texts[1] = "new"
+test.check(texts[1] == "new")
+let items: [2]?Item = [Item { text: "a" }, null]
+test.check(match items[0] { null => false, value => value.text == "a" })
+test.check(items[1] == null)
+class Thing { text: string }
+enum Choice { Name(text: string), Empty }
+struct Holder { values: [2]?Item, marker: i64 }
+class Store { values: [2]?Thing }
+enum Box { Values(values: [2]?Choice) }
+let holder = Holder { values: items, marker: 9 }
+let store = Store { values: [Thing { text: "x" }, null] }
+let choices: [2]?Choice = [Choice.Name("choice"), null]
+test.check(holder.marker == 9 && match holder.values[0] { null => false, value => value.text == "a" })
+test.check(match store.values[0] { null => false, value => value.text == "x" })
+test.check(match Box.Values(choices) { .Values(values) => match values[0] { null => false, .Name(text) => text == "choice", .Empty => false } })
+let empty: [0]?i64 = []
+test.check(empty == empty && copy == copy)
+struct Forward { values: [2]?Later, marker: i64 }
+struct Later { name: string, count: i64 }
+let forward = Forward { values: [Later { name: "later", count: 8 }, null], marker: 12 }
+test.check(forward.marker == 12 && match forward.values[0] { null => false, value => value.name == "later" && value.count == 8 })

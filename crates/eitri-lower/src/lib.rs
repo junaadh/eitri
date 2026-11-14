@@ -761,6 +761,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 | Ty::FixedStruct(_, _)
                 | Ty::FixedEnum(_, _)
                 | Ty::FixedResult(_, _)
+                | Ty::FixedOptional(_, _)
                 | Ty::Result(_)
                 | Ty::Struct(_)
                 | Ty::Enum(_)
@@ -778,6 +779,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedStruct(_, _)
                         | Ty::FixedEnum(_, _)
                         | Ty::FixedResult(_, _)
+                        | Ty::FixedOptional(_, _)
                         | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
@@ -833,8 +835,20 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         slot
     }
 
+    fn fixed_inner(&self, ty: Ty) -> Option<(u16, Ty)> {
+        match ty {
+            Ty::FixedOptional(size, id) => {
+                Some((size, self.checked.fixed_optional_types[id as usize]))
+            }
+            _ => ty.fixed_inner(),
+        }
+    }
+
     fn width(&self, ty: Ty) -> u32 {
         match ty {
+            Ty::FixedOptional(size, id) => u32::from(size)
+                .saturating_mul(self.width(self.checked.fixed_optional_types[id as usize]))
+                .max(1),
             Ty::FixedResult(size, id) => u32::from(size)
                 .saturating_mul(self.width(Ty::Result(id)))
                 .max(1),
@@ -877,12 +891,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         nullable: bool,
         output: &mut Vec<ValueType>,
     ) -> Lowered<()> {
-        if let Some((0, _)) = ty.fixed_inner() {
+        if let Some((0, _)) = self.fixed_inner(ty) {
             output.push(ValueType::I64);
             return Ok(());
         }
-        if let Some((size, inner)) = ty.fixed_inner()
+        if let Some((size, inner)) = self.fixed_inner(ty)
             && !matches!(inner, Ty::Struct(_) | Ty::Enum(_) | Ty::Result(_))
+            && inner.optional_inner().is_none()
         {
             let element = match inner {
                 Ty::String if nullable => ValueType::NullableString,
@@ -905,6 +920,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 | Ty::FixedStruct(_, _)
                 | Ty::FixedEnum(_, _)
                 | Ty::FixedResult(_, _)
+                | Ty::FixedOptional(_, _)
                 | Ty::Result(_)
                 | Ty::Struct(_)
                 | Ty::Enum(_)
@@ -969,8 +985,8 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         }
                     }
                 }
-                ty if ty.fixed_inner().is_some() => {
-                    let (size, inner) = ty.fixed_inner().unwrap();
+                ty if self.fixed_inner(ty).is_some() => {
+                    let (size, inner) = self.fixed_inner(ty).unwrap();
                     if size == 0 {
                         output.push(ValueType::I64);
                         continue;
@@ -1241,6 +1257,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                                 | Ty::FixedStruct(_, _)
                                 | Ty::FixedEnum(_, _)
                                 | Ty::FixedResult(_, _)
+                                | Ty::FixedOptional(_, _)
                                 | Ty::Result(_)
                                 | Ty::Struct(_)
                                 | Ty::Enum(_)
@@ -1292,7 +1309,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     unreachable!()
                 };
                 let binding = checked.stmt_bindings[id].expect("checked array binding");
-                let Some((size, inner)) = checked.types[base].fixed_inner() else {
+                let Some((size, inner)) = self.fixed_inner(checked.types[base]) else {
                     unreachable!()
                 };
                 let element_width = self.width(inner);
@@ -1537,6 +1554,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                                 | Ty::FixedStruct(_, _)
                                 | Ty::FixedEnum(_, _)
                                 | Ty::FixedResult(_, _)
+                                | Ty::FixedOptional(_, _)
                                 | Ty::Result(_)
                                 | Ty::Struct(_)
                                 | Ty::Enum(_)
@@ -1968,6 +1986,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     | Ty::FixedStruct(_, _)
                     | Ty::FixedEnum(_, _)
                     | Ty::FixedResult(_, _)
+                    | Ty::FixedOptional(_, _)
                     | Ty::Result(_)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
@@ -2301,7 +2320,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 Ok(target)
             }
             Expr::Index { base, index } => {
-                let (size, inner) = checked.types[base].fixed_inner().unwrap();
+                let (size, inner) = self.fixed_inner(checked.types[base]).unwrap();
                 let element_width = self.width(inner);
                 let target = if let Some(dst) = dst {
                     dst
@@ -2357,11 +2376,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 if ast.args(elements).is_empty() {
                     self.asm.load(slot, 0, ValueType::I64, span)?;
                 }
+                let (_, inner) = self.fixed_inner(checked.types[e]).unwrap();
+                let element_width = self.width(inner);
                 for (index, &element) in ast.args(elements).iter().enumerate() {
-                    self.expr(
-                        element,
-                        Some(slot + index as u32 * self.width(checked.types[element])),
-                    )?;
+                    self.expr(element, Some(slot + index as u32 * element_width))?;
                     self.top = end;
                 }
                 Ok(slot)
@@ -2571,6 +2589,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedStruct(_, _)
                         | Ty::FixedEnum(_, _)
                         | Ty::FixedResult(_, _)
+                        | Ty::FixedOptional(_, _)
                         | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
@@ -2651,6 +2670,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedStruct(_, _)
                         | Ty::FixedEnum(_, _)
                         | Ty::FixedResult(_, _)
+                        | Ty::FixedOptional(_, _)
                         | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)
@@ -2850,6 +2870,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     | Ty::FixedStruct(_, _)
                     | Ty::FixedEnum(_, _)
                     | Ty::FixedResult(_, _)
+                    | Ty::FixedOptional(_, _)
                     | Ty::Result(_)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
@@ -3102,6 +3123,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     | Ty::FixedStruct(_, _)
                     | Ty::FixedEnum(_, _)
                     | Ty::FixedResult(_, _)
+                    | Ty::FixedOptional(_, _)
                     | Ty::Result(_)
                     | Ty::Struct(_)
                     | Ty::Enum(_)
@@ -3149,6 +3171,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                             | Ty::FixedStruct(_, _)
                             | Ty::FixedEnum(_, _)
                             | Ty::FixedResult(_, _)
+                            | Ty::FixedOptional(_, _)
                             | Ty::Result(_)
                             | Ty::Struct(_)
                             | Ty::Enum(_)
@@ -3978,6 +4001,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         | Ty::FixedStruct(_, _)
                         | Ty::FixedEnum(_, _)
                         | Ty::FixedResult(_, _)
+                        | Ty::FixedOptional(_, _)
                         | Ty::Result(_)
                         | Ty::Struct(_)
                         | Ty::Enum(_)

@@ -180,6 +180,7 @@ pub enum TypeExpr {
     FixedScalar(TokenId, TokenId),
     FixedNamed(TokenId, TokenId),
     FixedResult(TokenId, TokenId, TokenId),
+    FixedOptional(TokenId, TokenId),
     /// Unsupported, already reported.
     Error,
 }
