@@ -234,3 +234,50 @@ fn finite_pattern_groups_are_bounded() {
         "{diagnostics:?}"
     );
 }
+
+#[test]
+fn recursive_default_expansion_is_bounded() {
+    let source = "struct Item { value: i64 = make(Item {}) }\nfn make(item: Item) -> i64 { return 1 }\nlet value = Item {}\n";
+    let mut context = eitri::Context::new();
+    let diagnostics = match context.compile(source) {
+        Err(diagnostics) => diagnostics,
+        Ok(_) => panic!("recursive default expansion must be bounded"),
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("too much code")),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn nested_default_depth_has_a_checked_boundary() {
+    fn module(depth: usize) -> String {
+        let mut source = String::new();
+        for i in 0..depth {
+            writeln!(
+                source,
+                "struct S{i} {{ value: S{} = S{} {{}} }}",
+                i + 1,
+                i + 1
+            )
+            .unwrap();
+        }
+        writeln!(source, "struct S{depth} {{ value: i64 = 1 }}").unwrap();
+        source.push_str("let value = S0 {}\n");
+        source
+    }
+    let mut context = eitri::Context::new();
+    assert!(context.compile(&module(15)).is_ok());
+    let diagnostics = match context.compile(&module(16)) {
+        Err(diagnostics) => diagnostics,
+        Ok(_) => panic!("default expansion depth must be bounded"),
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("too much code")),
+        "{diagnostics:?}"
+    );
+}

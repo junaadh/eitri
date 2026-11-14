@@ -956,10 +956,9 @@ impl<'i> Checker<'_, 'i> {
     }
 
     /// Visit each default-expression node once using reusable compiler scratch.
-    /// Struct literals must initialize every field or provide a base, so no
-    /// omitted default can recursively expand at compile time. Field lookups
-    /// scan at most 256 declarations per initializer. Names remain excluded
-    /// until lexical captures are implemented.
+    /// Struct and enum constructors are allowed; lowering bounds recursive
+    /// default expansion. Names remain excluded until lexical captures are
+    /// implemented.
     fn default_expression_supported(&mut self, root: ExprId) -> bool {
         let ast = self.input.ast;
         self.spine.clear();
@@ -1004,21 +1003,8 @@ impl<'i> Checker<'_, 'i> {
                         self.spine.clear();
                         return false;
                     };
-                    let declared = ast.params(ast.structs[id].fields);
                     let entries = &ast.field_inits[fields];
-                    let has_base = entries.last().is_some_and(|field| {
-                        self.input.tokens.kind(field.name) == eitri_syntax::TokenKind::DotDot
-                    });
-                    if declared.len() > 256
-                        || (!has_base
-                            && declared.iter().any(|field| {
-                                !entries.iter().any(|init| {
-                                    self.input.tokens.kind(init.name)
-                                        != eitri_syntax::TokenKind::DotDot
-                                        && self.symbol(init.name) == self.symbol(field.name)
-                                })
-                            }))
-                    {
+                    if ast.params(ast.structs[id].fields).len() > 256 {
                         self.spine.clear();
                         return false;
                     }

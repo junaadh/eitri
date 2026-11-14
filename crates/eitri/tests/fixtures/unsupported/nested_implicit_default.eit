@@ -1,2 +1,0 @@
-struct Inner { value: i64 = 1 }
-struct Outer { item: Inner = Inner {} }

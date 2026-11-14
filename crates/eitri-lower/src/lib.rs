@@ -257,6 +257,8 @@ fn lower_mode<const SIMPLE: bool>(
             plans: Vec::new(),
             loops: &mut scratch.loops,
             mutation_result: None,
+            default_depth: 0,
+            default_expansions: 0,
             top: 0,
         };
         lower_with(lowerer)
@@ -270,6 +272,8 @@ fn lower_mode<const SIMPLE: bool>(
             plans: Vec::new(),
             loops: &mut scratch.loops,
             mutation_result: None,
+            default_depth: 0,
+            default_expansions: 0,
             top: 0,
         };
         lower_with(lowerer)
@@ -543,6 +547,8 @@ struct Lowerer<'a, 'i, const R: bool, const SIMPLE: bool> {
     plans: Vec<String>,
     loops: &'a mut Vec<(Label, Label)>,
     mutation_result: Option<(u32, u32, u32)>,
+    default_depth: u32,
+    default_expansions: u32,
     /// The next free slot.
     top: u32,
 }
@@ -552,6 +558,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
 
     fn module(&mut self) -> Lowered<Function> {
         self.top = 0;
+        self.default_expansions = 0;
         let built = self.module_body();
         self.recover(built)
     }
@@ -568,6 +575,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
     }
 
     fn function(&mut self, id: FnId) -> Lowered<Function> {
+        self.default_expansions = 0;
         let built = self.function_body(id);
         self.recover(built)
     }
@@ -1506,7 +1514,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                                     == self.input.tokens.symbol(field.name)
                             })
                     {
-                        self.expr(default, Some(slot + self.field_offset(id, index as u32)))?;
+                        if self.default_depth >= 16 || self.default_expansions >= 65_536 {
+                            return Err(AsmError::CodeTooLarge);
+                        }
+                        self.default_depth += 1;
+                        self.default_expansions += 1;
+                        let result =
+                            self.expr(default, Some(slot + self.field_offset(id, index as u32)));
+                        self.default_depth -= 1;
+                        result?;
                         self.top = end;
                     }
                 }

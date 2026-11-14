@@ -1,0 +1,6 @@
+//! host: test
+import test from "test"
+struct Inner { value: string = "ok" }
+struct Outer { item: Inner = Inner {} }
+let x = Outer {}
+test.check(x.item.value == "ok")

@@ -14,8 +14,9 @@ can be called through the type name or by bare name inside another method of the
 type. Up to 256 methods per module are supported. Bare receiver field reads and writes work with local shadowing, including
 nested writes and mutating calls on nested fields. Bare method calls resolve
 on the receiver and retain its mutability rules. Literal, arithmetic and call defaults are supported;
-defaults can construct enums and fully initialized structs; captured names and
-nested implicit struct defaults remain unsupported.
+defaults can construct enums and structs, including nested defaults. Expansion
+is limited to 16 nested defaults and 65,536 total defaults per function;
+captured names remain unsupported.
 Enums with payloads, construction and exhaustive case matching with positional
 bindings execute on both interpreters. Structs and enums can contain each other,
 with inline cycles rejected. Richer patterns remain future work. The rest of

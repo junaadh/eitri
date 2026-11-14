@@ -876,6 +876,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   payload alternatives for up to 32 single-field pattern groups per match.
 - T017-33: nested enum case patterns accept qualifiers and reject qualifiers
   that do not match the payload type.
+- T017-34: nested implicit struct defaults execute, with bounded compile-time
+  expansion and recursive defaults rejected at the limit.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

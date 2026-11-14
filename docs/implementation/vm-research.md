@@ -2279,3 +2279,18 @@ p50/p99 9,125/15,800 ns, execution 250/375 ns, total 9,375/16,200 ns;
 retained context memory was 30,683 B. This scalar workload does not exercise
 patterns. Samples: `/private/tmp/eitri-t017-33-samples.csv`; report:
 `/private/tmp/eitri-t017-33-bench.txt`.
+
+### T017-34 nested default expansion
+
+Nested implicit struct defaults are expanded at each construction site.
+Lowering limits expansion to 16 nested defaults and 65,536 defaults per function;
+a recursive default previously overflowed the compiler stack at a larger
+experimental bound, and the accepted/rejected boundary is now tested. Managed
+default values survive forced collection on both interpreters and lowerers.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 9,541/13,600 ns,
+execution 250/375 ns, total 9,750/14,000 ns; retained context memory was
+30,683 B. This scalar workload does not exercise defaults. Samples:
+`/private/tmp/eitri-t017-34-samples.csv`; report:
+`/private/tmp/eitri-t017-34-bench.txt`.
