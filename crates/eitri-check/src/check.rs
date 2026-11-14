@@ -609,9 +609,12 @@ impl<'i> Checker<'_, 'i> {
     /// A written type; `void` only where `allow_void`.
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
         match ty {
-            TypeExpr::OptionalFixed(size, element) => {
+            TypeExpr::OptionalFixed(size, element)
+            | TypeExpr::OptionalNestedFixed(size, _, element) => {
                 let symbol = self.symbol(element);
-                let written = if symbol == eitri_base::sym::I64 {
+                let written = if let TypeExpr::OptionalNestedFixed(outer, inner, element) = ty {
+                    TypeExpr::FixedNested(outer, inner, element)
+                } else if symbol == eitri_base::sym::I64 {
                     TypeExpr::FixedI64(size)
                 } else if symbol == eitri_base::sym::STRING {
                     TypeExpr::FixedString(size)
@@ -638,10 +641,13 @@ impl<'i> Checker<'_, 'i> {
                 };
                 return Ty::OptionalFixed(index as u32);
             }
-            TypeExpr::ResultFixed(error, size, element) => {
+            TypeExpr::ResultFixed(error, size, element)
+            | TypeExpr::ResultNestedFixed(error, size, element) => {
                 let error_ty = self.ty(TypeExpr::Named(error), false);
                 let symbol = self.symbol(element);
-                let written = if symbol == eitri_base::sym::I64 {
+                let written = if matches!(ty, TypeExpr::ResultNestedFixed(_, _, _)) {
+                    TypeExpr::FixedNested(size, TokenId::from_u32(size.as_u32() + 3), element)
+                } else if symbol == eitri_base::sym::I64 {
                     TypeExpr::FixedI64(size)
                 } else if symbol == eitri_base::sym::STRING {
                     TypeExpr::FixedString(size)
@@ -707,6 +713,8 @@ impl<'i> Checker<'_, 'i> {
                 return Ty::Result(index as u32);
             }
             TypeExpr::FixedNested(token, _, _)
+            | TypeExpr::FixedNestedOptional(token, _, _)
+            | TypeExpr::FixedNestedResult(token, _, _)
             | TypeExpr::FixedOptional(token, _)
             | TypeExpr::FixedResult(token, _, _)
             | TypeExpr::FixedI64(token)
@@ -717,10 +725,24 @@ impl<'i> Checker<'_, 'i> {
                 let size = text.parse::<u16>().ok().filter(|&size| size <= 256);
                 return if let Some(size) = size {
                     match ty {
-                        TypeExpr::FixedNested(_, inner_size, element) => {
-                            let last_size = TokenId::from_u32(element.as_u32() - 2);
+                        TypeExpr::FixedNested(_, inner_size, element)
+                        | TypeExpr::FixedNestedOptional(_, inner_size, element)
+                        | TypeExpr::FixedNestedResult(_, inner_size, element) => {
+                            let is_optional = matches!(ty, TypeExpr::FixedNestedOptional(_, _, _));
+                            let is_result = matches!(ty, TypeExpr::FixedNestedResult(_, _, _));
+                            let last_size = TokenId::from_u32(
+                                element.as_u32() - if is_optional || is_result { 3 } else { 2 },
+                            );
                             let symbol = self.symbol(element);
-                            let written = if symbol == eitri_base::sym::I64 {
+                            let written = if is_result {
+                                TypeExpr::FixedResult(
+                                    last_size,
+                                    element,
+                                    TokenId::from_u32(element.as_u32() + 2),
+                                )
+                            } else if is_optional {
+                                TypeExpr::FixedOptional(last_size, element)
+                            } else if symbol == eitri_base::sym::I64 {
                                 TypeExpr::FixedI64(last_size)
                             } else if symbol == eitri_base::sym::STRING {
                                 TypeExpr::FixedString(last_size)
@@ -1097,6 +1119,7 @@ impl<'i> Checker<'_, 'i> {
                                     | Ty::FixedString(size)
                                     | Ty::FixedScalar(size, _)
                                     | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                    Ty::FixedNested(size, id) => self.nested_width(size, id),
                                     Ty::FixedStruct(size, id) => u32::from(size)
                                         .saturating_mul(self.out.struct_widths[id])
                                         .max(1),
@@ -1133,6 +1156,7 @@ impl<'i> Checker<'_, 'i> {
                                     | Ty::FixedString(size)
                                     | Ty::FixedScalar(size, _)
                                     | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                    Ty::FixedNested(size, id) => self.nested_width(size, id),
                                     Ty::FixedStruct(size, id) => u32::from(size)
                                         .saturating_mul(self.out.struct_widths[id])
                                         .max(1),
@@ -1278,6 +1302,7 @@ impl<'i> Checker<'_, 'i> {
                             | Ty::FixedString(size)
                             | Ty::FixedScalar(size, _)
                             | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                            Ty::FixedNested(size, id) => self.nested_width(size, id),
                             Ty::FixedStruct(size, id) => u32::from(size)
                                 .saturating_mul(self.out.struct_widths[id])
                                 .max(1),
@@ -1312,6 +1337,7 @@ impl<'i> Checker<'_, 'i> {
                             | Ty::FixedString(size)
                             | Ty::FixedScalar(size, _)
                             | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                            Ty::FixedNested(size, id) => self.nested_width(size, id),
                             Ty::FixedStruct(size, id) => u32::from(size)
                                 .saturating_mul(self.out.struct_widths[id])
                                 .max(1),
@@ -1386,6 +1412,30 @@ impl<'i> Checker<'_, 'i> {
             }
         }
 
+        for item in &ast.items {
+            if let Item::Stmt(stmt) = *item
+                && let Stmt::LetArray { names, .. } = ast.stmts[stmt]
+            {
+                for &name in &ast.binding_names[names] {
+                    if self.input.tokens.kind(name) != eitri_syntax::TokenKind::Wildcard {
+                        self.module_bindings.insert(self.symbol(name));
+                    }
+                }
+            }
+        }
+
+        for item in &ast.items {
+            if let Item::Stmt(stmt) = *item
+                && let Stmt::LetStruct { fields, .. } = ast.stmts[stmt]
+            {
+                for field in &ast.binding_fields[fields] {
+                    if self.input.tokens.kind(field.name) != eitri_syntax::TokenKind::Wildcard {
+                        self.module_bindings.insert(self.symbol(field.name));
+                    }
+                }
+            }
+        }
+
         for (id, decl) in ast.structs.iter_enumerated() {
             for (index, field) in ast.params(decl.fields).iter().enumerate() {
                 if let Some(default) = field.default {
@@ -1416,8 +1466,8 @@ impl<'i> Checker<'_, 'i> {
 
     /// Visit each default-expression node once using reusable compiler scratch.
     /// Struct and enum constructors are allowed; lowering bounds recursive
-    /// default expansion. Names remain excluded until lexical captures are
-    /// implemented.
+    /// default expansion. Names are resolved by the checker, including match
+    /// bindings; outer module captures remain unsupported.
     fn default_expression_supported(&mut self, root: ExprId) -> bool {
         let ast = self.input.ast;
         self.spine.clear();
@@ -1430,7 +1480,8 @@ impl<'i> Checker<'_, 'i> {
                 | Expr::String(_)
                 | Expr::StringPart(_)
                 | Expr::Bool(_)
-                | Expr::Null(_) => {}
+                | Expr::Null(_)
+                | Expr::Name(_) => {}
                 Expr::Interpolation(parts) => self.spine.extend_from_slice(ast.args(parts)),
                 Expr::FixedArray(elements) => self.spine.extend_from_slice(ast.args(elements)),
                 Expr::Index { base, index } => {
@@ -1453,6 +1504,34 @@ impl<'i> Checker<'_, 'i> {
                             } else {
                                 self.spine.clear();
                                 return false;
+                            }
+                        }
+                    }
+                }
+                Expr::Match(id) => {
+                    let matched = ast.matches[id];
+                    self.spine.push(matched.subject);
+                    for arm in &ast.match_arms[matched.arms] {
+                        if let Some(literal) = arm.literal {
+                            self.spine.push(literal);
+                        }
+                        if let Some((end, _)) = arm.range_end {
+                            self.spine.push(end);
+                        }
+                        if let Some(guard) = arm.guard {
+                            self.spine.push(guard);
+                        }
+                        match arm.body {
+                            eitri_syntax::ast::MatchBody::Expr(expr) => self.spine.push(expr),
+                            eitri_syntax::ast::MatchBody::Block(block) => {
+                                for &stmt in ast.block(block) {
+                                    if let Stmt::Expr(expr) = ast.stmts[stmt] {
+                                        self.spine.push(expr);
+                                    } else {
+                                        self.spine.clear();
+                                        return false;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1577,26 +1656,36 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 }
                 let child = fields[field];
-                let child_node = if let Ty::FixedNested(_, id) = child {
+                let leaf = if let Ty::FixedNested(_, id) = child {
                     let mut inner = self.out.nested_fixed_types[id as usize];
                     while let Ty::FixedNested(_, id) = inner {
                         inner = self.out.nested_fixed_types[id as usize];
                     }
+                    inner
+                } else {
+                    child
+                };
+                let child_node = if let Ty::OptionalFixed(id) = leaf {
+                    let mut inner = self.out.optional_fixed_types[id as usize];
+                    while let Ty::FixedNested(_, id) = inner {
+                        inner = self.out.nested_fixed_types[id as usize];
+                    }
                     inner.fixed_inner().map_or(inner, |(_, inner)| inner)
-                } else if let Ty::OptionalFixed(id) = child {
-                    let inner = self.out.optional_fixed_types[id as usize];
-                    inner.fixed_inner().map_or(inner, |(_, inner)| inner)
-                } else if let Ty::FixedOptional(_, id) = child {
+                } else if let Ty::FixedOptional(_, id) = leaf {
                     self.out.fixed_optional_types[id as usize]
                         .tagged_optional_inner()
                         .unwrap_or(Ty::Error)
                 } else if let Ty::Result(id) | Ty::OptionalResult(id) | Ty::FixedResult(_, id) =
-                    child
+                    leaf
                 {
                     let (error, success) = self.out.result_types[id as usize];
                     [error, success]
                         .into_iter()
                         .filter_map(|ty| {
+                            let mut ty = ty;
+                            while let Ty::FixedNested(_, id) = ty {
+                                ty = self.out.nested_fixed_types[id as usize];
+                            }
                             let ty = ty.fixed_inner().map_or(ty, |(_, inner)| inner);
                             let ty = ty.tagged_optional_inner().unwrap_or(ty);
                             let index = match ty {
@@ -1610,7 +1699,7 @@ impl<'i> Checker<'_, 'i> {
                         .min_by_key(|(_, state)| if *state == 1 { 0 } else { 1 })
                         .map_or(Ty::Error, |(ty, _)| ty)
                 } else {
-                    child.fixed_inner().map_or(child, |(_, inner)| inner)
+                    leaf.fixed_inner().map_or(leaf, |(_, inner)| inner)
                 };
                 let child_node = child_node
                     .tagged_optional_inner()
@@ -1656,6 +1745,7 @@ impl<'i> Checker<'_, 'i> {
                                 | Ty::FixedString(size)
                                 | Ty::FixedScalar(size, _)
                                 | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                Ty::FixedNested(size, id) => self.nested_width(size, id),
                                 Ty::FixedStruct(size, id) => u32::from(size)
                                     .saturating_mul(self.out.struct_widths[id])
                                     .max(1),
@@ -1690,6 +1780,7 @@ impl<'i> Checker<'_, 'i> {
                                 | Ty::FixedString(size)
                                 | Ty::FixedScalar(size, _)
                                 | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                                Ty::FixedNested(size, id) => self.nested_width(size, id),
                                 Ty::FixedStruct(size, id) => u32::from(size)
                                     .saturating_mul(self.out.struct_widths[id])
                                     .max(1),
@@ -1847,27 +1938,6 @@ impl<'i> Checker<'_, 'i> {
     // ---- statements ------------------------------------------------------
 
     /// A block in its own scope, values discarded.
-    fn reject_deep_index_write(&mut self, mut target: ExprId) {
-        loop {
-            match self.ast().exprs[target] {
-                Expr::Index { base, .. } => {
-                    if let Ty::FixedNested(_, id) = self.out.types[base]
-                        && matches!(
-                            self.out.nested_fixed_types[id as usize],
-                            Ty::FixedNested(_, _)
-                        )
-                    {
-                        self.report(Code::Unsupported, "not supported yet: writes through fixed arrays deeper than two dimensions", self.span(target));
-                        return;
-                    }
-                    target = base;
-                }
-                Expr::Member { base, .. } => target = base,
-                _ => return,
-            }
-        }
-    }
-
     fn statements(&mut self, block: Block) {
         let mark = self.mark();
         for &stmt in self.input.ast.block(block) {
@@ -1901,6 +1971,92 @@ impl<'i> Checker<'_, 'i> {
                 let binding = self.new_binding(name, mutable, ty);
                 self.out.stmt_bindings[id] = Some(binding);
             }
+            Stmt::LetStruct {
+                mutable,
+                fields,
+                init,
+            } => {
+                let found = self.value(init, None);
+                let owner = if let Ty::Struct(owner) = found {
+                    Some(owner)
+                } else {
+                    if found != Ty::Error {
+                        self.report(
+                            Code::TypeMismatch,
+                            "struct destructuring requires a struct",
+                            self.span(init),
+                        );
+                    }
+                    None
+                };
+                let mut seen = [false; 256];
+                for field in &self.ast().binding_fields[fields] {
+                    let ty = if let Some(owner) = owner {
+                        let declared = self.ast().params(self.ast().structs[owner].fields);
+                        if let Some(index) = declared
+                            .iter()
+                            .position(|item| self.symbol(item.name) == self.symbol(field.field))
+                        {
+                            if index < seen.len() && seen[index] {
+                                self.report(
+                                    Code::DuplicateName,
+                                    "duplicate destructured field",
+                                    self.token_span(field.field),
+                                );
+                            }
+                            if index < seen.len() {
+                                seen[index] = true;
+                            }
+                            self.out.param_types[self.out.struct_fields[owner]][index]
+                        } else {
+                            self.report(
+                                Code::UnknownName,
+                                "unknown struct field",
+                                self.token_span(field.field),
+                            );
+                            Ty::Error
+                        }
+                    } else {
+                        Ty::Error
+                    };
+                    if self.input.tokens.kind(field.name) != eitri_syntax::TokenKind::Wildcard {
+                        let binding = self.new_binding(field.name, mutable, ty);
+                        self.out.pattern_bindings[field.name] = Some(binding);
+                    }
+                }
+            }
+            Stmt::LetArray {
+                mutable,
+                names,
+                init,
+            } => {
+                let found = self.value(init, None);
+                let element = if let Some((size, element)) = self.fixed_inner(found) {
+                    if usize::from(size) != self.ast().binding_names[names].len() {
+                        self.report(
+                            Code::TypeMismatch,
+                            "fixed array destructuring length mismatch",
+                            self.span(init),
+                        );
+                    }
+                    element
+                } else {
+                    if found != Ty::Error {
+                        self.report(
+                            Code::TypeMismatch,
+                            "fixed array destructuring requires a fixed array",
+                            self.span(init),
+                        );
+                    }
+                    Ty::Error
+                };
+                for &name in &self.ast().binding_names[names] {
+                    if self.input.tokens.kind(name) != eitri_syntax::TokenKind::Wildcard {
+                        let binding = self.new_binding(name, mutable, element);
+                        self.out.pattern_bindings[name] = Some(binding);
+                    }
+                }
+            }
             Stmt::Assign {
                 target, op, value, ..
             } => self.assign(id, target, op, value),
@@ -1911,7 +2067,6 @@ impl<'i> Checker<'_, 'i> {
                 target, op, value, ..
             } => {
                 let element_ty = self.value(target, None);
-                self.reject_deep_index_write(target);
                 let Expr::Index { base, .. } = self.ast().exprs[target] else {
                     unreachable!()
                 };
@@ -1970,7 +2125,6 @@ impl<'i> Checker<'_, 'i> {
                 target, op, value, ..
             } => {
                 let ty = self.value(target, None);
-                self.reject_deep_index_write(target);
                 let Expr::Member { base, .. } = self.ast().exprs[target] else {
                     unreachable!()
                 };
@@ -2244,6 +2398,29 @@ impl<'i> Checker<'_, 'i> {
                 | Ty::FixedString(n)
                 | Ty::FixedScalar(n, _)
                 | Ty::FixedClass(n, _) => return factor.saturating_mul(u32::from(n).max(1)),
+                Ty::FixedResult(n, id) => {
+                    let (error, success) = self.out.result_types[id as usize];
+                    let width = |ty| match ty {
+                        Ty::Struct(id) => self.out.struct_widths[id],
+                        Ty::Enum(id) => self.out.enum_widths[id],
+                        Ty::Void => 0,
+                        _ => 1,
+                    };
+                    let element = 1u32
+                        .saturating_add(width(error))
+                        .saturating_add(width(success));
+                    return factor.saturating_mul(u32::from(n).saturating_mul(element).max(1));
+                }
+                Ty::FixedOptional(n, id) => {
+                    let inner = self.out.fixed_optional_types[id as usize];
+                    let width = match inner {
+                        Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                        Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
+                        ty if ty.tagged_optional_inner().is_some() => 2,
+                        _ => 1,
+                    };
+                    return factor.saturating_mul(u32::from(n).saturating_mul(width).max(1));
+                }
                 Ty::FixedStruct(n, id) => {
                     return factor.saturating_mul(
                         u32::from(n)
@@ -3374,6 +3551,119 @@ impl<'i> Checker<'_, 'i> {
         restriction
     }
 
+    /// Coverage for products of at most eight finite payload fields and 256
+    /// combinations. Other fields must be irrefutable. Work is bounded by
+    /// 256 combinations times eight fields per source pattern.
+    fn finite_payload_product(
+        &self,
+        enum_id: eitri_syntax::ast::EnumId,
+        case_index: usize,
+        bindings: List<eitri_syntax::ast::MatchBinding>,
+    ) -> Option<([u64; 4], usize)> {
+        let ast = self.input.ast;
+        let case = ast.enum_cases[ast.enums[enum_id].cases][case_index];
+        let fields = ast.params(case.fields);
+        let types = self.out.enum_case_types[self.out.enum_starts[enum_id] as usize + case_index];
+        let mut finite_fields = [usize::MAX; 8];
+        let mut radices = [0usize; 8];
+        let mut masks = [[0u64; 4]; 8];
+        let mut count = 0;
+        let mut combinations = 1usize;
+        for (index, &ty) in self.out.param_types[types].iter().enumerate() {
+            let size = match ty {
+                Ty::Bool => Some(2),
+                Ty::OptionalBool => Some(3),
+                Ty::Enum(id) => Some(ast.enum_cases[ast.enums[id].cases].len()),
+                Ty::OptionalEnum(id) => Some(ast.enum_cases[ast.enums[id].cases].len() + 1),
+                ty if self.optional_inner(ty).is_some() => Some(2),
+                _ => None,
+            };
+            if let Some(size) = size {
+                if size == 0 || size > 256 || count == finite_fields.len() {
+                    return None;
+                }
+                combinations = combinations.checked_mul(size)?;
+                if combinations > 256 {
+                    return None;
+                }
+                finite_fields[count] = index;
+                radices[count] = size;
+                for bit in 0..size {
+                    masks[count][bit / 64] |= 1 << (bit % 64);
+                }
+                count += 1;
+            }
+        }
+        if count < 2 {
+            return None;
+        }
+        for (position, pattern) in ast.match_bindings[bindings].iter().enumerate() {
+            let index = match pattern.label {
+                Some(label) => fields
+                    .iter()
+                    .take(256)
+                    .position(|field| self.symbol(field.name) == self.symbol(label))?,
+                None => position,
+            };
+            let ty = *self.out.param_types[types].get(index)?;
+            let Some(which) = finite_fields[..count]
+                .iter()
+                .position(|&field| field == index)
+            else {
+                if pattern.literal.is_some() || pattern.nested_case.is_some() {
+                    return None;
+                }
+                continue;
+            };
+            if let Some(literal) = pattern.literal {
+                let bit = match (ty, ast.exprs[literal]) {
+                    (Ty::Bool, Expr::Bool(value)) => usize::from(value),
+                    (Ty::OptionalBool, Expr::Bool(value)) => 1 + usize::from(value),
+                    (ty, Expr::Null(_)) if self.optional_inner(ty).is_some() => 0,
+                    _ => return None,
+                };
+                masks[which] = [0; 4];
+                masks[which][bit / 64] = 1 << (bit % 64);
+            } else if let Some(name) = pattern.nested_case {
+                let (nested, extra) = match ty {
+                    Ty::Enum(id) => (id, 0),
+                    Ty::OptionalEnum(id) => (id, 1),
+                    _ => return None,
+                };
+                let cases = &ast.enum_cases[ast.enums[nested].cases];
+                let nested_index = cases
+                    .iter()
+                    .position(|case| self.symbol(case.name) == self.symbol(name))?;
+                if let Some(children) = pattern.nested_bindings
+                    && !self.payload_patterns_irrefutable(nested, nested_index, children)
+                {
+                    return None;
+                }
+                let bit = nested_index + extra;
+                masks[which] = [0; 4];
+                masks[which][bit / 64] = 1 << (bit % 64);
+            } else if self.input.tokens.kind(pattern.name) != eitri_syntax::TokenKind::Wildcard
+                && self.optional_inner(ty).is_some()
+            {
+                masks[which][0] &= !1;
+            }
+        }
+        let mut covered = [0u64; 4];
+        for combination in 0..combinations {
+            let mut remaining = combination;
+            let mut matches = true;
+            for index in 0..count {
+                let value = remaining % radices[index];
+                remaining /= radices[index];
+                matches &= masks[index][value / 64] & (1 << (value % 64)) != 0;
+            }
+            if matches {
+                covered[combination / 64] |= 1 << (combination % 64);
+            }
+        }
+        Some((covered, combinations))
+    }
+
     fn match_expr(
         &mut self,
         expr: ExprId,
@@ -3417,6 +3707,7 @@ impl<'i> Checker<'_, 'i> {
             return Ty::Error;
         }
         let mut covered = [false; 256];
+        let mut finite_products = [(usize::MAX, [0u64; 4]); 32];
         // Sparse, stack-bounded tracking avoids 8 KiB for every nested match.
         // At most 32 case/field groups are tracked in one match.
         let mut finite = [(usize::MAX, usize::MAX, [0u64; 4]); 32];
@@ -3459,6 +3750,31 @@ impl<'i> Checker<'_, 'i> {
                         covered[index] = true;
                     }
                     self.check_match_payload(enum_id, index, case, arm.bindings, arm.parenthesized);
+                    if arm.guard.is_none()
+                        && let Some((mask, count)) =
+                            self.finite_payload_product(enum_id, index, arm.bindings)
+                    {
+                        let group = finite_products
+                            .iter()
+                            .position(|(case, _)| *case == index)
+                            .or_else(|| {
+                                finite_products
+                                    .iter()
+                                    .position(|(case, _)| *case == usize::MAX)
+                            });
+                        if let Some(group) = group {
+                            let (case, bits) = &mut finite_products[group];
+                            *case = index;
+                            for (bits, mask) in bits.iter_mut().zip(mask) {
+                                *bits |= mask;
+                            }
+                            if (0..count).all(|n| bits[n / 64] & (1 << (n % 64)) != 0) {
+                                covered[index] = true;
+                            }
+                        } else {
+                            finite_limit = true;
+                        }
+                    }
                     if arm.guard.is_none()
                         && let Some((field, mask, count)) =
                             self.finite_case_pattern(enum_id, index, arm.bindings)

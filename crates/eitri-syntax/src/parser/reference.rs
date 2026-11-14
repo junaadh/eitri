@@ -777,7 +777,16 @@ impl Parser<'_> {
         {
             dimensions += 1;
         }
-        if dimensions >= 2 && self.nth(dimensions * 3) == T::Ident {
+        let optional_element =
+            self.nth(dimensions * 3) == T::Question && self.nth(dimensions * 3 + 1) == T::Ident;
+        let result_element = self.nth(dimensions * 3) == T::Lt
+            && self.nth(dimensions * 3 + 1) == T::Ident
+            && self.nth(dimensions * 3 + 2) == T::Bang
+            && self.nth(dimensions * 3 + 3) == T::Ident
+            && self.nth(dimensions * 3 + 4) == T::Gt;
+        if dimensions >= 2
+            && (self.nth(dimensions * 3) == T::Ident || optional_element || result_element)
+        {
             let start = self.current_span();
             let mut outer = None;
             let mut inner = None;
@@ -792,16 +801,61 @@ impl Parser<'_> {
                     inner = Some(size);
                 }
             }
+            if optional_element || result_element {
+                self.bump();
+            }
             let element = self.bump();
+            if result_element {
+                self.bump();
+                self.bump();
+                self.bump();
+            }
             if dimensions > 32 {
                 self.unsupported(start, "fixed array nesting beyond 32 dimensions");
                 return Ok(TypeExpr::Error);
             }
-            return Ok(TypeExpr::FixedNested(
-                outer.unwrap(),
-                inner.unwrap(),
-                element,
-            ));
+            return Ok(if result_element {
+                TypeExpr::FixedNestedResult(outer.unwrap(), inner.unwrap(), element)
+            } else if optional_element {
+                TypeExpr::FixedNestedOptional(outer.unwrap(), inner.unwrap(), element)
+            } else {
+                TypeExpr::FixedNested(outer.unwrap(), inner.unwrap(), element)
+            });
+        }
+        if self.at(T::QuestionBracket) && self.nth(1) == T::Int && self.nth(2) == T::RBracket {
+            let mut dimensions = 1u32;
+            while self.nth(dimensions * 3) == T::LBracket
+                && self.nth(dimensions * 3 + 1) == T::Int
+                && self.nth(dimensions * 3 + 2) == T::RBracket
+            {
+                dimensions += 1;
+            }
+            if dimensions >= 2 && self.nth(dimensions * 3) == T::Ident {
+                let start = self.current_span();
+                let mut outer = None;
+                let mut inner = None;
+                for index in 0..dimensions {
+                    self.bump();
+                    let size = self.bump();
+                    self.bump();
+                    if index == 0 {
+                        outer = Some(size);
+                    }
+                    if index == 1 {
+                        inner = Some(size);
+                    }
+                }
+                let element = self.bump();
+                if dimensions > 32 {
+                    self.unsupported(start, "fixed array nesting beyond 32 dimensions");
+                    return Ok(TypeExpr::Error);
+                }
+                return Ok(TypeExpr::OptionalNestedFixed(
+                    outer.unwrap(),
+                    inner.unwrap(),
+                    element,
+                ));
+            }
         }
         if self.at(T::QuestionBracket)
             && self.nth(1) == T::Int
@@ -826,6 +880,35 @@ impl Parser<'_> {
             self.bump();
             let element = self.bump();
             return Ok(TypeExpr::FixedOptional(size, element));
+        }
+        if self.at(T::Ident) && self.nth(1) == T::Bang {
+            let mut dimensions = 0u32;
+            while self.nth(2 + dimensions * 3) == T::LBracket
+                && self.nth(3 + dimensions * 3) == T::Int
+                && self.nth(4 + dimensions * 3) == T::RBracket
+            {
+                dimensions += 1;
+            }
+            if dimensions >= 2 && self.nth(2 + dimensions * 3) == T::Ident {
+                let start = self.current_span();
+                let error = self.bump();
+                self.bump();
+                let mut outer = None;
+                for index in 0..dimensions {
+                    self.bump();
+                    let size = self.bump();
+                    self.bump();
+                    if index == 0 {
+                        outer = Some(size);
+                    }
+                }
+                let element = self.bump();
+                if dimensions > 32 {
+                    self.unsupported(start, "fixed array nesting beyond 32 dimensions");
+                    return Ok(TypeExpr::Error);
+                }
+                return Ok(TypeExpr::ResultNestedFixed(error, outer.unwrap(), element));
+            }
         }
         if self.at(T::Ident)
             && self.nth(1) == T::Bang
@@ -1140,10 +1223,58 @@ impl Parser<'_> {
 
     fn binding(&mut self) -> Parsed<Option<StmtId>> {
         let mutable = self.bump_is(T::Var);
-        if matches!(self.kind(), T::LBrace | T::LBracket) {
-            self.unsupported(self.current_span(), "destructuring");
-            self.skip_statement();
-            return Ok(None);
+        if self.at(T::LBracket) {
+            self.bump();
+            let mut names = Vec::new();
+            while !self.at(T::RBracket) {
+                let name = if self.at(T::Wildcard) {
+                    self.bump()
+                } else {
+                    self.expect(T::Ident, "a binding name")?
+                };
+                names.push(name);
+                if self.eat(T::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect(T::RBracket, "`,` or `]`")?;
+            self.expect(T::Eq, "`=` and an initial value")?;
+            let init = self.expr(false)?;
+            let names = self.ast.binding_names.push(&names);
+            return Ok(Some(self.ast.stmts.push(Stmt::LetArray {
+                mutable,
+                names,
+                init,
+            })));
+        }
+        if self.at(T::LBrace) {
+            self.bump();
+            let mut fields = Vec::new();
+            while !self.at(T::RBrace) {
+                let field = self.expect(T::Ident, "a field name")?;
+                let name = if self.eat(T::Colon).is_some() {
+                    if self.at(T::Wildcard) {
+                        self.bump()
+                    } else {
+                        self.expect(T::Ident, "a binding name")?
+                    }
+                } else {
+                    field
+                };
+                fields.push(crate::ast::DestructureField { field, name });
+                if self.eat(T::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect(T::RBrace, "`,` or `}`")?;
+            self.expect(T::Eq, "`=` and an initial value")?;
+            let init = self.expr(false)?;
+            let fields = self.ast.binding_fields.push(&fields);
+            return Ok(Some(self.ast.stmts.push(Stmt::LetStruct {
+                mutable,
+                fields,
+                init,
+            })));
         }
         let name = self.expect(T::Ident, "a name")?;
         let ty = if self.eat(T::Colon).is_some() {

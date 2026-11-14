@@ -1,0 +1,11 @@
+//! host: test
+import test from "test"
+struct Item { text: string }
+struct Holder { values: ?[2][2]Item, marker: i64 }
+let none: ?[2][2]Item = null
+let some: ?[2][2]Item = [[Item { text: "a" }, Item { text: "b" }], [Item { text: "c" }, Item { text: "d" }]]
+let holder = Holder { values: some, marker: 9 }
+test.check(none == null && holder.marker == 9)
+test.check(match holder.values { null => false, value => value[1][0].text == "c" })
+fn roundtrip(value: ?[2][2]Item) -> ?[2][2]Item { return value }
+test.check(match roundtrip(some) { null => false, value => value[0][1].text == "b" })

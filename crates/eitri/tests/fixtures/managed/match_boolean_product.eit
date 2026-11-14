@@ -1,0 +1,12 @@
+//! host: test
+import test from "test"
+enum Choice { Triple(a: bool, b: bool, c: bool, text: string) }
+fn value(a: bool, b: bool, c: bool) -> i64 {
+    return match Choice.Triple(a, b, c, "root") {
+        .Triple(false, _, _, _) => 0,
+        .Triple(true, false, _, _) => 1,
+        .Triple(true, true, false, _) => 2,
+        .Triple(true, true, true, _) => 3,
+    }
+}
+test.check(value(false, true, true) == 0 && value(true, false, true) == 1 && value(true, true, false) == 2 && value(true, true, true) == 3)

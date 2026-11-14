@@ -244,6 +244,7 @@ fn value_type(
     diagnostics: &mut Diagnostics,
 ) -> Ty {
     if let TypeExpr::ResultFixed(token, _, _)
+    | TypeExpr::ResultNestedFixed(token, _, _)
     | TypeExpr::ResultNamed(token, _)
     | TypeExpr::ResultOptional(token, _)
     | TypeExpr::OptionalResultNamed(token, _)
@@ -257,7 +258,10 @@ fn value_type(
         return Ty::Error;
     }
     if let TypeExpr::FixedNested(token, _, _)
+    | TypeExpr::FixedNestedOptional(token, _, _)
+    | TypeExpr::FixedNestedResult(token, _, _)
     | TypeExpr::OptionalFixed(token, _)
+    | TypeExpr::OptionalNestedFixed(token, _, _)
     | TypeExpr::FixedOptional(token, _)
     | TypeExpr::FixedResult(token, _, _)
     | TypeExpr::FixedI64(token)

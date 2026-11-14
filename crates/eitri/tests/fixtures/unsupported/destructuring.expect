@@ -1,1 +1,1 @@
-error[E0001] 4..5: not supported yet: destructuring
+error[E0201] 12..13: unknown name `p`

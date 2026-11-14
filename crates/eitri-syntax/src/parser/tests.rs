@@ -116,6 +116,12 @@ impl Printer<'_> {
     fn ty(&self, ty: TypeExpr) -> String {
         match ty {
             TypeExpr::Named(token) => self.token(token).to_owned(),
+            TypeExpr::ResultNestedFixed(error, size, element) => format!(
+                "{}![{}]...{}",
+                self.token(error),
+                self.token(size),
+                self.token(element)
+            ),
             TypeExpr::ResultFixed(error, size, element) => format!(
                 "{}![{}]{}",
                 self.token(error),
@@ -138,6 +144,25 @@ impl Printer<'_> {
             TypeExpr::FixedString(token) => format!("[{}]string", self.token(token)),
             TypeExpr::FixedNested(outer, inner, element) => format!(
                 "[{}][{}]{}",
+                self.token(outer),
+                self.token(inner),
+                self.token(element)
+            ),
+            TypeExpr::FixedNestedOptional(outer, inner, element) => format!(
+                "[{}][{}]?{}",
+                self.token(outer),
+                self.token(inner),
+                self.token(element)
+            ),
+            TypeExpr::FixedNestedResult(outer, inner, error) => format!(
+                "[{}][{}]<{}!{}>",
+                self.token(outer),
+                self.token(inner),
+                self.token(error),
+                self.token(TokenId::from_u32(error.as_u32() + 2))
+            ),
+            TypeExpr::OptionalNestedFixed(outer, inner, element) => format!(
+                "?[{}][{}]{}",
                 self.token(outer),
                 self.token(inner),
                 self.token(element)
@@ -208,6 +233,34 @@ impl Printer<'_> {
                 if mutable { "var" } else { "let" },
                 self.token(name),
                 ty.map_or(String::new(), |t| format!(": {}", self.ty(t))),
+                self.expr(init)
+            ),
+            Stmt::LetStruct {
+                mutable,
+                fields,
+                init,
+            } => format!(
+                "({} {{{}}} {})",
+                if mutable { "var" } else { "let" },
+                self.ast.binding_fields[fields]
+                    .iter()
+                    .map(|field| format!("{}:{}", self.token(field.field), self.token(field.name)))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                self.expr(init)
+            ),
+            Stmt::LetArray {
+                mutable,
+                names,
+                init,
+            } => format!(
+                "({} [{}] {})",
+                if mutable { "var" } else { "let" },
+                self.ast.binding_names[names]
+                    .iter()
+                    .map(|&name| self.token(name))
+                    .collect::<Vec<_>>()
+                    .join(","),
                 self.expr(init)
             ),
             Stmt::Assign {
@@ -531,10 +584,6 @@ fn unsupported_features_are_reported_once_and_dropped() {
             "E0001 14..15 not supported yet: default arguments",
         ),
         ("return", "E0001 0..6 not supported yet: top-level `return`"),
-        (
-            "let { x } = p",
-            "E0001 4..5 not supported yet: destructuring",
-        ),
         (
             "let x = await f()",
             "E0001 8..13 not supported yet: `await`",

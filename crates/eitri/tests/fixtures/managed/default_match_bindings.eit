@@ -1,0 +1,11 @@
+//! host: test
+import test from "test"
+enum Choice { Text(value: string), Empty }
+fn choose() -> Choice { test.emit(1); return Choice.Text("kept") }
+struct Item { text: string = match choose() { .Text(value) => value, .Empty => "empty" }, n: i64 }
+fn make() -> Item { return Item { n: 9 } }
+let item = Item { n: 1 }
+test.check(item.text == "kept")
+test.check(make().text == "kept")
+fn calc(n: i64) -> i64 { let item = Item { n: 9 }; return n + item.n }
+test.check(calc(8) == 17)

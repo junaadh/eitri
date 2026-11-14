@@ -1,0 +1,3 @@
+enum Color { Red, Blue }
+enum Choice { Wrap(color: Color, flag: bool) }
+let result = match Choice.Wrap(Color.Red, true) { .Wrap(.Red, _) => 0, .Wrap(.Blue, false) => 1, .Wrap(.Blue, true) if false => 2 }

@@ -1,0 +1,15 @@
+//! host: test
+import test from "test"
+struct Cell { text: string }
+struct Holder { data: [2][2]?Cell, tail: i64 }
+let data: [2][2]?Cell = [[null, Cell { text: "a" }], [Cell { text: "b" }, null]]
+let holder = Holder { data: data, tail: 9 }
+test.check(holder.data[0][0] == null)
+test.check((holder.data[1][0] ?? Cell { text: "none" }).text == "b")
+test.check(holder.tail == 9)
+fn copy(value: [2][2]?Cell) -> [2][2]?Cell { return value }
+var changed = copy(data)
+changed[1][1] = Cell { text: "new" }
+test.check((changed[1][1] ?? Cell { text: "none" }).text == "new")
+let deep: [1][1][1]?string = [[["deep"]]]
+test.check((deep[0][0][0] ?? "missing") == "deep")

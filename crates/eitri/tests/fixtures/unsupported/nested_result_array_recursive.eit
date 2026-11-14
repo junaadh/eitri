@@ -1,0 +1,2 @@
+enum Err { Bad }
+struct Node { children: [1][1]<Err!Node> }

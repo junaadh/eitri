@@ -1,0 +1,9 @@
+//! host: test
+import test from "test"
+struct Point { x: i64, label: string, nested: [2]string }
+fn point() -> Point { test.emit(1); return Point { x: 4, label: "here", nested: ["a", "b"] } }
+let { x, label: text, nested: items } = point()
+test.check(x == 4 && text == "here" && items[1] == "b")
+var { x: changed, label: _, nested: _ } = point()
+changed += 1
+test.check(changed == 5 && x == 4)

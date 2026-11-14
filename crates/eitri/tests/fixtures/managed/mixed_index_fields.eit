@@ -1,0 +1,13 @@
+//! host: test
+import test from "test"
+struct S { values: [2]i64, other: i64 }
+var rows: [2]S = [S { values: [1, 2], other: 3 }, S { values: [4, 5], other: 6 }]
+rows[1].values[0] = 9
+test.check(rows[1].values[0] == 9 && rows[0].values[0] == 1 && rows[1].other == 6)
+class Store { rows: [2]S }
+let store = Store { rows: [S { values: [10, 11], other: 12 }, S { values: [13, 14], other: 15 }] }
+fn row() -> i64 { test.emit(1); return 1 }
+fn col() -> i64 { test.emit(2); return 0 }
+fn change(s: Store) -> i64 { test.emit(3); s.rows[0].values[1] = 70; return 90 }
+store.rows[row()].values[col()] = change(store)
+test.check(store.rows[1].values[0] == 90 && store.rows[0].values[1] == 70 && store.rows[1].other == 15)

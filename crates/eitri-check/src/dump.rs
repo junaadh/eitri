@@ -264,6 +264,15 @@ impl Dumper<'_> {
 
     fn written_type(&self, ty: TypeExpr) -> String {
         match ty {
+            TypeExpr::ResultNestedFixed(error, size, element) => self.paint(
+                TYPE,
+                &format!(
+                    "'{}![{}]...{}'",
+                    self.token(error),
+                    self.token(size),
+                    self.token(element)
+                ),
+            ),
             TypeExpr::ResultFixed(error, size, element) => self.paint(
                 TYPE,
                 &format!(
@@ -290,7 +299,10 @@ impl Dumper<'_> {
                 &format!("'{}!{}'", self.token(error), self.token(success)),
             ),
             TypeExpr::FixedNested(size, _, _)
+            | TypeExpr::FixedNestedOptional(size, _, _)
+            | TypeExpr::FixedNestedResult(size, _, _)
             | TypeExpr::OptionalFixed(size, _)
+            | TypeExpr::OptionalNestedFixed(size, _, _)
             | TypeExpr::FixedOptional(size, _)
             | TypeExpr::FixedResult(size, _, _)
             | TypeExpr::FixedNamed(size, _)
@@ -412,12 +424,16 @@ impl Dumper<'_> {
                 let param = ast.params(ast.fns[f].params)[i];
                 let end = match param.ty {
                     TypeExpr::ResultFixed(_, _, token)
+                    | TypeExpr::ResultNestedFixed(_, _, token)
                     | TypeExpr::OptionalResultOptional(_, token)
                     | TypeExpr::OptionalResultNamed(_, token)
                     | TypeExpr::ResultOptional(_, token)
                     | TypeExpr::ResultNamed(_, token)
                     | TypeExpr::FixedNested(token, _, _)
+                    | TypeExpr::FixedNestedOptional(token, _, _)
+                    | TypeExpr::FixedNestedResult(token, _, _)
                     | TypeExpr::OptionalFixed(token, _)
+                    | TypeExpr::OptionalNestedFixed(token, _, _)
                     | TypeExpr::FixedOptional(token, _)
                     | TypeExpr::FixedResult(token, _, _)
                     | TypeExpr::FixedNamed(token, _)
@@ -503,6 +519,22 @@ impl Dumper<'_> {
                 );
                 (line, vec![Node::Expr(init)])
             }
+            Stmt::LetStruct { init, .. } => (
+                format!(
+                    "{} {}",
+                    self.paint(DECL, "StructDestructure"),
+                    self.range(ast.span(init))
+                ),
+                vec![Node::Expr(init)],
+            ),
+            Stmt::LetArray { init, .. } => (
+                format!(
+                    "{} {}",
+                    self.paint(DECL, "ArrayDestructure"),
+                    self.range(ast.span(init))
+                ),
+                vec![Node::Expr(init)],
+            ),
             Stmt::Assign {
                 target,
                 op,

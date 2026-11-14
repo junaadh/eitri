@@ -1,0 +1,2 @@
+enum Choice { Pair(a: bool, b: bool) }
+let value = match Choice.Pair(true, true) { .Pair(false, _) => 0, .Pair(true, false) => 1, .Pair(true, true) if false => 2 }

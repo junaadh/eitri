@@ -524,6 +524,56 @@ impl<'i> Checker<'_, 'i> {
                 let binding = self.new_binding(name, mutable, ty);
                 self.out.stmt_bindings[id] = Some(binding);
             }
+            Stmt::LetStruct {
+                mutable,
+                fields,
+                init,
+            } => {
+                let found = self.value(init, None);
+                if found != Ty::Error {
+                    self.report(
+                        Code::TypeMismatch,
+                        "struct destructuring requires a struct",
+                        self.span(init),
+                    );
+                }
+                for field in &self.input.ast.binding_fields[fields] {
+                    if self.input.tokens.kind(field.name) != eitri_syntax::TokenKind::Wildcard {
+                        self.new_binding(field.name, mutable, Ty::Error);
+                    }
+                }
+            }
+            Stmt::LetArray {
+                mutable,
+                names,
+                init,
+            } => {
+                let found = self.value(init, None);
+                let element = if let Some((size, element)) = found.fixed_inner() {
+                    if usize::from(size) != self.input.ast.binding_names[names].len() {
+                        self.report(
+                            Code::TypeMismatch,
+                            "fixed array destructuring length mismatch",
+                            self.span(init),
+                        );
+                    }
+                    element
+                } else {
+                    if found != Ty::Error {
+                        self.report(
+                            Code::TypeMismatch,
+                            "fixed array destructuring requires a fixed array",
+                            self.span(init),
+                        );
+                    }
+                    Ty::Error
+                };
+                for &name in &self.input.ast.binding_names[names] {
+                    if self.input.tokens.kind(name) != eitri_syntax::TokenKind::Wildcard {
+                        self.new_binding(name, mutable, element);
+                    }
+                }
+            }
             Stmt::Assign {
                 target, op, value, ..
             } => self.assign(id, target, op, value),

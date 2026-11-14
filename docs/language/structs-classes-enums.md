@@ -13,6 +13,7 @@ and their reference graph are traced by the collector.
 The current implementation accepts structs with up to 256 scalar, string or
 nested aggregate fields, literals, field reads and writes, and copies in local
 bindings and control flow. `let` fields cannot be changed after construction.
+Struct destructuring supports field selection, renaming and wildcard bindings.
 Struct update literals copy omitted fields from a final `..base` expression.
 Fields occupy frame slots, so strings remain collector roots. Recursive inline
 layouts are rejected. Structs can pass and return through script calls;
@@ -24,7 +25,7 @@ can be called through the type name or by bare name inside another method of the
 type. Up to 256 methods per module are supported. Bare receiver field reads and writes work with local shadowing, including
 nested writes and mutating calls on nested fields. Bare method calls resolve
 on the receiver and retain its mutability rules. Literal, arithmetic and call defaults are supported;
-defaults can construct enums, structs, classes, and fixed arrays, including nested defaults; they can also read fields and index fixed arrays of constructed values, use conditional expressions, and interpolate strings. Expansion
+defaults can construct enums, structs, classes, and fixed arrays, including nested defaults; they can also read fields and index fixed arrays of constructed values, use conditional and match expressions with local bindings, and interpolate strings. Expansion
 is limited to 16 nested defaults and 65,536 total defaults per function;
 captured names remain unsupported.
 Enums support positional payloads followed by labeled payloads in construction,

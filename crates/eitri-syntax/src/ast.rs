@@ -188,6 +188,7 @@ pub enum TypeExpr {
     ResultNamed(TokenId, TokenId),
     ResultOptional(TokenId, TokenId),
     ResultFixed(TokenId, TokenId, TokenId),
+    ResultNestedFixed(TokenId, TokenId, TokenId),
     OptionalResultNamed(TokenId, TokenId),
     OptionalResultOptional(TokenId, TokenId),
     OptionalString(TokenId),
@@ -202,7 +203,10 @@ pub enum TypeExpr {
     FixedResult(TokenId, TokenId, TokenId),
     FixedOptional(TokenId, TokenId),
     OptionalFixed(TokenId, TokenId),
+    OptionalNestedFixed(TokenId, TokenId, TokenId),
     FixedNested(TokenId, TokenId, TokenId),
+    FixedNestedOptional(TokenId, TokenId, TokenId),
+    FixedNestedResult(TokenId, TokenId, TokenId),
     /// Unsupported, already reported.
     Error,
 }
@@ -224,6 +228,16 @@ pub enum Stmt {
         mutable: bool,
         name: TokenId,
         ty: Option<TypeExpr>,
+        init: ExprId,
+    },
+    LetArray {
+        mutable: bool,
+        names: List<TokenId>,
+        init: ExprId,
+    },
+    LetStruct {
+        mutable: bool,
+        fields: List<DestructureField>,
         init: ExprId,
     },
     /// `name op= value`. The span covers the whole statement.
@@ -258,6 +272,12 @@ pub enum Stmt {
         keyword: TokenId,
         value: Option<ExprId>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DestructureField {
+    pub field: TokenId,
+    pub name: TokenId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -369,6 +389,8 @@ pub struct Ast {
     pub matches: IndexVec<MatchId, MatchExpr>,
     pub match_arms: ListPool<MatchArm>,
     pub match_bindings: ListPool<MatchBinding>,
+    pub binding_names: ListPool<TokenId>,
+    pub binding_fields: ListPool<DestructureField>,
     pub field_inits: ListPool<FieldInit>,
     pub stmts: IndexVec<StmtId, Stmt>,
     pub exprs: IndexVec<ExprId, Expr>,
@@ -399,6 +421,8 @@ impl Ast {
             + self.matches.capacity() * size_of::<MatchExpr>()
             + self.match_arms.heap_bytes()
             + self.match_bindings.heap_bytes()
+            + self.binding_names.heap_bytes()
+            + self.binding_fields.heap_bytes()
             + self.field_inits.heap_bytes()
             + self.stmts.capacity() * size_of::<Stmt>()
             + self.exprs.capacity() * size_of::<Expr>()
@@ -433,6 +457,8 @@ impl Ast {
             .reserve_budgeted(count.saturating_sub(self.matches.len()), budget)?;
         self.match_arms.reserve_budgeted(count, budget)?;
         self.match_bindings.reserve_budgeted(count, budget)?;
+        self.binding_names.reserve_budgeted(count, budget)?;
+        self.binding_fields.reserve_budgeted(count, budget)?;
         self.field_inits.reserve_budgeted(count, budget)?;
         self.stmts
             .reserve_budgeted(count.saturating_sub(self.stmts.len()), budget)?;
@@ -462,6 +488,8 @@ impl Ast {
         self.matches.clear();
         self.match_arms.clear();
         self.match_bindings.clear();
+        self.binding_names.clear();
+        self.binding_fields.clear();
         self.field_inits.clear();
         self.stmts.clear();
         self.exprs.clear();

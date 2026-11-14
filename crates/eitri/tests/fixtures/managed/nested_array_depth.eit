@@ -12,3 +12,27 @@ let empty: [2][0][1]Cell = [[], []]
 struct EmptyHolder { a: [2][0][1]Cell, b: string }
 let holder = EmptyHolder { a: empty, b: "after" }
 test.check(holder.b == "after")
+var mutable: [2][2][2]i64 = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
+mutable[1][0][1] = 9
+mutable[0][1][0] += 2
+test.check(mutable[1][0][1] == 9 && mutable[0][1][0] == 5)
+class Depot { data: [2][2][2]string }
+let depot = Depot { data: [[["a", "b"], ["c", "d"]], [["e", "f"], ["g", "h"]]] }
+fn row() -> i64 { test.emit(1); return 1 }
+fn col() -> i64 { test.emit(2); return 0 }
+fn item() -> i64 { test.emit(3); return 1 }
+fn replacement() -> string { test.emit(4); return "updated" }
+depot.data[row()][col()][item()] = replacement()
+test.check(depot.data[1][0][1] == "updated" && depot.data[1][0][0] == "e")
+var deep_cells: [1][1][1]Cell = [[[Cell { name: "before" }]]]
+deep_cells[0][0][0].name = "after"
+test.check(deep_cells[0][0][0].name == "after")
+var two_cells: [1][1]Cell = [[Cell { name: "two" }]]
+two_cells[0][0].name = "fixed"
+test.check(two_cells[0][0].name == "fixed")
+fn replace_with_sibling_change(store: Depot) -> string {
+    store.data[1][0][0] = "sibling"
+    return "replacement"
+}
+depot.data[1][0][1] = replace_with_sibling_change(depot)
+test.check(depot.data[1][0][0] == "sibling" && depot.data[1][0][1] == "replacement")

@@ -1,0 +1,10 @@
+//! host: test
+import test from "test"
+enum Choice { A, B }
+fn choose() -> Choice { test.emit(1); return Choice.A }
+struct Item { text: string = match choose() { .A => "one", .B => "two" }, n: i64 }
+let a = Item { n: 1 }
+let b = Item { n: 2 }
+test.check(a.text == "one" && b.text == "one")
+fn create() -> Item { return Item { n: 3 } }
+test.check(create().text == "one")

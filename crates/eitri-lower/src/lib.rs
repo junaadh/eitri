@@ -1226,6 +1226,76 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 self.top = slot + width;
                 return Ok(());
             }
+            Stmt::LetStruct { fields, init, .. } => {
+                let Ty::Struct(owner) = checked.types[init] else {
+                    unreachable!("checked struct")
+                };
+                for field in &ast.binding_fields[fields] {
+                    if let Some(binding) = checked.pattern_bindings[field.name] {
+                        self.slots[binding] = self.top;
+                        self.top += self.width(checked.bindings[binding].ty);
+                    }
+                }
+                let end = self.top;
+                let source = self.expr(init, None)?;
+                let declared = ast.params(ast.structs[owner].fields);
+                for field in &ast.binding_fields[fields] {
+                    if let Some(binding) = checked.pattern_bindings[field.name] {
+                        let index = declared
+                            .iter()
+                            .position(|item| {
+                                self.input.tokens.symbol(item.name)
+                                    == self.input.tokens.symbol(field.field)
+                            })
+                            .expect("checked field");
+                        let offset = self.field_offset(owner, index as u32);
+                        for part in 0..self.width(checked.bindings[binding].ty) {
+                            self.asm.emit(
+                                Op::Mov,
+                                Operands::abc(
+                                    (self.slots[binding] + part).into(),
+                                    (source + offset + part).into(),
+                                    0,
+                                ),
+                                ast.span(init),
+                            )?;
+                        }
+                    }
+                }
+                self.top = end;
+                return Ok(());
+            }
+            Stmt::LetArray { names, init, .. } => {
+                let (_, element) = self
+                    .fixed_inner(checked.types[init])
+                    .expect("checked fixed array");
+                let width = self.width(element);
+                for &name in &ast.binding_names[names] {
+                    if let Some(binding) = checked.pattern_bindings[name] {
+                        self.slots[binding] = self.top;
+                        self.top += width;
+                    }
+                }
+                let end = self.top;
+                let source = self.expr(init, None)?;
+                for (index, &name) in ast.binding_names[names].iter().enumerate() {
+                    if let Some(binding) = checked.pattern_bindings[name] {
+                        for part in 0..width {
+                            self.asm.emit(
+                                Op::Mov,
+                                Operands::abc(
+                                    (self.slots[binding] + part).into(),
+                                    (source + index as u32 * width + part).into(),
+                                    0,
+                                ),
+                                ast.span(init),
+                            )?;
+                        }
+                    }
+                }
+                self.top = end;
+                return Ok(());
+            }
             Stmt::Assign {
                 op, value, span, ..
             } if checked.stmt_fields[id].is_some()
@@ -1332,8 +1402,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 let Expr::Index { base, index } = ast.exprs[target] else {
                     unreachable!()
                 };
-                if matches!(ast.exprs[base], Expr::Index { .. }) {
-                    self.assign_nested_index(id, target, op, value, span)?;
+                if matches!(ast.exprs[base], Expr::Index { .. })
+                    || self.indexed_struct_root(base).is_some()
+                {
+                    self.assign_nested_index(id, target, op, value, span, None)?;
                     self.top = mark;
                     return Ok(());
                 }
@@ -1830,202 +1902,8 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         value: ExprId,
         span: Span,
     ) -> Lowered<()> {
-        let ast = self.input.ast;
         let indexed = self.indexed_struct_root(target).unwrap();
-        let Expr::Index { base, index } = ast.exprs[indexed] else {
-            unreachable!()
-        };
-        let (size, element) = self.fixed_inner(self.checked.types[base]).unwrap();
-        let binding = self.checked.stmt_bindings[id].expect("checked binding");
-        let class_root = self.class_field_root(base);
-        let object = if let Some((base, implicit, _, _, _)) = class_root {
-            let slot = self.temp();
-            if let Some(base) = base {
-                self.expr(base, Some(slot))?;
-            } else {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(slot.into(), self.slots[implicit.unwrap()].into(), 0),
-                    span,
-                )?;
-            }
-            Some(slot)
-        } else {
-            None
-        };
-        let destination = if class_root.is_none() {
-            self.field_address(base, binding)
-        } else {
-            0
-        };
-        let window = self.top;
-        self.top += 1 + u32::from(size).max(1);
-        self.expr(index, Some(window))?;
-        if size == 0 {
-            self.empty_array_fault(ast.span(indexed))?;
-            return Ok(());
-        }
-        let width = self.width(element);
-        let source = if let Some((_, _, owner, field, root)) = class_root {
-            self.class_read_field(
-                object.unwrap(),
-                owner,
-                field,
-                self.checked.types[root],
-                None,
-                span,
-            )? + self.class_nested_offset(base, root)
-        } else {
-            destination
-        };
-        let element_slot = self.top;
-        self.top += width;
-        for field in 0..width {
-            for item in 0..u32::from(size) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (window + 1 + item).into(),
-                        (source + item * width + field).into(),
-                        0,
-                    ),
-                    span,
-                )?;
-            }
-            self.asm.emit(
-                Op::FixedGet,
-                Operands::abc(
-                    (element_slot + field).into(),
-                    window.into(),
-                    (size - 1).into(),
-                ),
-                ast.span(indexed),
-            )?;
-        }
-        let mut cursor = target;
-        let mut offset = 0;
-        while cursor != indexed {
-            let Expr::Member { base, .. } = ast.exprs[cursor] else {
-                unreachable!()
-            };
-            let Ty::Struct(owner) = self.checked.types[base] else {
-                unreachable!()
-            };
-            let Res::Field(field) = self.checked.resolutions[cursor] else {
-                unreachable!()
-            };
-            offset += self.field_offset(owner, field);
-            cursor = base;
-        }
-        let rhs = self.expr(value, None)?;
-        let result = if let AssignOp::Compound(binary) = op {
-            let result = self.temp();
-            self.operate(
-                binary,
-                self.checked.types[target],
-                result,
-                element_slot + offset,
-                rhs,
-                span,
-            )?;
-            result
-        } else {
-            rhs
-        };
-        let container = if let Some((_, _, owner, field, root)) = class_root {
-            Some(self.class_read_field(
-                object.unwrap(),
-                owner,
-                field,
-                self.checked.types[root],
-                None,
-                span,
-            )?)
-        } else {
-            None
-        };
-        let refreshed = if let Some((_, _, _, _, root)) = class_root {
-            container.unwrap() + self.class_nested_offset(base, root)
-        } else {
-            destination
-        };
-        for field in 0..width {
-            for item in 0..u32::from(size) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (window + 1 + item).into(),
-                        (refreshed + item * width + field).into(),
-                        0,
-                    ),
-                    span,
-                )?;
-            }
-            self.asm.emit(
-                Op::FixedGet,
-                Operands::abc(
-                    (element_slot + field).into(),
-                    window.into(),
-                    (size - 1).into(),
-                ),
-                ast.span(indexed),
-            )?;
-        }
-        for part in 0..self.width(self.checked.types[target]) {
-            self.asm.emit(
-                Op::Mov,
-                Operands::abc(
-                    (element_slot + offset + part).into(),
-                    (result + part).into(),
-                    0,
-                ),
-                span,
-            )?;
-        }
-        for field in 0..width {
-            for item in 0..u32::from(size) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (window + 1 + item).into(),
-                        (refreshed + item * width + field).into(),
-                        0,
-                    ),
-                    span,
-                )?;
-            }
-            self.asm.emit(
-                Op::FixedSet,
-                Operands::abc(
-                    (element_slot + field).into(),
-                    window.into(),
-                    (size - 1).into(),
-                ),
-                ast.span(indexed),
-            )?;
-            for item in 0..u32::from(size) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (refreshed + item * width + field).into(),
-                        (window + 1 + item).into(),
-                        0,
-                    ),
-                    span,
-                )?;
-            }
-        }
-        if let Some((_, _, owner, field, root)) = class_root {
-            self.class_store_field(
-                object.unwrap(),
-                owner,
-                field,
-                self.checked.types[root],
-                container.unwrap(),
-                span,
-            )?;
-        }
-        Ok(())
+        self.assign_nested_index(id, indexed, op, value, span, Some(target))
     }
 
     fn assign_nested_index(
@@ -2035,32 +1913,46 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         op: AssignOp,
         value: ExprId,
         span: Span,
+        field_target: Option<ExprId>,
     ) -> Lowered<()> {
+        #[derive(Clone, Copy)]
+        enum Step {
+            Index(ExprId, ExprId),
+            Field(u32),
+        }
         let ast = self.input.ast;
-        let Expr::Index {
-            base: row_expr,
-            index: col_expr,
-        } = ast.exprs[target]
-        else {
-            unreachable!()
-        };
-        let Expr::Index {
-            base,
-            index: row_index,
-        } = ast.exprs[row_expr]
-        else {
-            unreachable!()
-        };
+        let leaf = field_target.unwrap_or(target);
+        let mut path = Vec::new();
+        let mut base = leaf;
+        loop {
+            match ast.exprs[base] {
+                Expr::Index {
+                    base: parent,
+                    index,
+                } => {
+                    path.push(Step::Index(base, index));
+                    base = parent;
+                }
+                Expr::Member { base: parent, .. } => {
+                    let Ty::Struct(owner) = self.checked.types[parent] else {
+                        break;
+                    };
+                    let Res::Field(field) = self.checked.resolutions[base] else {
+                        unreachable!()
+                    };
+                    path.push(Step::Field(self.field_offset(owner, field)));
+                    base = parent;
+                }
+                _ => break,
+            }
+        }
+        path.reverse();
         let binding = self.checked.stmt_bindings[id].expect("checked array binding");
-        let (rows, row_ty) = self.fixed_inner(self.checked.types[base]).unwrap();
-        let (cols, element_ty) = self.fixed_inner(row_ty).unwrap();
-        let row_width = self.width(row_ty);
-        let element_width = self.width(element_ty);
         let class_root = self.class_field_root(base);
-        let object = if let Some((base, implicit, _, _, _)) = class_root {
+        let object = if let Some((owner_expr, implicit, _, _, _)) = class_root {
             let slot = self.temp();
-            if let Some(base) = base {
-                self.expr(base, Some(slot))?;
+            if let Some(owner_expr) = owner_expr {
+                self.expr(owner_expr, Some(slot))?;
             } else {
                 self.asm.emit(
                     Op::Mov,
@@ -2077,76 +1969,83 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         } else {
             0
         };
-        let outer = self.top;
-        self.top += 1 + u32::from(rows).max(1);
-        self.expr(row_index, Some(outer))?;
-        if rows == 0 {
-            self.empty_array_fault(ast.span(row_expr))?;
-            return Ok(());
-        }
-        let source = if let Some((_, _, owner, field, root)) = class_root {
-            self.class_read_field(
-                object.unwrap(),
-                owner,
-                field,
-                self.checked.types[root],
-                None,
-                span,
-            )? + self.class_nested_offset(base, root)
-        } else {
-            destination
-        };
-        let row = self.top;
-        self.top += row_width;
-        for field in 0..row_width {
-            for item in 0..u32::from(rows) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (outer + 1 + item).into(),
-                        (source + item * row_width + field).into(),
-                        0,
-                    ),
-                    span,
-                )?;
+        // Each dynamic level retains its evaluated index and a reusable value window.
+        let mut levels = Vec::new();
+        let mut source = 0;
+        let mut initialized = false;
+        let mut prefix_offset = 0;
+        for step in &path {
+            match *step {
+                Step::Field(offset) => {
+                    if initialized {
+                        source += offset;
+                    } else {
+                        prefix_offset += offset;
+                    }
+                }
+                Step::Index(indexed, index) => {
+                    let Expr::Index { base: parent, .. } = ast.exprs[indexed] else {
+                        unreachable!()
+                    };
+                    let (size, element_ty) = self.fixed_inner(self.checked.types[parent]).unwrap();
+                    let width = self.width(element_ty);
+                    let window = self.top;
+                    self.top += 1 + u32::from(size).max(1);
+                    self.expr(index, Some(window))?;
+                    if size == 0 {
+                        self.empty_array_fault(ast.span(indexed))?;
+                        return Ok(());
+                    }
+                    if !initialized {
+                        source = if let Some((_, _, owner, field, root)) = class_root {
+                            self.class_read_field(
+                                object.unwrap(),
+                                owner,
+                                field,
+                                self.checked.types[root],
+                                None,
+                                span,
+                            )? + self.class_nested_offset(base, root)
+                        } else {
+                            destination
+                        };
+                        source += prefix_offset;
+                        initialized = true;
+                    }
+                    let selected = self.top;
+                    self.top += width;
+                    for field in 0..width {
+                        for item in 0..u32::from(size) {
+                            self.asm.emit(
+                                Op::Mov,
+                                Operands::abc(
+                                    (window + 1 + item).into(),
+                                    (source + item * width + field).into(),
+                                    0,
+                                ),
+                                span,
+                            )?;
+                        }
+                        self.asm.emit(
+                            Op::FixedGet,
+                            Operands::abc(
+                                (selected + field).into(),
+                                window.into(),
+                                (size - 1).into(),
+                            ),
+                            ast.span(indexed),
+                        )?;
+                    }
+                    levels.push((indexed, size, width, window, selected, 0));
+                    source = selected;
+                }
             }
-            self.asm.emit(
-                Op::FixedGet,
-                Operands::abc((row + field).into(), outer.into(), (rows - 1).into()),
-                ast.span(row_expr),
-            )?;
         }
-        let inner = self.top;
-        self.top += 1 + u32::from(cols).max(1);
-        self.expr(col_expr, Some(inner))?;
-        if cols == 0 {
-            self.empty_array_fault(ast.span(target))?;
-            return Ok(());
-        }
-        let old = self.top;
-        self.top += element_width;
-        for field in 0..element_width {
-            for item in 0..u32::from(cols) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (inner + 1 + item).into(),
-                        (row + item * element_width + field).into(),
-                        0,
-                    ),
-                    span,
-                )?;
-            }
-            self.asm.emit(
-                Op::FixedGet,
-                Operands::abc((old + field).into(), inner.into(), (cols - 1).into()),
-                ast.span(target),
-            )?;
-        }
+        let element_ty = self.checked.types[leaf];
         let rhs = self.expr(value, None)?;
         let result = if let AssignOp::Compound(binary) = op {
             let slot = self.temp();
-            self.operate(binary, element_ty, slot, old, rhs, span)?;
+            self.operate(binary, element_ty, slot, source, rhs, span)?;
             slot
         } else {
             rhs
@@ -2163,85 +2062,81 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         } else {
             None
         };
-        let refreshed = if let Some((_, _, _, _, root)) = class_root {
+        let mut current = if let Some((_, _, _, _, root)) = class_root {
             container.unwrap() + self.class_nested_offset(base, root)
         } else {
             destination
         };
-        for field in 0..row_width {
-            for item in 0..u32::from(rows) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (outer + 1 + item).into(),
-                        (refreshed + item * row_width + field).into(),
-                        0,
-                    ),
-                    span,
-                )?;
-            }
-            self.asm.emit(
-                Op::FixedGet,
-                Operands::abc((row + field).into(), outer.into(), (rows - 1).into()),
-                ast.span(row_expr),
-            )?;
-        }
-        for field in 0..element_width {
-            for item in 0..u32::from(cols) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (inner + 1 + item).into(),
-                        (row + item * element_width + field).into(),
-                        0,
-                    ),
-                    span,
-                )?;
-            }
-            self.asm.emit(
-                Op::FixedSet,
-                Operands::abc((result + field).into(), inner.into(), (cols - 1).into()),
-                ast.span(target),
-            )?;
-            for item in 0..u32::from(cols) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (row + item * element_width + field).into(),
-                        (inner + 1 + item).into(),
-                        0,
-                    ),
-                    span,
-                )?;
+        let mut index = 0;
+        for step in &path {
+            match *step {
+                Step::Field(offset) => current += offset,
+                Step::Index(_, _) => {
+                    let (indexed, size, width, window, selected, parent) = &mut levels[index];
+                    *parent = current;
+                    for field in 0..*width {
+                        for item in 0..u32::from(*size) {
+                            self.asm.emit(
+                                Op::Mov,
+                                Operands::abc(
+                                    (*window + 1 + item).into(),
+                                    (current + item * *width + field).into(),
+                                    0,
+                                ),
+                                span,
+                            )?;
+                        }
+                        self.asm.emit(
+                            Op::FixedGet,
+                            Operands::abc(
+                                (*selected + field).into(),
+                                (*window).into(),
+                                (*size - 1).into(),
+                            ),
+                            ast.span(*indexed),
+                        )?;
+                    }
+                    current = *selected;
+                    index += 1;
+                }
             }
         }
-        for field in 0..row_width {
-            for item in 0..u32::from(rows) {
-                self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (outer + 1 + item).into(),
-                        (refreshed + item * row_width + field).into(),
-                        0,
-                    ),
-                    span,
-                )?;
-            }
+        for part in 0..self.width(element_ty) {
             self.asm.emit(
-                Op::FixedSet,
-                Operands::abc((row + field).into(), outer.into(), (rows - 1).into()),
-                ast.span(row_expr),
+                Op::Mov,
+                Operands::abc((current + part).into(), (result + part).into(), 0),
+                span,
             )?;
-            for item in 0..u32::from(rows) {
+        }
+        for &(indexed, size, width, window, selected, parent) in levels.iter().rev() {
+            for field in 0..width {
+                for item in 0..u32::from(size) {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(
+                            (window + 1 + item).into(),
+                            (parent + item * width + field).into(),
+                            0,
+                        ),
+                        span,
+                    )?;
+                }
                 self.asm.emit(
-                    Op::Mov,
-                    Operands::abc(
-                        (refreshed + item * row_width + field).into(),
-                        (outer + 1 + item).into(),
-                        0,
-                    ),
-                    span,
+                    Op::FixedSet,
+                    Operands::abc((selected + field).into(), window.into(), (size - 1).into()),
+                    ast.span(indexed),
                 )?;
+                for item in 0..u32::from(size) {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(
+                            (parent + item * width + field).into(),
+                            (window + 1 + item).into(),
+                            0,
+                        ),
+                        span,
+                    )?;
+                }
             }
         }
         if let Some((_, _, owner, field, root)) = class_root {

@@ -4,9 +4,8 @@ The current implementation supports fixed arrays of supported scalar, string, cl
 elements, with lengths 0 through 256
 in literals, copies, aggregate fields, equality, script calls, and indexed reads.
 Indexed writes to mutable locals, mutable struct fields, and class fields also
-work. Fixed arrays can nest to 32 dimensions for construction, copies, calls and
-reads; writes through arrays deeper than two dimensions and dynamic collections
-remain future work. An unannotated array literal denotes a dynamic array and is rejected until
+work. Fixed arrays can nest to 32 dimensions for construction, copies, calls,
+reads, indexed writes, and fixed-array destructuring. Dynamic collections remain future work. An unannotated array literal denotes a dynamic array and is rejected until
 that feature lands.
 
 ## Literals

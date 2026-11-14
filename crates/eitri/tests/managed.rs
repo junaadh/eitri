@@ -2825,3 +2825,303 @@ fn nested_array_depth_survives_collection() {
         }
     }
 }
+
+#[test]
+fn mixed_index_fields_survive_collection() {
+    let source = include_str!("fixtures/managed/mixed_index_fields.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/mixed_index_fields.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_optional_arrays_survive_collection() {
+    let source = include_str!("fixtures/managed/nested_optional_arrays.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/nested_optional_arrays.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_result_arrays_survive_collection() {
+    let source = include_str!("fixtures/managed/nested_result_arrays.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/nested_result_arrays.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn optional_nested_arrays_survive_collection() {
+    let source = include_str!("fixtures/managed/optional_nested_arrays.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/optional_nested_arrays.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn result_nested_arrays_survive_collection() {
+    let source = include_str!("fixtures/managed/result_nested_arrays.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/result_nested_arrays.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn default_match_survives_collection() {
+    let source = include_str!("fixtures/managed/default_match.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/default_match.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn default_match_bindings_survive_collection() {
+    let source = include_str!("fixtures/managed/default_match_bindings.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/default_match_bindings.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn fixed_array_destructuring_survives_collection() {
+    let source = include_str!("fixtures/managed/fixed_array_destructuring.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/fixed_array_destructuring.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn struct_destructuring_survives_collection() {
+    let source = include_str!("fixtures/managed/struct_destructuring.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/struct_destructuring.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn match_boolean_pairs_survive_collection() {
+    let source = include_str!("fixtures/managed/match_boolean_pairs.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/match_boolean_pairs.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn match_boolean_product_survives_collection() {
+    let source = include_str!("fixtures/managed/match_boolean_product.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/match_boolean_product.expect")
+            );
+        }
+    }
+}
+
+#[test]
+fn match_finite_product_survives_collection() {
+    let source = include_str!("fixtures/managed/match_finite_product.eit");
+    for threaded in [false, true] {
+        for simple in [false, true] {
+            let mut context = Context::new();
+            context.set_threaded(threaded);
+            context.set_force_gc(true);
+            context.register_host_module("test", TEST_MODULE).unwrap();
+            let compiled = if simple {
+                context.compile_simple(source)
+            } else {
+                context.compile(source)
+            }
+            .unwrap();
+            let mut host = TestHost::new(|name| context.host_index("test", name));
+            context.execute(&compiled, &mut host).unwrap();
+            assert_eq!(
+                format!("{}ok\n", host.effects),
+                include_str!("fixtures/managed/match_finite_product.expect")
+            );
+        }
+    }
+}

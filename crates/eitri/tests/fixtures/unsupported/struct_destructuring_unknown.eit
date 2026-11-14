@@ -1,0 +1,2 @@
+struct Item { x: i64 }
+let { y } = Item { x: 1 }

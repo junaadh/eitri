@@ -2978,3 +2978,115 @@ payloads. The 1001-sample release harness in the isolated workspace measured
 fresh module compile p50/p99 12.2/15.5 µs and source-to-result 12.5/15.9 µs on
 the general workload. Raw output and samples: `/private/tmp/eitri-t017-96-bench.txt`
 and `/private/tmp/eitri-t017-96-samples.csv`.
+
+### T017-97 deeper indexed writes
+
+The generalized indexed write path saves each index once, checks each bound in
+order, and reloads parent values after the right-hand side to preserve sibling
+changes. The 1001-sample release harness in the isolated workspace measured fresh
+module compile p50/p99 12.4/19.6 µs and source-to-result 12.7/19.9 µs on the
+general workload. Raw output and samples: `/private/tmp/eitri-t017-97-bench.txt`
+and `/private/tmp/eitri-t017-97-samples.csv`.
+
+### T017-98 mixed index and field writes
+
+The write path now traverses interleaved array indices and struct fields and
+reconstructs the selected values after evaluating the right-hand side. The
+1001-sample release harness in the isolated workspace measured fresh module
+compile p50/p99 12.5/14.2 µs and source-to-result 12.8/14.8 µs on the general
+workload. Raw output and samples: `/private/tmp/eitri-t017-98-bench.txt` and
+`/private/tmp/eitri-t017-98-samples.csv`.
+
+### T017-99 nested arrays of optionals
+
+Nested optional elements use the existing inline layout and tracing rules;
+cycle checking follows the optional payload through every array dimension. The
+1001-sample release harness in the isolated workspace measured fresh module
+compile p50/p99 12.8/14.5 µs and source-to-result 13.1/14.9 µs on the general
+workload. Raw output and samples: `/private/tmp/eitri-t017-99-bench.txt` and
+`/private/tmp/eitri-t017-99-samples.csv`.
+
+### T017-100 nested arrays of results
+
+Result elements in nested fixed arrays retain inline error and success payloads;
+cycle checking follows both payload types. The 1001-sample release harness in the
+isolated workspace measured fresh module compile p50/p99 13.0/15.5 µs and
+source-to-result 13.3/15.8 µs on the general workload. Raw output and samples:
+`/private/tmp/eitri-t017-100-bench.txt` and `/private/tmp/eitri-t017-100-samples.csv`.
+
+### T017-101 optional nested arrays
+
+Optional nested arrays retain a distinct presence tag and their full inline
+payload; layout and cycle checks follow every nested array. The 1001-sample
+release harness in the isolated workspace measured fresh module compile p50/p99
+12.5/14.5 µs and source-to-result 12.8/14.9 µs on the general workload. Raw
+output and samples: `/private/tmp/eitri-t017-101-bench.txt` and
+`/private/tmp/eitri-t017-101-samples.csv`.
+
+### T017-102 results with nested array successes
+
+Results carry nested fixed-array success payloads inline, including aggregate
+roots and recursive-layout checks. The 1001-sample release harness in the
+isolated workspace measured fresh module compile p50/p99 13.7/17.9 µs and
+source-to-result 14.0/18.4 µs on the general workload. Raw output and samples:
+`/private/tmp/eitri-t017-102-bench.txt` and `/private/tmp/eitri-t017-102-samples.csv`.
+
+### T017-103 match expressions in field defaults
+
+Binding-free matches are checked and evaluated at each construction site; the
+array type nesting boundary is exercised separately. The 1001-sample release
+harness in the isolated workspace measured fresh module compile p50/p99
+12.0/15.2 µs and source-to-result 12.3/15.6 µs on the general workload. Raw
+output and samples: `/private/tmp/eitri-t017-103-bench.txt` and
+`/private/tmp/eitri-t017-103-samples.csv`.
+
+### T017-104 bindings in default matches
+
+Field defaults can use names bound by match patterns, with those bindings
+allocated in the active construction context. The 1001-sample release harness
+in the isolated workspace measured fresh module compile p50/p99 12.6/17.3 µs
+and source-to-result 12.8/17.8 µs on the general workload. Raw output and
+samples: `/private/tmp/eitri-t017-104-bench.txt` and
+`/private/tmp/eitri-t017-104-samples.csv`.
+
+### T017-105 fixed-array destructuring
+
+Destructuring evaluates the source once and copies each selected value into its
+own binding, with arity checked before execution. The 1001-sample release
+harness in the isolated workspace measured fresh module compile p50/p99
+13.3/15.0 µs and source-to-result 13.6/15.7 µs on the general workload. Raw
+output and samples: `/private/tmp/eitri-t017-105-bench.txt` and
+`/private/tmp/eitri-t017-105-samples.csv`.
+
+### T017-106 struct destructuring
+
+Named-field destructuring evaluates the source once and copies selected fields
+into local bindings. The 1001-sample release harness in the isolated workspace
+measured fresh module compile p50/p99 12.7/16.7 µs and source-to-result
+13.0/17.1 µs on the general workload. Raw output and samples:
+`/private/tmp/eitri-t017-106-bench.txt` and `/private/tmp/eitri-t017-106-samples.csv`.
+
+### T017-107 boolean-pair match coverage
+
+A bounded four-bit mask records the combinations of two boolean payload fields.
+The 1001-sample release harness in the isolated workspace measured fresh module
+compile p50/p99 13.2/18.8 µs and source-to-result 13.5/19.3 µs on the general
+workload. Raw output and samples: `/private/tmp/eitri-t017-107-bench.txt` and
+`/private/tmp/eitri-t017-107-samples.csv`.
+
+### T017-108 boolean-product match coverage
+
+A bounded 256-bit mask tracks products of up to eight boolean payload fields;
+at most 32 case groups are retained per match. The 1001-sample release harness
+in the isolated workspace measured fresh module compile p50/p99 13.8/15.4 µs and
+source-to-result 14.1/15.8 µs on the general workload. Raw output and samples:
+`/private/tmp/eitri-t017-108-bench.txt` and `/private/tmp/eitri-t017-108-samples.csv`.
+
+### T017-109 finite payload product coverage
+
+Exhaustiveness tracks up to 256 combinations of enum, boolean and optional
+payload fields, with at most eight fields per group. The 1001-sample release
+harness in the isolated workspace measured fresh module compile p50/p99
+13.6/28.5 µs and source-to-result 13.9/29.0 µs on the general workload. Raw
+output and samples: `/private/tmp/eitri-t017-109-bench.txt` and
+`/private/tmp/eitri-t017-109-samples.csv`.

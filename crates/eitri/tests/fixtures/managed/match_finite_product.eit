@@ -1,0 +1,15 @@
+//! host: test
+import test from "test"
+enum Color { Red, Blue }
+enum Choice { Wrap(color: Color, flag: ?bool, text: string) }
+fn value(color: Color, flag: ?bool) -> i64 {
+    return match Choice.Wrap(color, flag, "root") {
+        .Wrap(.Red, null, _) => 0,
+        .Wrap(.Red, true, _) => 1,
+        .Wrap(.Red, false, _) => 2,
+        .Wrap(.Blue, null, _) => 3,
+        .Wrap(.Blue, true, _) => 4,
+        .Wrap(.Blue, false, _) => 5,
+    }
+}
+test.check(value(Color.Red, null) == 0 && value(Color.Red, true) == 1 && value(Color.Blue, false) == 5)

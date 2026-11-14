@@ -804,11 +804,38 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
-- Current gaps include result values, fixed-array types beyond the currently
-  supported element forms and sizes, and remaining pattern/default behavior.
-  T017 stays open until its completion criteria are verified.
+- Current gaps include compound result and fixed-array type combinations,
+  fixed-array sizes beyond 256, and remaining pattern and default behavior.
+  Aggregate host signatures remain unsupported. T017 stays open until its
+  completion criteria are verified.
+- T017-109: enum match coverage combines finite enum, boolean and optional
+  payload fields, bounded to 256 combinations per group.
+- T017-108: enum match exhaustiveness combines up to eight boolean payload
+  fields using bounded product coverage.
+- T017-107: exhaustive enum matches recognize combinations of two boolean
+  payload fields; guarded patterns do not contribute to coverage.
+- T017-106: struct destructuring supports named fields, renaming, wildcards,
+  mutable bindings, single evaluation and managed value copies.
+- T017-105: fixed-array destructuring evaluates its initializer once, checks
+  arity and preserves value copies, mutable bindings and managed roots.
+- T017-104: field-default match arms can bind and use payload values, with
+  per-construction effects and managed roots preserved.
+- T017-103: binding-free match expressions run in field defaults, and tests
+  exercise the 32-dimension array type limit and its rejection boundary.
+- T017-102: results with nested fixed-array success values support propagation,
+  matching, inline layouts, cycle rejection and managed payload roots.
+- T017-101: optional nested fixed arrays preserve null and present states,
+  passing, matching, inline layouts, cycle rejection and managed payloads.
+- T017-100: nested fixed arrays of results preserve inline payload layout,
+  copy and write behavior, cycle rejection and managed roots.
+- T017-99: nested fixed arrays of optionals preserve layout, cycle rejection,
+  copies, indexed writes and managed payload roots.
+- T017-98: writes through mixed array-index and struct-field paths preserve
+  evaluation order, sibling updates, class identity and managed roots.
+- T017-97: nested array element and struct-field writes support all accepted
+  dimensions, preserving bounds checks, effects, sibling changes and roots.
 - T017-96: fixed arrays nest to 32 dimensions for construction, copies, reads
-  and calls, with inline-cycle checking and managed roots; deeper writes remain.
+  and calls, with inline-cycle checking and managed roots; writes followed in T017-97.
 - T017-95: exhaustive `i8` and `u8` matches combine unguarded literals and
   ranges using bounded coverage; optional matches additionally require null.
 - T017-94: integer and character range patterns support inclusive and exclusive

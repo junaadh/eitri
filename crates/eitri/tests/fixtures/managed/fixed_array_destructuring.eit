@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+struct Cell { text: string, number: i64 }
+fn source() -> [2]Cell { test.emit(1); return [Cell { text: "a", number: 1 }, Cell { text: "b", number: 2 }] }
+let [a, b] = source()
+test.check(a.text == "a" && b.text == "b")
+var [first, _] = source()
+first.number = 9
+test.check(first.number == 9 && a.number == 1)
+let empty: [0]i64 = []
+let [] = empty
+let nested: [2][2]i64 = [[1, 2], [3, 4]]
+let [left, right] = nested
+test.check(left[1] == 2 && right[0] == 3)

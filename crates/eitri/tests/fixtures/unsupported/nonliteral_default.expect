@@ -1,1 +1,1 @@
-error[E0001] 31..38: not supported yet: this field default expression
+error[E0201] 31..38: unknown name `unknown`

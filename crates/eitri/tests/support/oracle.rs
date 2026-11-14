@@ -437,6 +437,37 @@ impl Eval<'_> {
                 let binding = self.checked.stmt_bindings[id].expect("checked `let`");
                 self.locals[binding.index()] = Some(value);
             }
+            Stmt::LetStruct { fields, init, .. } => {
+                let Value::Struct(owner, object) = self.expr(host, init)? else {
+                    unreachable!("checked struct")
+                };
+                let declared = self.ast.params(self.ast.structs[owner].fields);
+                for field in &self.ast.binding_fields[fields] {
+                    if let Some(binding) = self.checked.pattern_bindings[field.name] {
+                        let index = declared
+                            .iter()
+                            .position(|item| {
+                                self.tokens.symbol(item.name) == self.tokens.symbol(field.field)
+                            })
+                            .expect("checked field");
+                        self.locals[binding.index()] = Some(self.structs[object as usize][index]);
+                    }
+                }
+            }
+            Stmt::LetArray { names, init, .. } => {
+                let value = self.expr(host, init)?;
+                let array = match value {
+                    Value::FixedI64(_, array)
+                    | Value::FixedString(_, array)
+                    | Value::FixedScalar(_, array) => array,
+                    _ => unreachable!("checked fixed array"),
+                };
+                for (index, &name) in self.ast.binding_names[names].iter().enumerate() {
+                    if let Some(binding) = self.checked.pattern_bindings[name] {
+                        self.locals[binding.index()] = Some(self.structs[array as usize][index]);
+                    }
+                }
+            }
             Stmt::Assign {
                 op, value, span, ..
             } if self.checked.stmt_fields[id].is_some()
@@ -495,8 +526,10 @@ impl Eval<'_> {
                 let Expr::Index { base, index } = self.ast.exprs[target] else {
                     unreachable!()
                 };
-                if matches!(self.ast.exprs[base], Expr::Index { .. }) {
-                    self.assign_nested_index(host, id, target, op, value, span)?;
+                if matches!(self.ast.exprs[base], Expr::Index { .. })
+                    || self.indexed_struct_root(base).is_some()
+                {
+                    self.assign_nested_index(host, id, (target, None), op, value, span)?;
                     return Ok(Value::Void);
                 }
                 let binding = self.checked.stmt_bindings[id].expect("checked array binding");
@@ -1072,165 +1105,48 @@ impl Eval<'_> {
         span: Span,
     ) -> Flow<()> {
         let indexed = self.indexed_struct_root(target).unwrap();
-        let Expr::Index { base, index } = self.ast.exprs[indexed] else {
-            unreachable!()
-        };
-        let binding = self.checked.stmt_bindings[id].unwrap();
-        let class_target =
-            if let Some((object_expr, implicit, field, root)) = self.class_field_root(base) {
-                let object = if let Some(expr) = object_expr {
-                    self.expr(host, expr)?
-                } else {
-                    self.read(implicit.unwrap())
-                };
-                let Value::Class(_, object) = object else {
-                    unreachable!()
-                };
-                let mut path = Vec::new();
-                let mut cursor = base;
-                while cursor != root {
-                    let Expr::Member { base, .. } = self.ast.exprs[cursor] else {
-                        unreachable!()
-                    };
-                    let Res::Field(index) = self.checked.resolutions[cursor] else {
-                        unreachable!()
-                    };
-                    path.push(index as usize);
-                    cursor = base;
-                }
-                path.reverse();
-                Some((object, field as usize, path))
-            } else {
-                None
-            };
-        let index = self.expr(host, index)?.int();
-        let array = if let Some((object, field, path)) = &class_target {
-            let mut current = self.structs[*object as usize][*field];
-            for &field in path {
-                let Value::Struct(_, nested) = current else {
-                    unreachable!()
-                };
-                current = self.structs[nested as usize][field];
-            }
-            current
-        } else {
-            self.expr(host, base)?
-        };
-        let Value::FixedScalar(Ty::FixedStruct(size, _), array_id) = array else {
-            unreachable!()
-        };
-        if index < 0 || index as u64 >= u64::from(size) {
-            return Err(self.fault("index out of bounds", self.ast.span(indexed)));
-        }
-        let mut field_path = Vec::new();
-        let mut cursor = target;
-        while cursor != indexed {
-            let Expr::Member { base, .. } = self.ast.exprs[cursor] else {
-                unreachable!()
-            };
-            let Res::Field(field) = self.checked.resolutions[cursor] else {
-                unreachable!()
-            };
-            field_path.push(field as usize);
-            cursor = base;
-        }
-        field_path.reverse();
-        let mut old = self.structs[array_id as usize][index as usize];
-        for &field in &field_path {
-            let Value::Struct(_, nested) = old else {
-                unreachable!()
-            };
-            old = self.structs[nested as usize][field];
-        }
-        let rhs = self.expr(host, value)?;
-        let result = match op {
-            AssignOp::Set => rhs,
-            AssignOp::Compound(op) => self.binary_values(op, old, rhs, span)?,
-        };
-        let refreshed = if let Some((object, field, path)) = &class_target {
-            let mut current = self.structs[*object as usize][*field];
-            for &field in path {
-                let Value::Struct(_, nested) = current else {
-                    unreachable!()
-                };
-                current = self.structs[nested as usize][field];
-            }
-            current
-        } else {
-            self.expr(host, base)?
-        };
-        let Value::FixedScalar(array_ty, array_id) = refreshed else {
-            unreachable!()
-        };
-        let mut current = self.structs[array_id as usize][index as usize];
-        let mut parents = Vec::new();
-        for field in field_path {
-            let Value::Struct(ty, nested) = current else {
-                unreachable!()
-            };
-            parents.push((ty, nested, field));
-            current = self.structs[nested as usize][field];
-        }
-        let mut updated = result;
-        for (ty, nested, field) in parents.into_iter().rev() {
-            let mut fields = self.structs[nested as usize].clone();
-            fields[field] = updated;
-            let next = self.structs.len() as u32;
-            self.structs.push(fields);
-            updated = Value::Struct(ty, next);
-        }
-        let mut items = self.structs[array_id as usize].clone();
-        items[index as usize] = updated;
-        let next = self.structs.len() as u32;
-        self.structs.push(items);
-        updated = Value::FixedScalar(array_ty, next);
-        if let Some((object, field, path)) = class_target {
-            let mut current = self.structs[object as usize][field];
-            let mut parents = Vec::new();
-            for field in path {
-                let Value::Struct(ty, nested) = current else {
-                    unreachable!()
-                };
-                parents.push((ty, nested, field));
-                current = self.structs[nested as usize][field];
-            }
-            for (ty, nested, field) in parents.into_iter().rev() {
-                let mut fields = self.structs[nested as usize].clone();
-                fields[field] = updated;
-                let next = self.structs.len() as u32;
-                self.structs.push(fields);
-                updated = Value::Struct(ty, next);
-            }
-            self.structs[object as usize][field] = updated;
-        } else {
-            self.write_lvalue(base, binding, updated);
-        }
-        Ok(())
+        self.assign_nested_index(host, id, (indexed, Some(target)), op, value, span)
     }
 
     fn assign_nested_index(
         &mut self,
         host: &mut dyn Host,
         id: eitri_syntax::ast::StmtId,
-        target: ExprId,
+        (target, field_target): (ExprId, Option<ExprId>),
         op: AssignOp,
         value: ExprId,
         span: Span,
     ) -> Flow<()> {
-        let Expr::Index {
-            base: row_expr,
-            index: col_expr,
-        } = self.ast.exprs[target]
-        else {
-            unreachable!()
-        };
-        let Expr::Index {
-            base,
-            index: row_expr_index,
-        } = self.ast.exprs[row_expr]
-        else {
-            unreachable!()
-        };
+        #[derive(Clone, Copy)]
+        enum Step {
+            Index(ExprId, ExprId),
+            Field(usize),
+        }
+        let mut path = Vec::new();
+        let mut base = field_target.unwrap_or(target);
+        loop {
+            match self.ast.exprs[base] {
+                Expr::Index {
+                    base: parent,
+                    index,
+                } => {
+                    path.push(Step::Index(base, index));
+                    base = parent;
+                }
+                Expr::Member { base: parent, .. } => {
+                    if !matches!(self.checked.types[parent], Ty::Struct(_)) {
+                        break;
+                    }
+                    let Res::Field(field) = self.checked.resolutions[base] else {
+                        unreachable!()
+                    };
+                    path.push(Step::Field(field as usize));
+                    base = parent;
+                }
+                _ => break,
+            }
+        }
+        path.reverse();
         let binding = self.checked.stmt_bindings[id].unwrap();
         let class_target =
             if let Some((object_expr, implicit, field, root)) = self.class_field_root(base) {
@@ -1242,7 +1158,7 @@ impl Eval<'_> {
                 let Value::Class(_, object) = object else {
                     unreachable!()
                 };
-                let mut path = Vec::new();
+                let mut fields = Vec::new();
                 let mut cursor = base;
                 while cursor != root {
                     let Expr::Member { base, .. } = self.ast.exprs[cursor] else {
@@ -1251,85 +1167,147 @@ impl Eval<'_> {
                     let Res::Field(index) = self.checked.resolutions[cursor] else {
                         unreachable!()
                     };
-                    path.push(index as usize);
+                    fields.push(index as usize);
                     cursor = base;
                 }
-                path.reverse();
-                Some((object, field as usize, path))
+                fields.reverse();
+                Some((object, field as usize, fields))
             } else {
                 None
             };
-        let row_index = self.expr(host, row_expr_index)?.int();
-        let outer = if let Some((object, field, path)) = &class_target {
-            let mut current = self.structs[*object as usize][*field];
-            for &index in path {
-                let Value::Struct(_, nested) = current else {
-                    unreachable!()
-                };
-                current = self.structs[nested as usize][index];
+        let array_parts = |value: Value| -> (u16, u32) {
+            match value {
+                Value::FixedI64(size, id) | Value::FixedString(size, id) => (size, id),
+                Value::FixedScalar(ty, id) => {
+                    let size = match ty {
+                        Ty::FixedScalar(size, _)
+                        | Ty::FixedClass(size, _)
+                        | Ty::FixedStruct(size, _)
+                        | Ty::FixedEnum(size, _)
+                        | Ty::FixedResult(size, _)
+                        | Ty::FixedOptional(size, _)
+                        | Ty::FixedNested(size, _) => size,
+                        _ => unreachable!(),
+                    };
+                    (size, id)
+                }
+                _ => unreachable!(),
             }
-            current
-        } else {
-            self.expr(host, base)?
         };
-        let Value::FixedScalar(Ty::FixedNested(rows, _), outer_id) = outer else {
-            unreachable!()
-        };
-        if row_index < 0 || row_index as u64 >= u64::from(rows) {
-            return Err(self.fault("index out of bounds", self.ast.span(row_expr)));
+        let mut indices = Vec::new();
+        let mut current = Value::Void;
+        let mut initialized = false;
+        let mut prefix = Vec::new();
+        for step in &path {
+            match *step {
+                Step::Field(field) => {
+                    if initialized {
+                        let Value::Struct(_, nested) = current else {
+                            unreachable!()
+                        };
+                        current = self.structs[nested as usize][field];
+                    } else {
+                        prefix.push(field);
+                    }
+                }
+                Step::Index(indexed, index) => {
+                    let at = self.expr(host, index)?.int();
+                    if !initialized {
+                        current = if let Some((object, field, fields)) = &class_target {
+                            let mut current = self.structs[*object as usize][*field];
+                            for &field in fields {
+                                let Value::Struct(_, nested) = current else {
+                                    unreachable!()
+                                };
+                                current = self.structs[nested as usize][field];
+                            }
+                            current
+                        } else {
+                            self.expr(host, base)?
+                        };
+                        for &field in &prefix {
+                            let Value::Struct(_, nested) = current else {
+                                unreachable!()
+                            };
+                            current = self.structs[nested as usize][field];
+                        }
+                        initialized = true;
+                    }
+                    let (size, array) = array_parts(current);
+                    if at < 0 || at as u64 >= u64::from(size) {
+                        return Err(self.fault("index out of bounds", self.ast.span(indexed)));
+                    }
+                    indices.push(at as usize);
+                    current = self.structs[array as usize][at as usize];
+                }
+            }
         }
-        let col_index = self.expr(host, col_expr)?.int();
-        let row = self.structs[outer_id as usize][row_index as usize];
-        let (size, row_id) = match row {
-            Value::FixedI64(size, id) | Value::FixedString(size, id) => (size, id),
-            Value::FixedScalar(ty, id) => (ty.fixed_inner().unwrap().0, id),
-            _ => unreachable!(),
-        };
-        if col_index < 0 || col_index as u64 >= u64::from(size) {
-            return Err(self.fault("index out of bounds", self.ast.span(target)));
-        }
-        let old = self.structs[row_id as usize][col_index as usize];
         let rhs = self.expr(host, value)?;
         let result = match op {
             AssignOp::Set => rhs,
-            AssignOp::Compound(op) => self.binary_values(op, old, rhs, span)?,
+            AssignOp::Compound(op) => self.binary_values(op, current, rhs, span)?,
         };
-        let refreshed = if let Some((object, field, path)) = &class_target {
+        let mut current = if let Some((object, field, fields)) = &class_target {
             let mut current = self.structs[*object as usize][*field];
-            for &index in path {
+            for &field in fields {
                 let Value::Struct(_, nested) = current else {
                     unreachable!()
                 };
-                current = self.structs[nested as usize][index];
+                current = self.structs[nested as usize][field];
             }
             current
         } else {
             self.expr(host, base)?
         };
-        let Value::FixedScalar(outer_ty, outer_id) = refreshed else {
-            unreachable!()
-        };
-        let row = self.structs[outer_id as usize][row_index as usize];
-        let (row_ty, row_id) = match row {
-            Value::FixedI64(size, id) => (Ty::FixedI64(size), id),
-            Value::FixedString(size, id) => (Ty::FixedString(size), id),
-            Value::FixedScalar(ty, id) => (ty, id),
-            _ => unreachable!(),
-        };
-        let mut items = self.structs[row_id as usize].clone();
-        items[col_index as usize] = result;
-        let next_row = self.structs.len() as u32;
-        self.structs.push(items);
-        let row = match row_ty {
-            Ty::FixedI64(size) => Value::FixedI64(size, next_row),
-            Ty::FixedString(size) => Value::FixedString(size, next_row),
-            ty => Value::FixedScalar(ty, next_row),
-        };
-        let mut rows = self.structs[outer_id as usize].clone();
-        rows[row_index as usize] = row;
-        let next_outer = self.structs.len() as u32;
-        self.structs.push(rows);
-        let mut updated = Value::FixedScalar(outer_ty, next_outer);
+        enum Parent {
+            Array(Value, usize),
+            Struct(eitri_syntax::ast::StructId, u32, usize),
+        }
+        let mut parents = Vec::with_capacity(path.len());
+        let mut index = 0;
+        for step in &path {
+            match *step {
+                Step::Field(field) => {
+                    let Value::Struct(ty, nested) = current else {
+                        unreachable!()
+                    };
+                    parents.push(Parent::Struct(ty, nested, field));
+                    current = self.structs[nested as usize][field];
+                }
+                Step::Index(_, _) => {
+                    let at = indices[index];
+                    let (_, array) = array_parts(current);
+                    parents.push(Parent::Array(current, at));
+                    current = self.structs[array as usize][at];
+                    index += 1;
+                }
+            }
+        }
+        let mut updated = result;
+        for parent in parents.into_iter().rev() {
+            updated = match parent {
+                Parent::Struct(ty, nested, field) => {
+                    let mut fields = self.structs[nested as usize].clone();
+                    fields[field] = updated;
+                    let next = self.structs.len() as u32;
+                    self.structs.push(fields);
+                    Value::Struct(ty, next)
+                }
+                Parent::Array(parent, index) => {
+                    let (size, array) = array_parts(parent);
+                    let mut items = self.structs[array as usize].clone();
+                    items[index] = updated;
+                    let next = self.structs.len() as u32;
+                    self.structs.push(items);
+                    match parent {
+                        Value::FixedI64(_, _) => Value::FixedI64(size, next),
+                        Value::FixedString(_, _) => Value::FixedString(size, next),
+                        Value::FixedScalar(ty, _) => Value::FixedScalar(ty, next),
+                        _ => unreachable!(),
+                    }
+                }
+            };
+        }
         if let Some((object, field, path)) = class_target {
             let mut current = self.structs[object as usize][field];
             let mut parents = Vec::new();
@@ -1377,7 +1355,13 @@ impl Eval<'_> {
             };
             return Ok(Value::OptionalResult(id, Some((tag, payload))));
         }
-        if self.checked.optional_wrap[e] && self.checked.types[e].fixed_inner().is_some() {
+        if self.checked.optional_wrap[e]
+            && (self.checked.types[e].fixed_inner().is_some()
+                || matches!(
+                    self.checked.types[e],
+                    Ty::FixedNested(_, _) | Ty::FixedOptional(_, _) | Ty::FixedResult(_, _)
+                ))
+        {
             let value = self.expr_inner(host, e)?;
             let id = self
                 .checked

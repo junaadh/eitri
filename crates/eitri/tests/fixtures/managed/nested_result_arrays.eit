@@ -1,0 +1,12 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+fn choose(ok: bool) -> Problem!string { if ok { return "yes" }; return .Err(Problem.Bad("no")) }
+struct Holder { values: [2][2]<Problem!string>, marker: i64 }
+let source: [2][2]<Problem!string> = [[choose(true), choose(false)], [choose(false), choose(true)]]
+var copy = source
+copy[0][0] = choose(false)
+let holder = Holder { values: copy, marker: 42 }
+test.check(match source[0][0] { .Ok(text) => text == "yes", .Err => false })
+test.check(match holder.values[0][0] { .Ok => false, .Err(.Bad(text)) => text == "no" })
+test.check(holder.marker == 42)

@@ -1,0 +1,12 @@
+//! host: test
+import test from "test"
+enum Choice { Pair(a: bool, b: bool, text: string) }
+fn value(a: bool, b: bool) -> i64 {
+    return match Choice.Pair(a, b, "root") {
+        .Pair(false, false, _) => 0,
+        .Pair(false, true, _) => 1,
+        .Pair(true, false, _) => 2,
+        .Pair(true, true, _) => 3,
+    }
+}
+test.check(value(false, false) == 0 && value(false, true) == 1 && value(true, false) == 2 && value(true, true) == 3)

@@ -1,0 +1,13 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+struct Item { text: string }
+struct Holder { value: Problem![2][2]Item, marker: i64 }
+fn values(ok: bool) -> Problem![2][2]Item {
+    if ok { return [[Item { text: "a" }, Item { text: "b" }], [Item { text: "c" }, Item { text: "d" }]] }
+    return .Err(Problem.Bad("no"))
+}
+fn relay(ok: bool) -> Problem![2][2]Item { return try values(ok) }
+let holder = Holder { value: relay(true), marker: 9 }
+test.check(holder.marker == 9 && match holder.value { .Ok(items) => items[1][0].text == "c", .Err => false })
+test.check(match relay(false) { .Ok => false, .Err(.Bad(text)) => text == "no" })

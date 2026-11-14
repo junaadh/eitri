@@ -281,3 +281,31 @@ fn nested_default_depth_has_a_checked_boundary() {
         "{diagnostics:?}"
     );
 }
+
+#[test]
+fn fixed_array_type_nesting_has_a_checked_boundary() {
+    let ty = format!("{}i64", "[1]".repeat(32));
+    let literal = format!("{}1{}", "[".repeat(32), "]".repeat(32));
+    let indexes = "[0]".repeat(32);
+    let source = format!("{IMPORT}let value: {ty} = {literal}\ntest.check(value{indexes} == 1)\n");
+    assert_eq!(run(&source), "effect: test.check(true)\nok\n");
+
+    let mut context = eitri::Context::new();
+    for ty in [
+        format!("{}i64", "[1]".repeat(33)),
+        format!("?{}i64", "[1]".repeat(33)),
+        format!("Problem!{}i64", "[1]".repeat(33)),
+    ] {
+        let source = format!("enum Problem {{ Bad }}\nfn f(x: {ty}) {{}}\n");
+        let diagnostics = match context.compile(&source) {
+            Err(diagnostics) => diagnostics,
+            Ok(_) => panic!("type nesting must be bounded"),
+        };
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("nesting beyond 32")),
+            "{diagnostics:?}"
+        );
+    }
+}
