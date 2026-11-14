@@ -807,6 +807,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-80: optional results `?<E!T>` retain separate null, success and error
+  states through matches, calls, coalescing and managed aggregate fields.
 - T017-79: zero-length fixed arrays support value copies, calls and aggregate
   fields; indexed reads and writes fault after evaluating the index.
 - T017-78: literal result payload patterns support scalar and string values;

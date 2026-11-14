@@ -243,7 +243,10 @@ fn value_type(
     interner: &Interner,
     diagnostics: &mut Diagnostics,
 ) -> Ty {
-    if let TypeExpr::ResultNamed(token, _) | TypeExpr::ResultOptional(token, _) = ty {
+    if let TypeExpr::ResultNamed(token, _)
+    | TypeExpr::ResultOptional(token, _)
+    | TypeExpr::OptionalResultNamed(token, _) = ty
+    {
         diagnostics.push(error(
             Code::Unsupported,
             "not supported yet: result host types",

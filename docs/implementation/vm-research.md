@@ -2847,3 +2847,11 @@ fault after evaluating the index. The 1001-sample release harness in the isolate
 workspace measured fresh module compile p50/p99 13.8/24.6 µs and
 source-to-result 14.2/25.1 µs on the general workload. Raw samples:
 `/private/tmp/eitri-t017-79-samples.csv`.
+
+### T017-80 optional results
+
+`?<E!T>` stores a presence tag around the inline result, preserving null,
+success and error. The 1001-sample release harness in the isolated workspace
+measured fresh module compile p50/p99 13.0/15.8 µs and source-to-result
+13.2/16.1 µs on the general workload. Raw samples:
+`/private/tmp/eitri-t017-80-samples.csv`.

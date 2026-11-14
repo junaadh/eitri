@@ -167,6 +167,7 @@ pub enum TypeExpr {
     Named(TokenId),
     ResultNamed(TokenId, TokenId),
     ResultOptional(TokenId, TokenId),
+    OptionalResultNamed(TokenId, TokenId),
     OptionalString(TokenId),
     OptionalI64(TokenId),
     OptionalBool(TokenId),

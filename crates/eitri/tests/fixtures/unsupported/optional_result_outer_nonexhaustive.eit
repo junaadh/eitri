@@ -1,0 +1,3 @@
+enum Problem { Bad }
+let value: ?<Problem!i64> = null
+let answer = match value { .Ok(number) => number, .Err => 0 }

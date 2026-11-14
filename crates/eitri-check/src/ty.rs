@@ -20,6 +20,7 @@ pub enum FixedScalar {
 pub enum Ty {
     I64,
     Result(u32),
+    OptionalResult(u32),
     FixedI64(u16),
     FixedString(u16),
     FixedScalar(u16, FixedScalar),
@@ -70,6 +71,7 @@ impl Ty {
             Self::Bool => S::Bool,
             Self::String => return Some(TypeDesc::String),
             Self::Result(_)
+            | Self::OptionalResult(_)
             | Self::FixedI64(_)
             | Self::FixedString(_)
             | Self::FixedScalar(_, _)
@@ -103,6 +105,7 @@ impl Ty {
 
     pub fn tagged_optional_inner(self) -> Option<Self> {
         Some(match self {
+            Self::OptionalResult(id) => Self::Result(id),
             Self::OptionalI64 => Self::I64,
             Self::OptionalBool => Self::Bool,
             Self::OptionalI8 => Self::I8,
@@ -150,6 +153,7 @@ impl Ty {
 
     pub fn optional_of(self) -> Option<Self> {
         Some(match self {
+            Self::Result(id) => Self::OptionalResult(id),
             Self::String => Self::OptionalString,
             Self::Class(id) => Self::OptionalClass(id),
             Self::I64 => Self::OptionalI64,
@@ -193,6 +197,7 @@ impl Ty {
             Ty::FixedString(_) => "a fixed string array",
             Ty::FixedScalar(_, _) => "a fixed scalar array",
             Ty::Result(_) => "a result",
+            Ty::OptionalResult(_) => "an optional result",
             Ty::FixedClass(_, _) => "a fixed class array",
             Ty::FixedStruct(_, _) => "a fixed struct array",
             Ty::FixedEnum(_, _) => "a fixed enum array",

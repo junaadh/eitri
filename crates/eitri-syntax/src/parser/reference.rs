@@ -757,6 +757,21 @@ impl Parser<'_> {
     }
 
     fn type_expr(&mut self) -> Parsed<TypeExpr> {
+        if self.at(T::Question)
+            && self.nth(1) == T::Lt
+            && self.nth(2) == T::Ident
+            && self.nth(3) == T::Bang
+            && self.nth(4) == T::Ident
+            && self.nth(5) == T::Gt
+        {
+            self.bump();
+            self.bump();
+            let error = self.bump();
+            self.bump();
+            let success = self.bump();
+            self.bump();
+            return Ok(TypeExpr::OptionalResultNamed(error, success));
+        }
         if self.at(T::Ident)
             && self.nth(1) == T::Bang
             && self.nth(2) == T::Question

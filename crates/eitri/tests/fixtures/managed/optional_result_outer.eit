@@ -1,0 +1,26 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+fn load(ok: bool) -> Problem!i64 {
+    if ok { return 7 }
+    return .Err(Problem.Bad("bad"))
+}
+let none: ?<Problem!i64> = null
+let success: ?<Problem!i64> = load(true)
+let error: ?<Problem!i64> = load(false)
+test.check(none == null && success != null && error != null)
+test.check(match success { null => false, value => match value { .Ok(number) => number == 7, .Err => false } })
+test.check(match error { null => false, value => match value { .Ok => false, .Err(problem) => match problem { .Bad(text) => text == "bad" } } })
+test.check(match (none ?? load(true)) { .Ok(number) => number == 7, .Err => false })
+test.check(match success { null => false, .Ok(number) => number == 7, .Err => false })
+test.check(match error { null => false, .Ok => false, .Err(problem) => match problem { .Bad(text) => text == "bad" } })
+test.check(match none { null => true, .Ok => false, .Err => false })
+struct Holder { value: ?<Problem!i64>, marker: i64 }
+class Boxed { value: ?<Problem!i64> }
+fn forward(value: ?<Problem!i64>) -> ?<Problem!i64> { return value }
+let holder = Holder { value: forward(success), marker: 9 }
+let boxed = Boxed { value: error }
+test.check(holder.marker == 9 && match holder.value { null => false, .Ok(number) => number == 7, .Err => false })
+test.check(match boxed.value { null => false, .Ok => false, .Err(problem) => match problem { .Bad(text) => text == "bad" } })
+let explicit: ?<Problem!i64> = .Ok(11)
+test.check(match explicit { null => false, .Ok(number) => number == 11, .Err => false })

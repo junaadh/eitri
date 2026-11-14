@@ -592,6 +592,10 @@ impl<'i> Checker<'_, 'i> {
     /// A written type; `void` only where `allow_void`.
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
         match ty {
+            TypeExpr::OptionalResultNamed(error, success) => {
+                let inner = self.ty(TypeExpr::ResultNamed(error, success), false);
+                return inner.optional_of().unwrap_or(Ty::Error);
+            }
             TypeExpr::ResultNamed(error, success) | TypeExpr::ResultOptional(error, success) => {
                 let error_ty = self.ty(TypeExpr::Named(error), false);
                 let success_ty = if matches!(ty, TypeExpr::ResultOptional(_, _)) {
@@ -942,7 +946,7 @@ impl<'i> Checker<'_, 'i> {
                             Ty::FixedEnum(size, id) => u32::from(size)
                                 .saturating_mul(self.out.enum_widths[id])
                                 .max(1),
-                            Ty::Result(id) => {
+                            ty @ (Ty::Result(id) | Ty::OptionalResult(id)) => {
                                 let (error, success) = self.out.result_types[id as usize];
                                 let width = |ty| match ty {
                                     Ty::Struct(id) => self.out.struct_widths[id],
@@ -953,7 +957,8 @@ impl<'i> Checker<'_, 'i> {
                                     Ty::Void => 0,
                                     _ => 1,
                                 };
-                                1u32.saturating_add(width(error))
+                                (1 + u32::from(matches!(ty, Ty::OptionalResult(_))))
+                                    .saturating_add(width(error))
                                     .saturating_add(width(success))
                             }
                             Ty::Struct(id) => self.out.struct_widths[id],
@@ -1077,7 +1082,7 @@ impl<'i> Checker<'_, 'i> {
                     Ty::FixedEnum(size, id) => u32::from(size)
                         .saturating_mul(self.out.enum_widths[id])
                         .max(1),
-                    Ty::Result(id) => {
+                    ty @ (Ty::Result(id) | Ty::OptionalResult(id)) => {
                         let (error, success) = self.out.result_types[id as usize];
                         let width = |ty| match ty {
                             Ty::Struct(id) => self.out.struct_widths[id],
@@ -1088,7 +1093,8 @@ impl<'i> Checker<'_, 'i> {
                             Ty::Void => 0,
                             _ => 1,
                         };
-                        1u32.saturating_add(width(error))
+                        (1 + u32::from(matches!(ty, Ty::OptionalResult(_))))
+                            .saturating_add(width(error))
                             .saturating_add(width(success))
                     }
                     Ty::Struct(id) => self.out.struct_widths[id],
@@ -1334,7 +1340,7 @@ impl<'i> Checker<'_, 'i> {
                     continue;
                 }
                 let child = fields[field];
-                let child_node = if let Ty::Result(id) = child {
+                let child_node = if let Ty::Result(id) | Ty::OptionalResult(id) = child {
                     let (error, success) = self.out.result_types[id as usize];
                     [error, success]
                         .into_iter()
@@ -1395,7 +1401,7 @@ impl<'i> Checker<'_, 'i> {
                         Ty::FixedEnum(size, id) => u32::from(size)
                             .saturating_mul(self.out.enum_widths[id])
                             .max(1),
-                        Ty::Result(id) => {
+                        ty @ (Ty::Result(id) | Ty::OptionalResult(id)) => {
                             let (error, success) = self.out.result_types[id as usize];
                             let width = |ty| match ty {
                                 Ty::Struct(id) => self.out.struct_widths[id],
@@ -1406,7 +1412,8 @@ impl<'i> Checker<'_, 'i> {
                                 Ty::Void => 0,
                                 _ => 1,
                             };
-                            1u32.saturating_add(width(error))
+                            (1 + u32::from(matches!(ty, Ty::OptionalResult(_))))
+                                .saturating_add(width(error))
                                 .saturating_add(width(success))
                         }
                         Ty::Struct(id) => self.out.struct_widths[id],
@@ -2843,8 +2850,15 @@ impl<'i> Checker<'_, 'i> {
     ) -> Ty {
         let node = self.ast().matches[id];
         let subject = self.value(node.subject, None);
-        if let Ty::Result(result_id) = subject {
-            return self.result_match(expr, id, result_id, expected, used);
+        if let Ty::Result(result_id) | Ty::OptionalResult(result_id) = subject {
+            return self.result_match(
+                expr,
+                id,
+                result_id,
+                matches!(subject, Ty::OptionalResult(_)),
+                expected,
+                used,
+            );
         }
         let (enum_id, optional) = match subject {
             Ty::Enum(id) => (id, false),
@@ -2999,6 +3013,7 @@ impl<'i> Checker<'_, 'i> {
         expr: ExprId,
         id: eitri_syntax::ast::MatchId,
         result_id: u32,
+        optional: bool,
         expected: Option<Ty>,
         used: bool,
     ) -> Ty {
@@ -3010,10 +3025,24 @@ impl<'i> Checker<'_, 'i> {
         let mut nested_coverage = [[0u64; 4]; 2];
         let mut booleans = [[false; 2]; 2];
         let mut fallback = false;
+        let mut null_subject = false;
         let mut result = expected;
         for arm in &self.ast().match_arms[node.arms] {
             let mark = self.mark();
-            if let Some(case) = arm.case {
+            if let Some(literal) = arm.literal {
+                if optional && matches!(self.ast().exprs[literal], Expr::Null(_)) {
+                    self.value(literal, Some(Ty::OptionalResult(result_id)));
+                    if arm.guard.is_none() {
+                        null_subject = true;
+                    }
+                } else {
+                    self.report(
+                        Code::TypeMismatch,
+                        "result pattern requires a case",
+                        self.span(expr),
+                    );
+                }
+            } else if let Some(case) = arm.case {
                 let index = match self.spelling(case) {
                     "Err" => 0,
                     "Ok" => 1,
@@ -3167,19 +3196,17 @@ impl<'i> Checker<'_, 'i> {
                     covered[index] = true;
                 }
                 covered[index] |= null[index] && present[index];
-            } else if arm.literal.is_some() {
-                self.report(
-                    Code::TypeMismatch,
-                    "result pattern requires a case",
-                    self.span(expr),
-                );
             } else {
                 if let Some(token) = arm.catch_binding {
                     let binding = self.new_binding(token, false, Ty::Result(result_id));
                     self.out.pattern_bindings[token] = Some(binding);
                 }
                 if arm.guard.is_none() {
-                    fallback = true;
+                    if optional && arm.catch_binding.is_some() {
+                        covered = [true; 2];
+                    } else {
+                        fallback = true;
+                    }
                 }
             }
             if let Some(guard) = arm.guard {
@@ -3208,7 +3235,7 @@ impl<'i> Checker<'_, 'i> {
             }
             self.restore(mark);
         }
-        if !fallback && !covered.iter().all(|seen| *seen) {
+        if !fallback && (!covered.iter().all(|seen| *seen) || (optional && !null_subject)) {
             self.report(Code::TypeMismatch, "non-exhaustive match", self.span(expr));
         }
         if used {

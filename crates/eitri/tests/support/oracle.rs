@@ -219,6 +219,7 @@ enum Value {
     Class(eitri_syntax::ast::StructId, u32),
     Enum(eitri_syntax::ast::EnumId, u32, u32),
     Result(u32, bool, u32),
+    OptionalResult(u32, Option<(bool, u32)>),
     Void,
 }
 
@@ -271,6 +272,7 @@ impl Value {
             Self::Class(id, _) => Ty::Class(id),
             Self::Enum(id, _, _) => Ty::Enum(id),
             Self::Result(id, _, _) => Ty::Result(id),
+            Self::OptionalResult(id, _) => Ty::OptionalResult(id),
             Self::Scalar(ty, _) => ty,
             Self::Void => Ty::Void,
         }
@@ -332,6 +334,7 @@ impl Value {
             | Value::Class(_, _)
             | Value::Enum(_, _, _)
             | Value::Result(_, _, _)
+            | Value::OptionalResult(_, _)
             | Value::Void => {
                 unreachable!("the checker rejects managed or void host arguments")
             }
@@ -1043,6 +1046,14 @@ impl Eval<'_> {
     }
 
     fn expr_optional(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
+        if self.checked.optional_wrap[e]
+            && let Ty::Result(id) = self.checked.types[e]
+        {
+            let Value::Result(_, tag, payload) = self.expr_inner(host, e)? else {
+                unreachable!()
+            };
+            return Ok(Value::OptionalResult(id, Some((tag, payload))));
+        }
         if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::FindOffset {
             let Value::Scalar(Ty::FindOffset, word) = self.expr_inner(host, e)? else {
                 unreachable!()
@@ -1136,6 +1147,9 @@ impl Eval<'_> {
         let ast = self.ast;
         let node = ast.matches[id];
         for &arm in &ast.match_arms[node.arms] {
+            if arm.literal.is_some() {
+                continue;
+            }
             if let Some(case) = arm.case {
                 if (self.interner.resolve(self.tokens.symbol(case)) == "Ok") != is_ok {
                     continue;
@@ -1468,6 +1482,12 @@ impl Eval<'_> {
                 };
                 Ok(Value::OptionalClass(id, None))
             }
+            Expr::Null(_) if matches!(self.checked.types[e], Ty::OptionalResult(_)) => {
+                let Ty::OptionalResult(id) = self.checked.types[e] else {
+                    unreachable!()
+                };
+                Ok(Value::OptionalResult(id, None))
+            }
             Expr::Null(_) if matches!(self.checked.types[e], Ty::OptionalStruct(_)) => {
                 let Ty::OptionalStruct(id) = self.checked.types[e] else {
                     unreachable!()
@@ -1549,6 +1569,14 @@ impl Eval<'_> {
                                 Ok(Value::OptionalClass(id, Some(value)))
                             }
                             Some(value) => Ok(Value::Class(id, value)),
+                            None => self.expr(host, rhs),
+                        }
+                    } else if let Value::OptionalResult(id, value) = value {
+                        match value {
+                            Some(value) if self.checked.types[e] == Ty::OptionalResult(id) => {
+                                Ok(Value::OptionalResult(id, Some(value)))
+                            }
+                            Some((tag, payload)) => Ok(Value::Result(id, tag, payload)),
                             None => self.expr(host, rhs),
                         }
                     } else if let Value::OptionalStruct(id, value) = value {
@@ -1934,7 +1962,10 @@ impl Eval<'_> {
                 let node = self.ast.matches[id];
                 let subject = match self.expr(host, node.subject)? {
                     Value::OptionalEnum(id, Some((tag, payload))) => Value::Enum(id, tag, payload),
-                    Value::OptionalEnum(_, None) => {
+                    Value::OptionalResult(id, Some((tag, payload))) => {
+                        Value::Result(id, tag, payload)
+                    }
+                    Value::OptionalEnum(_, None) | Value::OptionalResult(_, None) => {
                         let ast = self.ast;
                         for &arm in &ast.match_arms[node.arms] {
                             let matches = arm
@@ -1969,6 +2000,10 @@ impl Eval<'_> {
                     let ast = self.ast;
                     for &arm in &ast.match_arms[node.arms] {
                         let present = match subject {
+                            Value::OptionalResult(id, Some((tag, value))) => {
+                                Some(Value::Result(id, tag, value))
+                            }
+                            Value::OptionalResult(_, None) => None,
                             Value::OptionalI64(Some(value)) => Some(Value::Int(value)),
                             Value::OptionalBool(Some(value)) => Some(Value::Bool(value)),
                             Value::OptionalString(Some(value)) => Some(Value::String(value)),
@@ -2109,6 +2144,15 @@ impl Eval<'_> {
         let mut pending = vec![(a, b)];
         while let Some((a, b)) = pending.pop() {
             match (a, b) {
+                (Value::OptionalResult(ta, a), Value::OptionalResult(tb, b)) if ta == tb => {
+                    match (a, b) {
+                        (None, None) => {}
+                        (Some((ca, a)), Some((cb, b))) if ca == cb => {
+                            pending.push((Value::Result(ta, ca, a), Value::Result(tb, cb, b)))
+                        }
+                        _ => return false,
+                    }
+                }
                 (Value::Result(ta, ca, a), Value::Result(tb, cb, b)) if ta == tb && ca == cb => {
                     pending.push((self.structs[a as usize][0], self.structs[b as usize][0]));
                 }
@@ -2214,6 +2258,7 @@ impl Eval<'_> {
             (a, b),
             (Value::OptionalStruct(_, _), Value::OptionalStruct(_, _))
                 | (Value::OptionalEnum(_, _), Value::OptionalEnum(_, _))
+                | (Value::OptionalResult(_, _), Value::OptionalResult(_, _))
         ) {
             let equal = self.aggregate_equal(a, b);
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));

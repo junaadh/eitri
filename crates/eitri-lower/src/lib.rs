@@ -833,6 +833,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
 
     fn width(&self, ty: Ty) -> u32 {
         match ty {
+            Ty::OptionalResult(id) => 1 + self.width(Ty::Result(id)),
             Ty::Result(id) => {
                 let (error, success) = self.checked.result_types[id as usize];
                 1 + self.width(error)
@@ -4555,6 +4556,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         &mut self,
         id: eitri_syntax::ast::MatchId,
         result_id: u32,
+        optional: bool,
         result: u32,
         span: Span,
         ty: Ty,
@@ -4562,7 +4564,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let ast = self.input.ast;
         let node = ast.matches[id];
         let subject = self.top;
-        self.top += self.width(Ty::Result(result_id));
+        self.top += self.width(if optional {
+            Ty::OptionalResult(result_id)
+        } else {
+            Ty::Result(result_id)
+        });
         self.expr(node.subject, Some(subject))?;
         let end = self.asm.label();
         let arms = &ast.match_arms[node.arms];
@@ -4575,15 +4581,22 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         for (index, arm) in arms.iter().enumerate() {
             let mark = self.top;
             let next = self.asm.label();
-            if let Some(case) = arm.case {
+            if arm.literal.is_some() {
+                self.asm.branch_test(Test::True, subject, next, span);
+            } else if let Some(case) = arm.case {
+                let source_subject = if optional {
+                    self.match_present(subject, Ty::OptionalResult(result_id), next, span)?
+                } else {
+                    subject
+                };
                 let is_ok = self.input.interner.resolve(self.input.tokens.symbol(case)) == "Ok";
                 if index + 1 != arms.len() {
                     self.asm
-                        .branch_imm(Cond::Ne, subject, i64::from(is_ok), next, span)?;
+                        .branch_imm(Cond::Ne, source_subject, i64::from(is_ok), next, span)?;
                 }
                 if let Some(pattern) = ast.match_bindings[arm.bindings].first() {
                     let payload_ty = if is_ok { success } else { error };
-                    let source = subject + 1 + if is_ok { self.width(error) } else { 0 };
+                    let source = source_subject + 1 + if is_ok { self.width(error) } else { 0 };
                     let value = self.top;
                     self.top += self.width(payload_ty);
                     self.move_nullable(payload_ty, source, value, false, span)?;
@@ -4690,6 +4703,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
             if let Some(token) = arm.catch_binding {
                 let binding = self.checked.pattern_bindings[token].expect("checked result binding");
+                let source_subject = if optional {
+                    self.match_present(subject, Ty::OptionalResult(result_id), next, span)?
+                } else {
+                    subject
+                };
                 let target = self.top;
                 let width = self.width(Ty::Result(result_id));
                 self.top += width;
@@ -4697,7 +4715,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 for offset in 0..width {
                     self.asm.emit(
                         Op::Mov,
-                        Operands::abc((target + offset).into(), (subject + offset).into(), 0),
+                        Operands::abc(
+                            (target + offset).into(),
+                            (source_subject + offset).into(),
+                            0,
+                        ),
                         span,
                     )?;
                 }
@@ -4723,26 +4745,28 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
             let terminal =
                 matches!(arm.body, eitri_syntax::ast::MatchBody::Block(block) if self.ends(block));
-            let partial = arm.case.is_some()
-                && ast.match_bindings[arm.bindings]
-                    .first()
-                    .is_some_and(|pattern| {
-                        pattern.literal.is_some()
-                            || pattern.nested_case.is_some()
-                            || (self.checked.pattern_bindings[pattern.name].is_some()
-                                && (if self
-                                    .input
-                                    .interner
-                                    .resolve(self.input.tokens.symbol(arm.case.unwrap()))
-                                    == "Ok"
-                                {
-                                    success
-                                } else {
-                                    error
-                                })
-                                .optional_inner()
-                                .is_some())
-                    });
+            let partial = (optional
+                && (arm.literal.is_some() || arm.case.is_some() || arm.catch_binding.is_some()))
+                || arm.case.is_some()
+                    && ast.match_bindings[arm.bindings]
+                        .first()
+                        .is_some_and(|pattern| {
+                            pattern.literal.is_some()
+                                || pattern.nested_case.is_some()
+                                || (self.checked.pattern_bindings[pattern.name].is_some()
+                                    && (if self
+                                        .input
+                                        .interner
+                                        .resolve(self.input.tokens.symbol(arm.case.unwrap()))
+                                        == "Ok"
+                                    {
+                                        success
+                                    } else {
+                                        error
+                                    })
+                                    .optional_inner()
+                                    .is_some())
+                        });
             if !terminal && (index + 1 != arms.len() || partial) {
                 self.asm.jump(end, span);
             }
@@ -4778,8 +4802,15 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
         };
         let subject_ty = self.checked.types[node.subject];
-        if let Ty::Result(result_id) = subject_ty {
-            return self.match_result(id, result_id, result, span, ty);
+        if let Ty::Result(result_id) | Ty::OptionalResult(result_id) = subject_ty {
+            return self.match_result(
+                id,
+                result_id,
+                matches!(subject_ty, Ty::OptionalResult(_)),
+                result,
+                span,
+                ty,
+            );
         }
         let (enum_id, optional) = match subject_ty {
             Ty::Enum(id) => (id, false),
