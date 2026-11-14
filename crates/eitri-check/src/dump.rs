@@ -194,6 +194,7 @@ impl Dumper<'_> {
             Ty::FixedClass(_, _) => "'[N]class'",
             Ty::FixedStruct(_, _) => "'[N]struct'",
             Ty::FixedEnum(_, _) => "'[N]enum'",
+            Ty::FixedResult(_, _) => "'[N]result'",
             Ty::Bool => "'bool'",
             Ty::Void => "'void'",
             Ty::Error => "'<error>'",
@@ -235,6 +236,7 @@ impl Dumper<'_> {
             Ty::FixedClass(_, _) => "[N]class",
             Ty::FixedStruct(_, _) => "[N]struct",
             Ty::FixedEnum(_, _) => "[N]enum",
+            Ty::FixedResult(_, _) => "[N]result",
             Ty::Bool => "bool",
             Ty::Void => "void",
             Ty::Error => "<error>",
@@ -272,7 +274,9 @@ impl Dumper<'_> {
                 TYPE,
                 &format!("'{}!{}'", self.token(error), self.token(success)),
             ),
-            TypeExpr::FixedNamed(size, _) | TypeExpr::FixedScalar(size, _) => {
+            TypeExpr::FixedResult(size, _, _)
+            | TypeExpr::FixedNamed(size, _)
+            | TypeExpr::FixedScalar(size, _) => {
                 self.paint(TYPE, &format!("'[{}]scalar'", self.token(size)))
             }
             TypeExpr::FixedString(token) => {
@@ -393,6 +397,7 @@ impl Dumper<'_> {
                     | TypeExpr::OptionalResultNamed(_, token)
                     | TypeExpr::ResultOptional(_, token)
                     | TypeExpr::ResultNamed(_, token)
+                    | TypeExpr::FixedResult(token, _, _)
                     | TypeExpr::FixedNamed(token, _)
                     | TypeExpr::FixedScalar(token, _)
                     | TypeExpr::FixedString(token)

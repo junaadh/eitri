@@ -130,6 +130,12 @@ impl Printer<'_> {
             }
             TypeExpr::FixedI64(token) => format!("[{}]i64", self.token(token)),
             TypeExpr::FixedString(token) => format!("[{}]string", self.token(token)),
+            TypeExpr::FixedResult(size, error, success) => format!(
+                "[{}]<{}!{}>",
+                self.token(size),
+                self.token(error),
+                self.token(success)
+            ),
             TypeExpr::FixedNamed(size, element) | TypeExpr::FixedScalar(size, element) => {
                 format!("[{}]{}", self.token(size), self.token(element))
             }

@@ -1,0 +1,1 @@
+error[E0301] 28..32: recursive inline struct type

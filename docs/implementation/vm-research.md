@@ -2869,3 +2869,11 @@ Grouped optional type syntax collapses nested optionals without adding runtime
 storage. The 1001-sample release harness in the isolated workspace measured
 fresh module compile p50/p99 14.2/19.6 µs and source-to-result 14.5/20.4 µs on
 the general workload. Raw samples: `/private/tmp/eitri-t017-82-samples.csv`.
+
+### T017-83 fixed arrays of results
+
+Result elements flatten into checked array windows with nullable managed slots;
+inline dependency traversal follows both result branches. The 1001-sample
+release harness in the isolated workspace measured fresh module compile p50/p99
+15.9/42.1 µs and source-to-result 16.2/43.0 µs on the general workload. Raw
+samples: `/private/tmp/eitri-t017-83-samples.csv`.
