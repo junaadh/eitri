@@ -2274,24 +2274,37 @@ impl<'i> Checker<'_, 'i> {
         }
         let mut seen = [false; 256];
         if let Some(args) = args {
-            for arg in &self.ast().field_inits[args] {
-                if let Some(i) = fields
-                    .iter()
-                    .position(|f| self.symbol(f.name) == self.symbol(arg.name))
-                {
-                    if std::mem::replace(&mut seen[i], true) {
+            let mut labeled = false;
+            for (position, arg) in self.ast().field_inits[args].iter().enumerate() {
+                let index = if self.input.tokens.kind(arg.name) == eitri_syntax::TokenKind::LParen {
+                    if labeled {
+                        self.report(
+                            Code::TypeMismatch,
+                            "positional payload argument follows a label",
+                            self.span(arg.value),
+                        );
+                    }
+                    (position < fields.len()).then_some(position)
+                } else {
+                    labeled = true;
+                    fields
+                        .iter()
+                        .position(|field| self.symbol(field.name) == self.symbol(arg.name))
+                };
+                if let Some(index) = index {
+                    if std::mem::replace(&mut seen[index], true) {
                         self.report(
                             Code::DuplicateName,
                             "duplicate payload initializer",
-                            self.token_span(arg.name),
+                            self.span(arg.value),
                         );
                     }
-                    self.value(arg.value, Some(self.out.param_types[types][i]));
+                    self.value(arg.value, Some(self.out.param_types[types][index]));
                 } else {
                     self.report(
                         Code::UnknownName,
-                        "unknown payload field",
-                        self.token_span(arg.name),
+                        "unknown or excess payload argument",
+                        self.span(arg.value),
                     );
                     self.value(arg.value, None);
                 }

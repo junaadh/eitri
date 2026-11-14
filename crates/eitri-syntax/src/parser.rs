@@ -1457,7 +1457,52 @@ impl Parser<'_> {
         result
     }
 
+    fn enum_call(&mut self, callee: ExprId) -> Parsed<ExprId> {
+        let open = self.bump();
+        let expr_mark = self.exprs.len();
+        let field_mark = self.field_inits.len();
+        let result = (|| {
+            let mut labeled = false;
+            while !self.at(T::RParen) {
+                let name = if self.at(T::Ident) && self.nth(1) == T::Colon {
+                    labeled = true;
+                    let name = self.bump();
+                    self.bump();
+                    name
+                } else {
+                    open
+                };
+                let value = self.expr(false)?;
+                self.exprs.push(value);
+                self.field_inits.push(crate::ast::FieldInit { name, value });
+                if self.eat(T::Comma).is_none() {
+                    break;
+                }
+            }
+            let close = self.expect(T::RParen, "`)`")?;
+            let span = self.ast.span(callee).to(self.span_of(close));
+            if labeled {
+                let args = self
+                    .ast
+                    .field_inits
+                    .push_drain(self.field_inits, field_mark);
+                Ok(self.ast.expr(Expr::NamedCall { callee, args }, span))
+            } else {
+                let args = self.ast.expr_lists.push_drain(self.exprs, expr_mark);
+                Ok(self.ast.expr(Expr::Call { callee, args }, span))
+            }
+        })();
+        self.exprs.truncate(expr_mark);
+        self.field_inits.truncate(field_mark);
+        result
+    }
+
     fn call(&mut self, callee: ExprId) -> Parsed<ExprId> {
+        if matches!(self.ast.exprs[callee], Expr::EnumShorthand(_))
+            || matches!(self.ast.exprs[callee], Expr::Member { name, .. } if self.text[self.span_of(name).range()].chars().next().is_some_and(char::is_uppercase))
+        {
+            return self.enum_call(callee);
+        }
         if self.nth(1) == T::Ident
             && self.nth(2) == T::Colon
             && !matches!(self.ast.exprs[callee], Expr::Name(token) if self.tokens.symbol(token).is_type_name())

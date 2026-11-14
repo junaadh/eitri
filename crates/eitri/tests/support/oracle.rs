@@ -682,13 +682,17 @@ impl Eval<'_> {
             let fields = self.ast.params(declaration.fields);
             let mut values = vec![Value::Void; fields.len()];
             if let Expr::NamedCall { args, .. } = self.ast.exprs[e] {
-                for arg in &self.ast.field_inits[args] {
-                    let index = fields
-                        .iter()
-                        .position(|field| {
-                            self.tokens.symbol(field.name) == self.tokens.symbol(arg.name)
-                        })
-                        .unwrap();
+                for (position, arg) in self.ast.field_inits[args].iter().enumerate() {
+                    let index = if self.tokens.kind(arg.name) == eitri_syntax::TokenKind::LParen {
+                        position
+                    } else {
+                        fields
+                            .iter()
+                            .position(|field| {
+                                self.tokens.symbol(field.name) == self.tokens.symbol(arg.name)
+                            })
+                            .unwrap()
+                    };
                     values[index] = self.expr(host, arg.value)?;
                 }
             }

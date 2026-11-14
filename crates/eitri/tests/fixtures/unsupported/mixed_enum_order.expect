@@ -1,0 +1,3 @@
+error[E0301] 63..64: positional payload argument follows a label
+error[E0202] 63..64: duplicate payload initializer
+error[E0304] 47..65: missing enum payload field

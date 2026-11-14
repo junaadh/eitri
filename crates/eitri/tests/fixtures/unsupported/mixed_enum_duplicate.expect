@@ -1,0 +1,2 @@
+error[E0202] 64..65: duplicate payload initializer
+error[E0304] 47..66: missing enum payload field

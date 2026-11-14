@@ -1381,13 +1381,19 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
             if let Expr::NamedCall { args, .. } = ast.exprs[e] {
                 let fields = ast.params(cases[case as usize].fields);
-                for arg in &ast.field_inits[args] {
-                    let index = fields
-                        .iter()
-                        .position(|f| {
-                            self.input.tokens.symbol(f.name) == self.input.tokens.symbol(arg.name)
-                        })
-                        .expect("checked payload");
+                for (position, arg) in ast.field_inits[args].iter().enumerate() {
+                    let index =
+                        if self.input.tokens.kind(arg.name) == eitri_syntax::TokenKind::LParen {
+                            position
+                        } else {
+                            fields
+                                .iter()
+                                .position(|f| {
+                                    self.input.tokens.symbol(f.name)
+                                        == self.input.tokens.symbol(arg.name)
+                                })
+                                .expect("checked payload")
+                        };
                     let types =
                         checked.enum_case_types[checked.enum_starts[id] as usize + case as usize];
                     let ty = checked.param_types[types][index];

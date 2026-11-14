@@ -1,0 +1,5 @@
+//! host: test
+import test from "test"
+enum Item { Value(first: i64, text: string, last: i64) }
+let item = Item.Value(test.id(1), last: test.id(3), text: test.decorate("x"))
+test.check(match item { .Value(a, b, c) => a == 1 && b == "[x]" && c == 3 })

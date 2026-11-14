@@ -2308,3 +2308,18 @@ execution 209/291 ns, total 8,875/10,700 ns; retained context memory was
 30,683 B. This scalar workload does not exercise enum constructors. Samples:
 `/private/tmp/eitri-t017-35-samples.csv`; report:
 `/private/tmp/eitri-t017-35-bench.txt`.
+
+### T017-36 mixed enum payload arguments
+
+Enum constructors accept positional arguments followed by labels, evaluated in
+written order. Duplicate fields and positional arguments after labels are
+rejected. The existing initializer list uses the opening parenthesis token to
+mark positional entries, avoiding a second representation. Managed effects are
+tested under forced collection on both interpreters and lowerers.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 8,834/9,667 ns,
+execution 209/292 ns, total 9,083/9,958 ns; retained context memory was
+30,683 B. This scalar workload does not exercise enum constructors. Samples:
+`/private/tmp/eitri-t017-36-samples.csv`; report:
+`/private/tmp/eitri-t017-36-bench.txt`.

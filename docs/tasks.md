@@ -880,6 +880,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   expansion and recursive defaults rejected at the limit.
 - T017-35: enum payload constructors accept positional arguments and nested
   shorthand where expected types are known, with arity checks.
+- T017-36: enum constructors mix positional and labeled payload arguments,
+  preserving written evaluation order and rejecting duplicates or bad order.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

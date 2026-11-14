@@ -1,0 +1,2 @@
+enum E { Data(first: i64, last: i64) }
+let x = E.Data(1, first: 2)

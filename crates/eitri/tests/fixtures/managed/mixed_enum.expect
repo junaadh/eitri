@@ -1,0 +1,5 @@
+effect: test.id(1)
+effect: test.id(3)
+effect: test.decorate([x])
+effect: test.check(true)
+ok
