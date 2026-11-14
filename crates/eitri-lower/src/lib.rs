@@ -795,6 +795,23 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         built
     }
 
+    fn empty_array_fault(&mut self, span: Span) -> Lowered<()> {
+        let window = self.top;
+        self.top += 2;
+        self.asm.load(window, u64::MAX, ValueType::I64, span)?;
+        self.asm.load(window + 1, 0, ValueType::I64, span)?;
+        let dst = self.temp();
+        self.asm.emit(
+            Op::FixedGet,
+            Operands::abc(dst.into(), window.into(), 0),
+            span,
+        )?;
+        let dead = self.asm.label();
+        self.asm.bind(dead)?;
+        self.asm.jump(dead, span);
+        Ok(())
+    }
+
     fn write_mutation_result(&mut self, span: Span) -> Lowered<()> {
         if let Some((out, source, width)) = self.mutation_result {
             for offset in 0..width {
@@ -828,11 +845,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             Ty::FixedI64(size)
             | Ty::FixedString(size)
             | Ty::FixedScalar(size, _)
-            | Ty::FixedClass(size, _) => u32::from(size),
-            Ty::FixedStruct(size, id) => {
-                u32::from(size).saturating_mul(self.checked.struct_widths[id])
-            }
-            Ty::FixedEnum(size, id) => u32::from(size).saturating_mul(self.checked.enum_widths[id]),
+            | Ty::FixedClass(size, _) => u32::from(size).max(1),
+            Ty::FixedStruct(size, id) => u32::from(size)
+                .saturating_mul(self.checked.struct_widths[id])
+                .max(1),
+            Ty::FixedEnum(size, id) => u32::from(size)
+                .saturating_mul(self.checked.enum_widths[id])
+                .max(1),
             Ty::Struct(id) => self.checked.struct_widths[id],
             Ty::Enum(id) => self.checked.enum_widths[id],
             Ty::OptionalStruct(id) => 1 + self.checked.struct_widths[id],
@@ -852,6 +871,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         nullable: bool,
         output: &mut Vec<ValueType>,
     ) -> Lowered<()> {
+        if let Some((0, _)) = ty.fixed_inner() {
+            output.push(ValueType::I64);
+            return Ok(());
+        }
         if let Some((size, inner)) = ty.fixed_inner()
             && !matches!(inner, Ty::Struct(_) | Ty::Enum(_))
         {
@@ -941,6 +964,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 }
                 ty if ty.fixed_inner().is_some() => {
                     let (size, inner) = ty.fixed_inner().unwrap();
+                    if size == 0 {
+                        output.push(ValueType::I64);
+                        continue;
+                    }
                     pending.extend(std::iter::repeat_n(
                         Work::Type(inner, nullable),
                         size as usize,
@@ -1277,6 +1304,12 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                 } else {
                     None
                 };
+                if size == 0 {
+                    self.expr(index, None)?;
+                    self.empty_array_fault(ast.span(target))?;
+                    self.top = mark;
+                    return Ok(());
+                }
                 let destination = if class_root.is_none() {
                     self.field_address(base, binding)
                 } else {
@@ -2267,6 +2300,12 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     self.top += element_width;
                     slot
                 };
+                if size == 0 {
+                    self.expr(base, None)?;
+                    self.expr(index, None)?;
+                    self.empty_array_fault(span)?;
+                    return Ok(target);
+                }
                 let source = self.top;
                 self.top += u32::from(size) * element_width;
                 let window = self.top;
@@ -2305,6 +2344,9 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     slot
                 };
                 let end = self.top;
+                if ast.args(elements).is_empty() {
+                    self.asm.load(slot, 0, ValueType::I64, span)?;
+                }
                 for (index, &element) in ast.args(elements).iter().enumerate() {
                     self.expr(
                         element,
@@ -4564,8 +4606,38 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                         if let Some(children) = pattern.nested_bindings {
                             self.match_payload(source, nested, tag, children, next, span)?;
                         }
-                    } else if pattern.literal.is_some() {
-                        if let Ty::OptionalClass(id) = payload_ty {
+                    } else if let Some(literal) = pattern.literal {
+                        if !matches!(ast.exprs[literal], Expr::Null(_)) {
+                            let source = self.match_present(value, payload_ty, next, span)?;
+                            let compare_ty = payload_ty.optional_inner().unwrap_or(payload_ty);
+                            let expected = self.expr(literal, None)?;
+                            if compare_ty == Ty::String {
+                                let cmp = self.temp();
+                                let zero = self.temp();
+                                self.asm.load(zero, 0, ValueType::I64, span)?;
+                                self.asm.emit(
+                                    Op::StrCompare,
+                                    Operands::abc(cmp.into(), source.into(), expected.into()),
+                                    span,
+                                )?;
+                                self.asm.branch_if(Cond::Ne, cmp, zero, next, span)?;
+                            } else if compare_ty.float() {
+                                let equal = self.temp();
+                                let op = if compare_ty == Ty::F32 {
+                                    Op::FcsetFeqF32
+                                } else {
+                                    Op::FcsetFeqF64
+                                };
+                                self.asm.emit(
+                                    op,
+                                    Operands::abc(equal.into(), source.into(), expected.into()),
+                                    span,
+                                )?;
+                                self.asm.branch_test(Test::False, equal, next, span);
+                            } else {
+                                self.asm.branch_if(Cond::Ne, source, expected, next, span)?;
+                            }
+                        } else if let Ty::OptionalClass(id) = payload_ty {
                             let null = self.temp();
                             let equal = self.temp();
                             self.asm.emit(

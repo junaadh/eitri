@@ -622,10 +622,7 @@ impl<'i> Checker<'_, 'i> {
             | TypeExpr::FixedScalar(token, _)
             | TypeExpr::FixedNamed(token, _) => {
                 let text = &self.input.text[self.token_span(token).range()];
-                let size = text
-                    .parse::<u16>()
-                    .ok()
-                    .filter(|&size| (1..=256).contains(&size));
+                let size = text.parse::<u16>().ok().filter(|&size| size <= 256);
                 return if let Some(size) = size {
                     match ty {
                         TypeExpr::FixedString(_) => Ty::FixedString(size),
@@ -656,7 +653,7 @@ impl<'i> Checker<'_, 'i> {
                 } else {
                     self.report(
                         Code::Limit,
-                        "implementation limit: fixed array size must be 1 to 256",
+                        "implementation limit: fixed array size must be 0 to 256",
                         self.token_span(token),
                     );
                     Ty::Error
@@ -938,13 +935,13 @@ impl<'i> Checker<'_, 'i> {
                             Ty::FixedI64(size)
                             | Ty::FixedString(size)
                             | Ty::FixedScalar(size, _)
-                            | Ty::FixedClass(size, _) => u32::from(size),
-                            Ty::FixedStruct(size, id) => {
-                                u32::from(size).saturating_mul(self.out.struct_widths[id])
-                            }
-                            Ty::FixedEnum(size, id) => {
-                                u32::from(size).saturating_mul(self.out.enum_widths[id])
-                            }
+                            | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                            Ty::FixedStruct(size, id) => u32::from(size)
+                                .saturating_mul(self.out.struct_widths[id])
+                                .max(1),
+                            Ty::FixedEnum(size, id) => u32::from(size)
+                                .saturating_mul(self.out.enum_widths[id])
+                                .max(1),
                             Ty::Result(id) => {
                                 let (error, success) = self.out.result_types[id as usize];
                                 let width = |ty| match ty {
@@ -1073,13 +1070,13 @@ impl<'i> Checker<'_, 'i> {
                     Ty::FixedI64(size)
                     | Ty::FixedString(size)
                     | Ty::FixedScalar(size, _)
-                    | Ty::FixedClass(size, _) => u32::from(size),
-                    Ty::FixedStruct(size, id) => {
-                        u32::from(size).saturating_mul(self.out.struct_widths[id])
-                    }
-                    Ty::FixedEnum(size, id) => {
-                        u32::from(size).saturating_mul(self.out.enum_widths[id])
-                    }
+                    | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                    Ty::FixedStruct(size, id) => u32::from(size)
+                        .saturating_mul(self.out.struct_widths[id])
+                        .max(1),
+                    Ty::FixedEnum(size, id) => u32::from(size)
+                        .saturating_mul(self.out.enum_widths[id])
+                        .max(1),
                     Ty::Result(id) => {
                         let (error, success) = self.out.result_types[id as usize];
                         let width = |ty| match ty {
@@ -1391,13 +1388,13 @@ impl<'i> Checker<'_, 'i> {
                         Ty::FixedI64(size)
                         | Ty::FixedString(size)
                         | Ty::FixedScalar(size, _)
-                        | Ty::FixedClass(size, _) => u32::from(size),
-                        Ty::FixedStruct(size, id) => {
-                            u32::from(size).saturating_mul(self.out.struct_widths[id])
-                        }
-                        Ty::FixedEnum(size, id) => {
-                            u32::from(size).saturating_mul(self.out.enum_widths[id])
-                        }
+                        | Ty::FixedClass(size, _) => u32::from(size).max(1),
+                        Ty::FixedStruct(size, id) => u32::from(size)
+                            .saturating_mul(self.out.struct_widths[id])
+                            .max(1),
+                        Ty::FixedEnum(size, id) => u32::from(size)
+                            .saturating_mul(self.out.enum_widths[id])
+                            .max(1),
                         Ty::Result(id) => {
                             let (error, success) = self.out.result_types[id as usize];
                             let width = |ty| match ty {
@@ -2040,10 +2037,10 @@ impl<'i> Checker<'_, 'i> {
                         self.span(expr),
                     );
                 }
-                if values.is_empty() || values.len() > 256 {
+                if values.len() > 256 {
                     self.report(
                         Code::Limit,
-                        "implementation limit: fixed array size must be 1 to 256",
+                        "implementation limit: fixed array size must be 0 to 256",
                         self.span(expr),
                     );
                 }
@@ -2060,7 +2057,7 @@ impl<'i> Checker<'_, 'i> {
                 for &element in values {
                     self.value(element, Some(element_ty));
                 }
-                if values.is_empty() || values.len() > 256 {
+                if values.len() > 256 {
                     Ty::Error
                 } else {
                     expected.unwrap_or(Ty::Error)
@@ -3010,6 +3007,8 @@ impl<'i> Checker<'_, 'i> {
         let mut covered = [false; 2];
         let mut null = [false; 2];
         let mut present = [false; 2];
+        let mut nested_coverage = [[0u64; 4]; 2];
+        let mut booleans = [[false; 2]; 2];
         let mut fallback = false;
         let mut result = expected;
         for arm in &self.ast().match_arms[node.arms] {
@@ -3059,11 +3058,42 @@ impl<'i> Checker<'_, 'i> {
                                 );
                             }
                             let cases = &self.ast().enum_cases[self.ast().enums[nested].cases];
-                            if let Some(index) = cases.iter().take(256).position(|candidate| {
-                                self.symbol(candidate.name) == self.symbol(case)
-                            }) {
+                            if let Some(nested_index) =
+                                cases.iter().take(256).position(|candidate| {
+                                    self.symbol(candidate.name) == self.symbol(case)
+                                })
+                            {
                                 if let Some(children) = pattern.nested_bindings {
-                                    self.check_match_payload(nested, index, case, children, true);
+                                    self.check_match_payload(
+                                        nested,
+                                        nested_index,
+                                        case,
+                                        children,
+                                        true,
+                                    );
+                                }
+                                let irrefutable = pattern.nested_bindings.is_none_or(|children| {
+                                    self.payload_patterns_irrefutable(
+                                        nested,
+                                        nested_index,
+                                        children,
+                                    )
+                                });
+                                if arm.guard.is_none() && irrefutable {
+                                    nested_coverage[index][nested_index / 64] |=
+                                        1u64 << (nested_index % 64);
+                                    let full = cases.len() <= 256
+                                        && (0..cases.len()).all(|tag| {
+                                            nested_coverage[index][tag / 64] & (1u64 << (tag % 64))
+                                                != 0
+                                        });
+                                    if full {
+                                        if payload.optional_inner().is_some() {
+                                            present[index] = true;
+                                        } else {
+                                            covered[index] = true;
+                                        }
+                                    }
                                 }
                             } else {
                                 self.report(
@@ -3087,10 +3117,33 @@ impl<'i> Checker<'_, 'i> {
                             if arm.guard.is_none() {
                                 null[index] = true;
                             }
+                        } else if matches!(
+                            self.ast().exprs[literal],
+                            Expr::Int { .. }
+                                | Expr::Float { .. }
+                                | Expr::Bool(_)
+                                | Expr::Char(_)
+                                | Expr::String(_)
+                        ) {
+                            let narrowed = payload.optional_inner().unwrap_or(payload);
+                            self.value(literal, Some(narrowed));
+                            if arm.guard.is_none()
+                                && let Expr::Bool(value) = self.ast().exprs[literal]
+                                && narrowed == Ty::Bool
+                            {
+                                booleans[index][usize::from(value)] = true;
+                                if booleans[index].iter().all(|seen| *seen) {
+                                    if payload.optional_inner().is_some() {
+                                        present[index] = true;
+                                    } else {
+                                        covered[index] = true;
+                                    }
+                                }
+                            }
                         } else {
                             self.report(
-                                Code::Unsupported,
-                                "not supported yet: result literal pattern",
+                                Code::TypeMismatch,
+                                "literal does not match result payload",
                                 self.span(literal),
                             );
                         }

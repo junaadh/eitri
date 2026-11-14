@@ -1,0 +1,3 @@
+effect: test.emit(1)
+fault: index out of bounds
+  at <module> 161..176

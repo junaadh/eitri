@@ -807,8 +807,14 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-79: zero-length fixed arrays support value copies, calls and aggregate
+  fields; indexed reads and writes fault after evaluating the index.
+- T017-78: literal result payload patterns support scalar and string values;
+  boolean and optional-boolean cases participate in exhaustiveness.
+- T017-77: exhaustive nested enum cases in result payloads establish coverage,
+  including optional null; guarded and partial payload cases remain conservative.
 - T017-76: result patterns support nested enum cases, payload bindings and
-  guards; catch-all case arms still establish conservative exhaustiveness.
+  guards; later work added finite nested case coverage.
 - T017-75: named scalar and string errors work in results; optional payload
   patterns distinguish null and present bindings for exhaustiveness.
 - T017-74: `E!?T` preserves successful null separately from error; `try?`

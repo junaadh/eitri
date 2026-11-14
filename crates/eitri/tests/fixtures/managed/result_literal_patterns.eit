@@ -1,0 +1,14 @@
+//! host: test
+import test from "test"
+enum Problem { Bad }
+fn flag() -> Problem!bool { return true }
+fn optional(n: i64) -> Problem!?bool {
+    if n == 0 { return null }
+    if n == 1 { return true }
+    return false
+}
+fn text() -> Problem!string { return "yes" }
+test.check(match flag() { .Ok(true) => true, .Ok(false) => false, .Err => false })
+test.check(match optional(0) { .Ok(null) => true, .Ok(true) => false, .Ok(false) => false, .Err => false })
+test.check(match optional(1) { .Ok(null) => false, .Ok(true) => true, .Ok(false) => false, .Err => false })
+test.check(match text() { .Ok("yes") => true, .Ok => false, .Err => false })

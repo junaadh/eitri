@@ -3,7 +3,7 @@
 The current implementation supports named `E!T` results in script functions
 and locals, implicit and explicit success, explicit errors, matching, equality,
 and `void` success, including fields of structs, classes, and enums. Compound
-result type syntax, full result pattern coverage, error mapping, and host
+result type syntax, some result pattern coverage, error mapping, and host
 result signatures remain future work.
 Plain `try` propagates matching errors from script functions; `try?` yields an
 optional value for supported success types, including optional successes with

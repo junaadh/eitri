@@ -1175,8 +1175,23 @@ impl Eval<'_> {
                             continue;
                         }
                     }
-                    if pattern.literal.is_some() && present.is_some() {
-                        continue;
+                    if let Some(literal) = pattern.literal {
+                        if matches!(ast.exprs[literal], Expr::Null(_)) {
+                            if present.is_some() {
+                                continue;
+                            }
+                        } else {
+                            let Some(actual) = present else {
+                                continue;
+                            };
+                            let expected = self.expr(host, literal)?;
+                            if !self
+                                .binary_values(BinaryOp::Eq, actual, expected, ast.span(literal))?
+                                .bool()
+                            {
+                                continue;
+                            }
+                        }
                     }
                     if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
                         let Some(value) = present else {

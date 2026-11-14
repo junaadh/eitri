@@ -1,0 +1,6 @@
+//! host: test
+import test from "test"
+fn index() -> i64 { test.emit(1); return 0 }
+fn rhs() -> string { test.emit(2); return "bad" }
+var values: [0]string = []
+values[index()] = rhs()

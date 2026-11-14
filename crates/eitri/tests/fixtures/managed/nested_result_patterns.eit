@@ -8,3 +8,8 @@ test.check(match fail() { .Err(.Bad(text)) => text == "bad", .Err => false, .Ok 
 test.check(match select() { .Ok(.Text(text)) => text == "yes", .Ok => false, .Err => false })
 test.check(match fail() { .Err(Problem.Bad(text)) if text == "wrong" => false, .Err(.Bad(text)) => text == "bad", .Err => false, .Ok => false })
 test.check(match fail() { .Err => true, .Ok => false, .Err(.Bad(text)) => text == "never" })
+test.check(match fail() { .Err(.Bad(text)) => text == "bad", .Err(.Missing) => false, .Ok => false })
+test.check(match select() { .Ok(.Text(text)) => text == "yes", .Ok(.None) => false, .Err => false })
+enum Status { Live, Stopped }
+fn maybe_status() -> Problem!?Status { return Status.Live }
+test.check(match maybe_status() { .Ok(null) => false, .Ok(.Live) => true, .Ok(.Stopped) => false, .Err => false })

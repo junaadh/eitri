@@ -1,0 +1,2 @@
+let values: [0]string = []
+let value = values[0]

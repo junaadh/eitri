@@ -2824,3 +2824,18 @@ Result cases can match nested enum payloads using existing bounded enum pattern
 handling. The 1001-sample release harness measured fresh module compile p50/p99
 12.0/15.8 µs and source-to-result 12.2/16.1 µs on the general workload. Raw
 samples: `/private/tmp/eitri-t017-76-main-samples.csv`.
+
+### T017-77 nested result exhaustiveness
+
+Coverage uses two fixed 256-bit sets for nested enum cases. The 1001-sample
+release harness in the isolated workspace measured fresh module compile p50/p99
+13.5/32.7 µs and source-to-result 13.8/34.9 µs on the general workload. Raw
+samples: `/private/tmp/eitri-t017-77-samples.csv`.
+
+### T017-78 literal result patterns
+
+Result payload literals reuse scalar comparison operations and track finite
+boolean coverage. The 1001-sample release harness in the isolated workspace
+measured fresh module compile p50/p99 13.5/15.5 µs and source-to-result
+13.8/15.8 µs on the general workload. Raw samples:
+`/private/tmp/eitri-t017-78-samples.csv`.

@@ -1,0 +1,3 @@
+enum Problem { Bad }
+fn number() -> Problem!i64 { return 1 }
+let value = match number() { .Ok(1) => 1, .Err => 0 }
