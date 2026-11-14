@@ -2439,3 +2439,31 @@ execution 209/292 ns, total 9,291/9,959 ns; retained context memory was
 30,898 B. This scalar workload does not exercise optionals. Samples:
 `/private/tmp/eitri-t017-44-samples.csv`; report:
 `/private/tmp/eitri-t017-44-bench.txt`.
+
+### T017-45 scalar matching
+
+Boolean, numeric, character and string subjects support literal and catch-all
+patterns with guards; boolean exhaustiveness is checked. The scalar fixture
+runs with forced collection on both interpreters and lowerers. Optional and
+aggregate subject matching remains future work.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 11.2/16.7 µs,
+execution 292/417 ns, total 11.5/17.1 µs; retained context memory was
+30,898 B. This scalar benchmark does not exercise matching; timings were higher
+than the previous run. Samples: `/private/tmp/eitri-t017-45-samples.csv`;
+report: `/private/tmp/eitri-t017-45-bench.txt`.
+
+### T017-46 optional subject matching
+
+Optional scalar subjects can match null, a narrowed present binding, or an
+inner literal. Coverage recognizes null and a present binding, or all three
+boolean states. Calls reserve both slots for implicitly wrapped scalar
+arguments. Both interpreters and lowerers run the fixture with forced GC.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 16.0/20.2 µs,
+execution 416/542 ns, total 16.4/20.7 µs; retained context memory was
+30,898 B. This benchmark does not exercise matching, and this run was slower
+than the preceding runs. Samples: `/private/tmp/eitri-t017-46-samples.csv`;
+report: `/private/tmp/eitri-t017-46-bench.txt`.

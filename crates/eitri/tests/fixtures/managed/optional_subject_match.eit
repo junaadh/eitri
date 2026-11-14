@@ -1,0 +1,10 @@
+//! host: test
+import test from "test"
+fn number(value: ?i64) -> i64 { return match value { null => -1, 1 => 10, x => x } }
+fn text(value: ?string) -> string { return match value { "yes" => "matched", x => x, null => "none" } }
+fn flag(value: ?bool) -> i64 { return match value { true => 1, false => 2, null => 0 } }
+test.check(number(null) == -1 && number(1) == 10 && number(7) == 7)
+test.check(text("yes") == "matched" && text("other") == "other" && text(null) == "none")
+test.check(flag(true) == 1 && flag(false) == 2 && flag(null) == 0)
+let byte: ?u8 = 255
+test.check(match byte { null => false, x => x == 255 })

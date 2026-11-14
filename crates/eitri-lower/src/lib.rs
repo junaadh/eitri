@@ -2641,7 +2641,13 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         let argument_slots: u32 = receiver_width
             + args
                 .iter()
-                .map(|&arg| self.width(checked.types[arg]))
+                .map(|&arg| {
+                    if checked.optional_wrap[arg] && checked.types[arg] != Ty::String {
+                        2
+                    } else {
+                        self.width(checked.types[arg])
+                    }
+                })
                 .sum::<u32>();
         self.top += argument_slots;
         if let Some(receiver) = receiver {
@@ -2667,7 +2673,11 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             let save = self.top;
             self.expr(arg, Some(first + offset))?;
             self.top = save;
-            offset += self.width(checked.types[arg]);
+            offset += if checked.optional_wrap[arg] && checked.types[arg] != Ty::String {
+                2
+            } else {
+                self.width(checked.types[arg])
+            };
         }
         let return_width = if returns {
             self.width(checked.types[e])
@@ -3001,6 +3011,139 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         Ok(())
     }
 
+    fn match_scalar(
+        &mut self,
+        id: eitri_syntax::ast::MatchId,
+        result: u32,
+        span: Span,
+        ty: Ty,
+    ) -> Lowered<u32> {
+        let ast = self.input.ast;
+        let node = ast.matches[id];
+        let subject_ty = self.checked.types[node.subject];
+        let inner = if subject_ty == Ty::OptionalString {
+            Some(Ty::String)
+        } else {
+            subject_ty.tagged_optional_inner()
+        };
+        let subject = self.top;
+        self.top += self.width(subject_ty);
+        self.expr(node.subject, Some(subject))?;
+        let end = self.asm.label();
+        let all = &ast.match_arms[node.arms];
+        let arms = if all.last().is_some_and(|arm| arm.guard.is_some()) {
+            &all[..all.len() - 1]
+        } else {
+            all
+        };
+        for (index, arm) in arms.iter().enumerate() {
+            let mark = self.top;
+            let next = self.asm.label();
+            if let Some(literal) = arm.literal {
+                if matches!(ast.exprs[literal], Expr::Null(_)) {
+                    if subject_ty == Ty::OptionalString {
+                        let null = self.temp();
+                        let equal = self.temp();
+                        self.asm
+                            .emit(Op::NullableNull, Operands::abc(null.into(), 0, 0), span)?;
+                        self.asm.emit(
+                            Op::NullableEq,
+                            Operands::abc(equal.into(), subject.into(), null.into()),
+                            span,
+                        )?;
+                        self.asm.branch_test(Test::False, equal, next, span);
+                    } else {
+                        self.asm.branch_test(Test::True, subject, next, span);
+                    }
+                } else {
+                    let source = self.match_present(subject, subject_ty, next, span)?;
+                    let compare_ty = inner.unwrap_or(subject_ty);
+                    let value = self.expr(literal, None)?;
+                    if compare_ty == Ty::String {
+                        let cmp = self.temp();
+                        let zero = self.temp();
+                        self.asm.load(zero, 0, ValueType::I64, span)?;
+                        self.asm.emit(
+                            Op::StrCompare,
+                            Operands::abc(cmp.into(), source.into(), value.into()),
+                            span,
+                        )?;
+                        self.asm.branch_if(Cond::Ne, cmp, zero, next, span)?;
+                    } else if compare_ty.float() {
+                        let equal = self.temp();
+                        let op = if compare_ty == Ty::F32 {
+                            Op::FcsetFeqF32
+                        } else {
+                            Op::FcsetFeqF64
+                        };
+                        self.asm.emit(
+                            op,
+                            Operands::abc(equal.into(), source.into(), value.into()),
+                            span,
+                        )?;
+                        self.asm.branch_test(Test::False, equal, next, span);
+                    } else {
+                        self.asm.branch_if(Cond::Ne, source, value, next, span)?;
+                    }
+                }
+            }
+            if let Some(token) = arm.catch_binding {
+                let binding = self.checked.pattern_bindings[token].expect("checked binding");
+                let source = self.match_present(subject, subject_ty, next, span)?;
+                let narrowed = inner.unwrap_or(subject_ty);
+                let target = self.top;
+                self.top += self.width(narrowed);
+                self.slots[binding] = target;
+                if inner.is_some() {
+                    self.asm.emit(
+                        Op::Mov,
+                        Operands::abc(target.into(), source.into(), 0),
+                        span,
+                    )?;
+                } else {
+                    self.move_nullable(subject_ty, source, target, false, span)?;
+                }
+            }
+            if let Some(guard) = arm.guard {
+                self.branch(guard, false, next)?;
+            }
+            match arm.body {
+                eitri_syntax::ast::MatchBody::Expr(body) => {
+                    if ty == Ty::Void {
+                        self.discard(body)?;
+                    } else {
+                        self.expr(body, Some(result))?;
+                    }
+                }
+                eitri_syntax::ast::MatchBody::Block(body) => {
+                    if ty == Ty::Void {
+                        self.statements(body)?;
+                    } else {
+                        self.block_value(body, result)?;
+                    }
+                }
+            }
+            let terminal =
+                matches!(arm.body, eitri_syntax::ast::MatchBody::Block(block) if self.ends(block));
+            if !terminal
+                && (index + 1 != arms.len()
+                    || arm.literal.is_some()
+                    || (inner.is_some() && arm.catch_binding.is_some()))
+            {
+                self.asm.jump(end, span);
+            }
+            self.asm.bind(next)?;
+            if index + 1 == arms.len()
+                && (arm.literal.is_some() || (inner.is_some() && arm.catch_binding.is_some()))
+            {
+                self.asm.jump(next, span);
+            }
+            self.top = mark;
+        }
+        self.asm.bind(end)?;
+        Ok(result)
+    }
+
     fn match_value(
         &mut self,
         id: eitri_syntax::ast::MatchId,
@@ -3023,7 +3166,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
         };
         let Ty::Enum(enum_id) = self.checked.types[node.subject] else {
-            unreachable!()
+            return self.match_scalar(id, result, span, ty);
         };
         // A guard may mutate the source lvalue. Match the value evaluated
         // before any arm or guard runs, even on the optimized lowering path.

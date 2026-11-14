@@ -1,0 +1,2 @@
+let value: ?i64 = null
+let result = match value { x => x }

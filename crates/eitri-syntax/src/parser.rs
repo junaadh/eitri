@@ -630,24 +630,23 @@ impl Parser<'_> {
                 } else {
                     None
                 };
-                let (case, qualifier, catch_binding) = if literal.is_some() {
-                    (None, None, None)
-                } else if self.eat(T::Wildcard).is_some() {
-                    (None, None, None)
-                } else if self.at(T::Ident) && self.nth(1) == T::Dot {
-                    let qualifier = self.bump();
-                    self.bump();
-                    (
-                        Some(self.expect(T::Ident, "a case name")?),
-                        Some(qualifier),
-                        None,
-                    )
-                } else if self.at(T::Ident) {
-                    (None, None, Some(self.bump()))
-                } else {
-                    self.expect(T::Dot, "a case pattern")?;
-                    (Some(self.expect(T::Ident, "a case name")?), None, None)
-                };
+                let (case, qualifier, catch_binding) =
+                    if literal.is_some() || self.eat(T::Wildcard).is_some() {
+                        (None, None, None)
+                    } else if self.at(T::Ident) && self.nth(1) == T::Dot {
+                        let qualifier = self.bump();
+                        self.bump();
+                        (
+                            Some(self.expect(T::Ident, "a case name")?),
+                            Some(qualifier),
+                            None,
+                        )
+                    } else if self.at(T::Ident) {
+                        (None, None, Some(self.bump()))
+                    } else {
+                        self.expect(T::Dot, "a case pattern")?;
+                        (Some(self.expect(T::Ident, "a case name")?), None, None)
+                    };
                 let parenthesized = self.eat(T::LParen).is_some();
                 let bindings = if parenthesized {
                     self.match_payload()?

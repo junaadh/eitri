@@ -1,0 +1,8 @@
+//! host: test
+import test from "test"
+fn label(flag: bool) -> i64 { return match flag { true => 1, false => 2 } }
+fn score(value: i64) -> i64 { return match value { 1 => 10, 2 if false => 20, x => x } }
+test.check(label(true) == 1 && label(false) == 2)
+test.check(score(1) == 10 && score(2) == 2)
+test.check(match "hello" { "no" => false, "hello" => true, _ => false })
+test.check(match 'x' { 'y' => false, 'x' => true, _ => false })

@@ -1,0 +1,1 @@
+let result = match true { true => 1 }

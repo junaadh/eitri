@@ -1258,8 +1258,65 @@ impl Eval<'_> {
             }
             Expr::Match(id) => {
                 let node = self.ast.matches[id];
-                let Value::Enum(enum_id, case, payload) = self.expr(host, node.subject)? else {
-                    unreachable!()
+                let subject = self.expr(host, node.subject)?;
+                let Value::Enum(enum_id, case, payload) = subject else {
+                    let ast = self.ast;
+                    for &arm in &ast.match_arms[node.arms] {
+                        let present = match subject {
+                            Value::OptionalI64(Some(value)) => Some(Value::Int(value)),
+                            Value::OptionalBool(Some(value)) => Some(Value::Bool(value)),
+                            Value::OptionalString(Some(value)) => Some(Value::String(value)),
+                            Value::OptionalScalar(ty, Some(value)) => {
+                                Some(Value::from_word(ty.tagged_optional_inner().unwrap(), value))
+                            }
+                            Value::OptionalI64(None)
+                            | Value::OptionalBool(None)
+                            | Value::OptionalString(None)
+                            | Value::OptionalScalar(_, None) => None,
+                            value => Some(value),
+                        };
+                        if let Some(literal) = arm.literal {
+                            if matches!(ast.exprs[literal], Expr::Null(_)) {
+                                if present.is_some() {
+                                    continue;
+                                }
+                            } else {
+                                let Some(value) = present else {
+                                    continue;
+                                };
+                                let expected = self.expr(host, literal)?;
+                                if !self
+                                    .binary_values(
+                                        BinaryOp::Eq,
+                                        value,
+                                        expected,
+                                        ast.span(literal),
+                                    )?
+                                    .bool()
+                                {
+                                    continue;
+                                }
+                            }
+                        }
+                        if let Some(token) = arm.catch_binding {
+                            let Some(value) = present else {
+                                continue;
+                            };
+                            let binding = self.checked.pattern_bindings[token]
+                                .expect("checked catch binding");
+                            self.locals[binding.index()] = Some(value);
+                        }
+                        if let Some(guard) = arm.guard
+                            && !self.expr(host, guard)?.bool()
+                        {
+                            continue;
+                        }
+                        return match arm.body {
+                            eitri_syntax::ast::MatchBody::Expr(expr) => self.expr(host, expr),
+                            eitri_syntax::ast::MatchBody::Block(block) => self.block(host, block),
+                        };
+                    }
+                    unreachable!("checked match is exhaustive")
                 };
                 let cases = &self.ast.enum_cases[self.ast.enums[enum_id].cases];
                 let name = self.tokens.symbol(cases[case as usize].name);

@@ -2344,14 +2344,7 @@ impl<'i> Checker<'_, 'i> {
         let node = self.ast().matches[id];
         let subject = self.value(node.subject, None);
         let Ty::Enum(enum_id) = subject else {
-            if subject != Ty::Error {
-                self.report(
-                    Code::TypeMismatch,
-                    "match requires an enum",
-                    self.span(node.subject),
-                );
-            }
-            return Ty::Error;
+            return self.scalar_match(expr, id, subject, expected, used);
         };
         let cases = &self.ast().enum_cases[self.ast().enums[enum_id].cases];
         if cases.len() > 256 {
@@ -2366,7 +2359,13 @@ impl<'i> Checker<'_, 'i> {
         let mut result = expected;
         for arm in &self.ast().match_arms[node.arms] {
             let mark = self.mark();
-            if let Some(case) = arm.case {
+            if let Some(literal) = arm.literal {
+                self.report(
+                    Code::TypeMismatch,
+                    "literal pattern does not match enum",
+                    self.span(literal),
+                );
+            } else if let Some(case) = arm.case {
                 if let Some(qualifier) = arm.qualifier
                     && self.symbol(qualifier) != self.symbol(self.ast().enums[enum_id].name)
                 {
@@ -2467,6 +2466,124 @@ impl<'i> Checker<'_, 'i> {
             } else {
                 self.report(Code::TypeMismatch, "non-exhaustive match", self.span(expr));
             }
+        }
+        if used {
+            result.unwrap_or(Ty::Error)
+        } else {
+            Ty::Void
+        }
+    }
+
+    fn scalar_match(
+        &mut self,
+        expr: ExprId,
+        id: eitri_syntax::ast::MatchId,
+        subject: Ty,
+        expected: Option<Ty>,
+        used: bool,
+    ) -> Ty {
+        let node = self.ast().matches[id];
+        if matches!(subject, Ty::Struct(_) | Ty::Void | Ty::FindOffset) {
+            self.report(
+                Code::TypeMismatch,
+                "match subject type is not supported",
+                self.span(node.subject),
+            );
+            return Ty::Error;
+        }
+        let inner = if subject == Ty::OptionalString {
+            Some(Ty::String)
+        } else {
+            subject.tagged_optional_inner()
+        };
+        let mut fallback = false;
+        let mut present = false;
+        let mut null = false;
+        let mut booleans = [false; 2];
+        let mut result = expected;
+        for arm in &self.ast().match_arms[node.arms] {
+            let mark = self.mark();
+            if let Some(literal) = arm.literal {
+                let is_null = matches!(self.ast().exprs[literal], Expr::Null(_));
+                self.value(
+                    literal,
+                    Some(if is_null {
+                        subject
+                    } else {
+                        inner.unwrap_or(subject)
+                    }),
+                );
+                if arm.guard.is_none() && is_null && inner.is_some() {
+                    null = true;
+                }
+                if arm.guard.is_none()
+                    && let Expr::Bool(value) = self.ast().exprs[literal]
+                    && inner.unwrap_or(subject) == Ty::Bool
+                {
+                    booleans[usize::from(value)] = true;
+                }
+            } else if let Some(case) = arm.case {
+                self.report(
+                    Code::TypeMismatch,
+                    "enum case pattern requires an enum",
+                    self.token_span(case),
+                );
+            } else {
+                if arm.parenthesized {
+                    self.report(
+                        Code::TypeMismatch,
+                        "wildcard pattern cannot have payload bindings",
+                        self.span(expr),
+                    );
+                }
+                if let Some(token) = arm.catch_binding {
+                    let binding = self.new_binding(token, false, inner.unwrap_or(subject));
+                    self.out.pattern_bindings[token] = Some(binding);
+                }
+                if arm.guard.is_none() {
+                    if inner.is_some() && arm.catch_binding.is_some() {
+                        present = true;
+                    } else {
+                        fallback = true;
+                    }
+                }
+            }
+            if let Some(guard) = arm.guard {
+                self.value(guard, Some(Ty::Bool));
+            }
+            let ty = match arm.body {
+                eitri_syntax::ast::MatchBody::Expr(body) => {
+                    if used {
+                        self.value(body, result)
+                    } else {
+                        self.expr(body, None, false);
+                        Ty::Void
+                    }
+                }
+                eitri_syntax::ast::MatchBody::Block(body) => {
+                    if used {
+                        self.block_value(body, result)
+                    } else {
+                        self.statements(body);
+                        Ty::Void
+                    }
+                }
+            };
+            if used && result.is_none() && ty != Ty::Error {
+                result = Some(ty);
+            }
+            self.restore(mark);
+        }
+        let bool_covered = inner.unwrap_or(subject) == Ty::Bool && booleans.iter().all(|x| *x);
+        if !fallback
+            && !(if inner.is_some() {
+                null && (present || bool_covered)
+            } else {
+                bool_covered
+            })
+            && subject != Ty::Error
+        {
+            self.report(Code::TypeMismatch, "non-exhaustive match", self.span(expr));
         }
         if used {
             result.unwrap_or(Ty::Error)

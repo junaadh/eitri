@@ -804,6 +804,11 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Done when: copies and shared identity follow the language; large aggregates
   use bounded code generation; invalid recursive inline layouts are rejected;
   payload roots survive collection in every active case.
+- T017-46: optional match subjects support null, present bindings, literal
+  patterns, and finite boolean coverage; implicit optional call arguments use
+  the full tagged width.
+- T017-45: scalar match subjects support literals, guards, bindings, and boolean
+  exhaustiveness on both interpreters.
 - T017-44: scalar optionals support the remaining integer, float, and character
   types in aggregates, calls, coalescing and payload matching on both interpreters.
 - T017-1: nonempty local structs with up to 256 scalar or string fields,
