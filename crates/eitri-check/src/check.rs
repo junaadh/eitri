@@ -2172,6 +2172,10 @@ impl<'i> Checker<'_, 'i> {
                 _ => ty,
             };
             if let Some(literal) = pattern.literal {
+                if matches!(self.ast().exprs[literal], Expr::Null(_)) {
+                    self.value(literal, Some(ty));
+                    continue;
+                }
                 if !matches!(
                     self.ast().exprs[literal],
                     Expr::Int { .. }
@@ -2242,7 +2246,7 @@ impl<'i> Checker<'_, 'i> {
         enum_id: eitri_syntax::ast::EnumId,
         case_index: usize,
         bindings: List<eitri_syntax::ast::MatchBinding>,
-    ) -> Option<(usize, usize, usize)> {
+    ) -> Option<(usize, [u64; 4], usize)> {
         let ast = self.input.ast;
         let case = ast.enum_cases[ast.enums[enum_id].cases][case_index];
         let fields = ast.params(case.fields);
@@ -2257,9 +2261,25 @@ impl<'i> Checker<'_, 'i> {
                 None => position,
             };
             let ty = *self.out.param_types[types].get(field)?;
-            let value = if let Some(literal) = pattern.literal {
+            let mut mask = [0u64; 4];
+            let count = if let Some(literal) = pattern.literal {
                 match (ty, ast.exprs[literal]) {
-                    (Ty::Bool, Expr::Bool(value)) => Some((usize::from(value), 2)),
+                    (Ty::Bool, Expr::Bool(value)) => {
+                        mask[0] = 1 << usize::from(value);
+                        Some(2)
+                    }
+                    (Ty::OptionalBool, Expr::Bool(value)) => {
+                        mask[0] = 1 << (1 + usize::from(value));
+                        Some(3)
+                    }
+                    (Ty::OptionalBool, Expr::Null(_)) => {
+                        mask[0] = 1;
+                        Some(3)
+                    }
+                    (Ty::OptionalString | Ty::OptionalI64, Expr::Null(_)) => {
+                        mask[0] = 1;
+                        Some(2)
+                    }
                     _ => return None,
                 }
             } else if let Some(name) = pattern.nested_case {
@@ -2276,15 +2296,28 @@ impl<'i> Checker<'_, 'i> {
                 {
                     return None;
                 }
-                Some((nested_index, cases.len()))
+                mask[nested_index / 64] = 1u64 << (nested_index % 64);
+                Some(cases.len())
+            } else if self.input.tokens.kind(pattern.name) != eitri_syntax::TokenKind::Wildcard {
+                match ty {
+                    Ty::OptionalBool => {
+                        mask[0] = 0b110;
+                        Some(3)
+                    }
+                    Ty::OptionalString | Ty::OptionalI64 => {
+                        mask[0] = 0b10;
+                        Some(2)
+                    }
+                    _ => None,
+                }
             } else {
                 None
             };
-            if let Some((value, count)) = value {
+            if let Some(count) = count {
                 if restriction.is_some() {
                     return None;
                 }
-                restriction = Some((field, value, count));
+                restriction = Some((field, mask, count));
             }
         }
         restriction
@@ -2343,7 +2376,7 @@ impl<'i> Checker<'_, 'i> {
                     }
                     self.check_match_payload(enum_id, index, case, arm.bindings, arm.parenthesized);
                     if arm.guard.is_none()
-                        && let Some((field, value, count)) =
+                        && let Some((field, mask, count)) =
                             self.finite_case_pattern(enum_id, index, arm.bindings)
                     {
                         let group = finite
@@ -2354,7 +2387,9 @@ impl<'i> Checker<'_, 'i> {
                             let (case, tracked, bits) = &mut finite[group];
                             *case = index;
                             *tracked = field;
-                            bits[value / 64] |= 1u64 << (value % 64);
+                            for (bits, mask) in bits.iter_mut().zip(mask) {
+                                *bits |= mask;
+                            }
                             if (0..count).all(|n| bits[n / 64] & (1u64 << (n % 64)) != 0) {
                                 covered[index] = true;
                             }

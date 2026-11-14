@@ -398,7 +398,7 @@ impl Parser<'_> {
                 };
                 let literal = if matches!(
                     self.kind(),
-                    T::Int | T::Float | T::Str | T::Char | T::True | T::False | T::Minus
+                    T::Int | T::Float | T::Str | T::Char | T::True | T::False | T::Minus | T::Null
                 ) {
                     let name = self.token();
                     Some((name, self.prefix(true)?))

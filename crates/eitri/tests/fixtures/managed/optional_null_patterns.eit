@@ -1,0 +1,21 @@
+//! host: test
+import test from "test"
+enum Flag { Value(item: ?bool) }
+enum Text { Value(item: ?string) }
+enum Number { Value(item: ?i64) }
+fn flag(x: Flag) -> i64 {
+    return match x { .Value(null) => 0, .Value(true) => 1, .Value(false) => 2 }
+}
+fn text(x: Text) -> string {
+    return match x { .Value(null) => "none", .Value(value) => value }
+}
+fn number(x: Number) -> i64 {
+    return match x { .Value(null) => -1, .Value(value) => value }
+}
+test.emit(flag(Flag.Value(null)))
+test.emit(flag(Flag.Value(true)))
+test.emit(flag(Flag.Value(false)))
+test.check(text(Text.Value(null)) == "none")
+test.check(text(Text.Value("alive")) == "alive")
+test.emit(number(Number.Value(null)))
+test.emit(number(Number.Value(4)))

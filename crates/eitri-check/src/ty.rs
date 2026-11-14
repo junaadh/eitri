@@ -18,6 +18,12 @@ pub enum Ty {
     OptionalString,
     OptionalI64,
     OptionalBool,
+    OptionalI8,
+    OptionalU8,
+    OptionalU64,
+    OptionalF32,
+    OptionalF64,
+    OptionalChar,
     Struct(eitri_syntax::ast::StructId),
     Enum(eitri_syntax::ast::EnumId),
     /// A find result: null or a nonnegative UTF-8 byte offset.
@@ -42,12 +48,50 @@ impl Ty {
             Self::Bool => S::Bool,
             Self::String => return Some(TypeDesc::String),
             Self::Struct(_) | Self::Enum(_) => return None,
-            Self::FindOffset | Self::OptionalString | Self::OptionalI64 | Self::OptionalBool => {
+            Self::FindOffset
+            | Self::OptionalString
+            | Self::OptionalI64
+            | Self::OptionalBool
+            | Self::OptionalI8
+            | Self::OptionalU8
+            | Self::OptionalU64
+            | Self::OptionalF32
+            | Self::OptionalF64
+            | Self::OptionalChar => {
                 return None;
             }
             Self::Void => return Some(TypeDesc::Void),
             Self::Error => return None,
         }))
+    }
+
+    pub fn tagged_optional_inner(self) -> Option<Self> {
+        Some(match self {
+            Self::OptionalI64 => Self::I64,
+            Self::OptionalBool => Self::Bool,
+            Self::OptionalI8 => Self::I8,
+            Self::OptionalU8 => Self::U8,
+            Self::OptionalU64 => Self::U64,
+            Self::OptionalF32 => Self::F32,
+            Self::OptionalF64 => Self::F64,
+            Self::OptionalChar => Self::Char,
+            _ => return None,
+        })
+    }
+
+    pub fn optional_of(self) -> Option<Self> {
+        Some(match self {
+            Self::String => Self::OptionalString,
+            Self::I64 => Self::OptionalI64,
+            Self::Bool => Self::OptionalBool,
+            Self::I8 => Self::OptionalI8,
+            Self::U8 => Self::OptionalU8,
+            Self::U64 => Self::OptionalU64,
+            Self::F32 => Self::OptionalF32,
+            Self::F64 => Self::OptionalF64,
+            Self::Char => Self::OptionalChar,
+            _ => return None,
+        })
     }
 
     pub fn integer(self) -> bool {
@@ -83,6 +127,12 @@ impl Ty {
             Ty::OptionalString => "`?string`",
             Ty::OptionalI64 => "`?i64`",
             Ty::OptionalBool => "`?bool`",
+            Ty::OptionalI8 => "`?i8`",
+            Ty::OptionalU8 => "`?u8`",
+            Ty::OptionalU64 => "`?u64`",
+            Ty::OptionalF32 => "`?f32`",
+            Ty::OptionalF64 => "`?f64`",
+            Ty::OptionalChar => "`?char`",
             Ty::Struct(_) => "a struct",
             Ty::Enum(_) => "an enum",
             Ty::FindOffset => "`?i64`",

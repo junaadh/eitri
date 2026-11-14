@@ -1,0 +1,8 @@
+effect: test.emit(0)
+effect: test.emit(1)
+effect: test.emit(2)
+effect: test.check(true)
+effect: test.check(true)
+effect: test.emit(-1)
+effect: test.emit(4)
+ok

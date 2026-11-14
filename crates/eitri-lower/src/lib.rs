@@ -2941,6 +2941,23 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             } else if let Some(literal) = pattern.literal {
                 let ty = self.checked.param_types[types][offset];
                 let source = subject + self.enum_field_offset(enum_id, index, offset);
+                if matches!(ast.exprs[literal], Expr::Null(_)) {
+                    if ty == Ty::OptionalString {
+                        let null = self.temp();
+                        let equal = self.temp();
+                        self.asm
+                            .emit(Op::NullableNull, Operands::abc(null.into(), 0, 0), span)?;
+                        self.asm.emit(
+                            Op::NullableEq,
+                            Operands::abc(equal.into(), source.into(), null.into()),
+                            span,
+                        )?;
+                        self.asm.branch_test(Test::False, equal, next, span);
+                    } else {
+                        self.asm.branch_test(Test::True, source, next, span);
+                    }
+                    continue;
+                }
                 let source = self.match_present(source, ty, next, span)?;
                 let inner = match ty {
                     Ty::OptionalString => Ty::String,

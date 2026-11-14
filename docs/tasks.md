@@ -895,6 +895,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
   on either side, including null-only comparisons.
 - T017-42: collapsed `?bool` uses a tag and payload, with conversion, equality,
   coalescing and narrowing in managed aggregate values.
+- T017-43: optional payloads support `null` patterns and finite presence
+  coverage, including all three `?bool` states.
 
 ### T018 — Implement growable arrays, ordered maps, and ranges
 

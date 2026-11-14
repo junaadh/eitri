@@ -668,6 +668,17 @@ impl Eval<'_> {
                     return Ok(false);
                 }
             } else if let Some(literal) = pattern.literal {
+                if matches!(ast.exprs[literal], Expr::Null(_)) {
+                    if !matches!(
+                        self.structs[payload as usize][index],
+                        Value::OptionalString(None)
+                            | Value::OptionalI64(None)
+                            | Value::OptionalBool(None)
+                    ) {
+                        return Ok(false);
+                    }
+                    continue;
+                }
                 let expected = self.expr(host, literal)?;
                 let actual = match self.structs[payload as usize][index] {
                     Value::OptionalI64(Some(value)) => Value::Int(value),

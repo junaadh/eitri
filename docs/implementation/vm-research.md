@@ -2411,3 +2411,18 @@ execution 209/375 ns, total 8,667/14,500 ns; retained context memory was
 30,898 B. This scalar workload does not exercise optionals. Samples:
 `/private/tmp/eitri-t017-42-samples.csv`; report:
 `/private/tmp/eitri-t017-42-bench.txt`.
+
+### T017-43 optional payload null patterns
+
+Optional enum payload patterns distinguish null from present values. The
+bounded finite-coverage analysis recognizes null plus a present binding, and
+all three `?bool` states; guarded arms never count. Managed string payloads
+are rooted across tests and unwraps. Both interpreters and lowerers run the
+fixture under forced collection.
+
+With `CARGO_TARGET_DIR=/private/tmp/eitri-worker-target`, the same T011 command
+and environment measured reused `module` compile p50/p99 8,458/10,100 ns,
+execution 208/250 ns, total 8,666/10,400 ns; retained context memory was
+30,898 B. This scalar workload does not exercise patterns. Samples:
+`/private/tmp/eitri-t017-43-samples.csv`; report:
+`/private/tmp/eitri-t017-43-bench.txt`.
