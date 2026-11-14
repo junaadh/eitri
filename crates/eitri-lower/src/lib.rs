@@ -4539,15 +4539,62 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
                     self.asm
                         .branch_imm(Cond::Ne, subject, i64::from(is_ok), next, span)?;
                 }
-                if let Some(pattern) = ast.match_bindings[arm.bindings].first()
-                    && let Some(binding) = self.checked.pattern_bindings[pattern.name]
-                {
+                if let Some(pattern) = ast.match_bindings[arm.bindings].first() {
                     let payload_ty = if is_ok { success } else { error };
                     let source = subject + 1 + if is_ok { self.width(error) } else { 0 };
-                    let target = self.top;
+                    let value = self.top;
                     self.top += self.width(payload_ty);
-                    self.slots[binding] = target;
-                    self.move_nullable(payload_ty, source, target, false, span)?;
+                    self.move_nullable(payload_ty, source, value, false, span)?;
+                    if pattern.literal.is_some() {
+                        if let Ty::OptionalClass(id) = payload_ty {
+                            let null = self.temp();
+                            let equal = self.temp();
+                            self.asm.emit(
+                                Op::RecordNull,
+                                Operands::abc(null.into(), 0, id.as_u32().into()),
+                                span,
+                            )?;
+                            self.asm.emit(
+                                Op::RecordEq,
+                                Operands::abc(equal.into(), value.into(), null.into()),
+                                span,
+                            )?;
+                            self.asm.branch_test(Test::False, equal, next, span);
+                        } else if payload_ty == Ty::OptionalString {
+                            let null = self.temp();
+                            let equal = self.temp();
+                            self.asm.emit(
+                                Op::NullableNull,
+                                Operands::abc(null.into(), 0, 0),
+                                span,
+                            )?;
+                            self.asm.emit(
+                                Op::NullableEq,
+                                Operands::abc(equal.into(), value.into(), null.into()),
+                                span,
+                            )?;
+                            self.asm.branch_test(Test::False, equal, next, span);
+                        } else {
+                            self.asm.branch_test(Test::True, value, next, span);
+                        }
+                    } else if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
+                        let narrowed = payload_ty.optional_inner().unwrap_or(payload_ty);
+                        let source = self.match_present(value, payload_ty, next, span)?;
+                        let target = self.top;
+                        self.top += self.width(narrowed);
+                        self.slots[binding] = target;
+                        for offset in 0..self.width(narrowed) {
+                            self.asm.emit(
+                                Op::Mov,
+                                Operands::abc(
+                                    (target + offset).into(),
+                                    (source + offset).into(),
+                                    0,
+                                ),
+                                span,
+                            )?;
+                        }
+                    }
                 }
             }
             if let Some(token) = arm.catch_binding {
@@ -4585,10 +4632,32 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             }
             let terminal =
                 matches!(arm.body, eitri_syntax::ast::MatchBody::Block(block) if self.ends(block));
-            if !terminal && index + 1 != arms.len() {
+            let partial = arm.case.is_some()
+                && ast.match_bindings[arm.bindings]
+                    .first()
+                    .is_some_and(|pattern| {
+                        pattern.literal.is_some()
+                            || (self.checked.pattern_bindings[pattern.name].is_some()
+                                && (if self
+                                    .input
+                                    .interner
+                                    .resolve(self.input.tokens.symbol(arm.case.unwrap()))
+                                    == "Ok"
+                                {
+                                    success
+                                } else {
+                                    error
+                                })
+                                .optional_inner()
+                                .is_some())
+                    });
+            if !terminal && (index + 1 != arms.len() || partial) {
                 self.asm.jump(end, span);
             }
             self.asm.bind(next)?;
+            if index + 1 == arms.len() && partial {
+                self.asm.jump(next, span);
+            }
             self.top = mark;
         }
         self.asm.bind(end)?;

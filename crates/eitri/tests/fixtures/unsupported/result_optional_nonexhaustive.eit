@@ -1,0 +1,3 @@
+enum Problem { Bad }
+fn load() -> Problem!?i64 { return null }
+let value = match load() { .Ok(value) => value, .Err => 0 }

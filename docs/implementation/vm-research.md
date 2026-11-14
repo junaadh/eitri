@@ -2809,3 +2809,11 @@ collapses the first two. The 1001-sample release harness in the isolated
 workspace measured fresh module compile p50/p99 12.5/17.8 µs and
 source-to-result 12.8/18.2 µs on the general workload. Raw samples:
 `/private/tmp/eitri-t017-74-samples.csv`.
+
+### T017-75 result errors and optional patterns
+
+Scalar and string error types use the same result layout. Optional payload
+bindings match present values, and the checker requires the null state to be
+covered. The 1001-sample release harness measured fresh module compile p50/p99
+12.3/20.5 µs and source-to-result 12.6/20.8 µs on the general workload. Raw
+samples: `/private/tmp/eitri-t017-75-main-samples.csv`.

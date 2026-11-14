@@ -1,0 +1,15 @@
+//! host: test
+import test from "test"
+fn parse(ok: bool) -> string!i64 {
+    if ok { return 7 }
+    return .Err("bad")
+}
+fn relay(ok: bool) -> string!i64 { return try parse(ok) }
+test.check(match relay(true) { .Ok(value) => value == 7, .Err => false })
+test.check(match relay(false) { .Ok => false, .Err(value) => value == "bad" })
+fn numeric(ok: bool) -> i64!?string {
+    if ok { return "yes" }
+    return .Err(13)
+}
+test.check(match numeric(false) { .Ok => false, .Err(value) => value == 13 })
+test.check((try? numeric(true)) == "yes" && (try? numeric(false)) == null)

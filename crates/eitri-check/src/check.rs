@@ -599,17 +599,7 @@ impl<'i> Checker<'_, 'i> {
                 } else {
                     self.ty(TypeExpr::Named(success), true)
                 };
-                if !matches!(error_ty, Ty::Struct(_) | Ty::Enum(_) | Ty::Class(_)) {
-                    if error_ty != Ty::Error {
-                        self.report(
-                            Code::TypeMismatch,
-                            "result error must be a named type",
-                            self.token_span(error),
-                        );
-                    }
-                    return Ty::Error;
-                }
-                if success_ty == Ty::Error {
+                if error_ty == Ty::Error || success_ty == Ty::Error {
                     return Ty::Error;
                 }
                 let pair = (error_ty, success_ty);
@@ -3018,6 +3008,8 @@ impl<'i> Checker<'_, 'i> {
         let node = self.ast().matches[id];
         let (error, success) = self.out.result_types[result_id as usize];
         let mut covered = [false; 2];
+        let mut null = [false; 2];
+        let mut present = [false; 2];
         let mut fallback = false;
         let mut result = expected;
         for arm in &self.ast().match_arms[node.arms] {
@@ -3047,26 +3039,48 @@ impl<'i> Checker<'_, 'i> {
                         self.span(expr),
                     );
                 }
-                for pattern in patterns {
-                    if pattern.label.is_some()
-                        || pattern.literal.is_some()
-                        || pattern.nested_case.is_some()
-                    {
+                if let Some(pattern) = patterns.first() {
+                    if pattern.label.is_some() || pattern.nested_case.is_some() {
                         self.report(
                             Code::Unsupported,
                             "not supported yet: nested result patterns",
                             self.token_span(pattern.name),
                         );
+                    } else if let Some(literal) = pattern.literal {
+                        if matches!(self.ast().exprs[literal], Expr::Null(_))
+                            && payload.optional_inner().is_some()
+                        {
+                            self.value(literal, Some(payload));
+                            if arm.guard.is_none() {
+                                null[index] = true;
+                            }
+                        } else {
+                            self.report(
+                                Code::Unsupported,
+                                "not supported yet: result literal pattern",
+                                self.span(literal),
+                            );
+                        }
                     } else if self.input.tokens.kind(pattern.name)
                         != eitri_syntax::TokenKind::Wildcard
                     {
-                        let binding = self.new_binding(pattern.name, false, payload);
+                        let narrowed = payload.optional_inner().unwrap_or(payload);
+                        let binding = self.new_binding(pattern.name, false, narrowed);
                         self.out.pattern_bindings[pattern.name] = Some(binding);
+                        if arm.guard.is_none() {
+                            if payload.optional_inner().is_some() {
+                                present[index] = true;
+                            } else {
+                                covered[index] = true;
+                            }
+                        }
+                    } else if arm.guard.is_none() {
+                        covered[index] = true;
                     }
-                }
-                if arm.guard.is_none() {
+                } else if arm.guard.is_none() {
                     covered[index] = true;
                 }
+                covered[index] |= null[index] && present[index];
             } else if arm.literal.is_some() {
                 self.report(
                     Code::TypeMismatch,

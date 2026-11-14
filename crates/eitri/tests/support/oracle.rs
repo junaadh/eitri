@@ -1140,10 +1140,35 @@ impl Eval<'_> {
                 if (self.interner.resolve(self.tokens.symbol(case)) == "Ok") != is_ok {
                     continue;
                 }
-                if let Some(pattern) = ast.match_bindings[arm.bindings].first()
-                    && let Some(binding) = self.checked.pattern_bindings[pattern.name]
-                {
-                    self.locals[binding.index()] = Some(self.structs[payload as usize][0]);
+                if let Some(pattern) = ast.match_bindings[arm.bindings].first() {
+                    let payload = self.structs[payload as usize][0];
+                    let present = match payload {
+                        Value::OptionalI64(value) => value.map(Value::Int),
+                        Value::OptionalBool(value) => value.map(Value::Bool),
+                        Value::OptionalString(value) => value.map(Value::String),
+                        Value::OptionalClass(id, value) => {
+                            value.map(|value| Value::Class(id, value))
+                        }
+                        Value::OptionalStruct(id, value) => {
+                            value.map(|value| Value::Struct(id, value))
+                        }
+                        Value::OptionalEnum(id, value) => {
+                            value.map(|(tag, value)| Value::Enum(id, tag, value))
+                        }
+                        Value::OptionalScalar(ty, value) => value.map(|value| {
+                            Value::from_word(ty.tagged_optional_inner().unwrap(), value)
+                        }),
+                        value => Some(value),
+                    };
+                    if pattern.literal.is_some() && present.is_some() {
+                        continue;
+                    }
+                    if let Some(binding) = self.checked.pattern_bindings[pattern.name] {
+                        let Some(value) = present else {
+                            continue;
+                        };
+                        self.locals[binding.index()] = Some(value);
+                    }
                 }
             }
             if let Some(token) = arm.catch_binding {
