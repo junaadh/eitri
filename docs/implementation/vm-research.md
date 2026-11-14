@@ -2839,3 +2839,11 @@ boolean coverage. The 1001-sample release harness in the isolated workspace
 measured fresh module compile p50/p99 13.5/15.5 µs and source-to-result
 13.8/15.8 µs on the general workload. Raw samples:
 `/private/tmp/eitri-t017-78-samples.csv`.
+
+### T017-79 zero-length fixed arrays
+
+Empty fixed arrays use one inert inline slot; indexing emits a guaranteed bounds
+fault after evaluating the index. The 1001-sample release harness in the isolated
+workspace measured fresh module compile p50/p99 13.8/24.6 µs and
+source-to-result 14.2/25.1 µs on the general workload. Raw samples:
+`/private/tmp/eitri-t017-79-samples.csv`.
