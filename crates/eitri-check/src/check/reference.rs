@@ -751,6 +751,7 @@ impl<'i> Checker<'_, 'i> {
             }
             Expr::Index { .. }
             | Expr::FixedArray(_)
+            | Expr::TryMap { .. }
             | Expr::Recover { .. }
             | Expr::Try(_)
             | Expr::Error => Ty::Error,

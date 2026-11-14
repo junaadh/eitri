@@ -2930,3 +2930,10 @@ Recovery branches on the result tag and evaluates the fallback only on error.
 The 1001-sample release harness in the isolated workspace measured fresh module
 compile p50/p99 13.7/20.4 µs and source-to-result 14.0/20.8 µs on the general
 workload. Raw samples: `/private/tmp/eitri-t017-90-samples.csv`.
+
+### T017-91 expression-form error mapping
+
+Mapped errors reuse the inline result payload and preserve early-return mutation
+results. The 1001-sample release harness in the isolated workspace measured fresh
+module compile p50/p99 13.6/16.3 µs and source-to-result 13.9/16.8 µs on the
+general workload. Raw samples: `/private/tmp/eitri-t017-91-samples.csv`.

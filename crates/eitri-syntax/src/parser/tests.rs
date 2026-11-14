@@ -305,6 +305,16 @@ impl Printer<'_> {
             ),
             Expr::SelfValue(token) | Expr::Name(token) => self.token(token).to_owned(),
             Expr::Member { base, name } => format!("{}.{}", self.expr(base), self.token(name)),
+            Expr::TryMap {
+                operand,
+                binding,
+                fallback,
+            } => format!(
+                "(try-map {} {} {})",
+                self.expr(operand),
+                self.token(binding),
+                self.expr(fallback)
+            ),
             Expr::Recover {
                 operand,
                 binding,

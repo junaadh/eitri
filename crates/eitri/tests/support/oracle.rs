@@ -1615,6 +1615,30 @@ impl Eval<'_> {
             return Ok(Value::Enum(id, case, index));
         }
         match self.ast.exprs[e] {
+            Expr::TryMap {
+                operand,
+                binding,
+                fallback,
+            } => {
+                let Value::Result(_, is_ok, payload) = self.expr(host, operand)? else {
+                    unreachable!("checked result")
+                };
+                let value = self.structs[payload as usize][0];
+                if is_ok {
+                    Ok(value)
+                } else {
+                    if let Some(binding) = self.checked.pattern_bindings[binding] {
+                        self.locals[binding.index()] = Some(value);
+                    }
+                    let mapped = self.expr(host, fallback)?;
+                    let Res::TryMapResult(id) = self.checked.resolutions[e] else {
+                        unreachable!("checked mapping")
+                    };
+                    let payload = self.structs.len() as u32;
+                    self.structs.push(vec![mapped]);
+                    Err(Unwind::Return(Value::Result(id, false, payload)))
+                }
+            }
             Expr::Recover {
                 operand,
                 binding,

@@ -1419,6 +1419,22 @@ impl Parser<'_> {
             let operand = self.postfix(ns);
             self.leave();
             let operand = operand?;
+            if !optional
+                && let Expr::Recover {
+                    operand,
+                    binding,
+                    fallback,
+                } = self.ast.exprs[operand]
+            {
+                return Ok(self.ast.expr(
+                    Expr::TryMap {
+                        operand,
+                        binding,
+                        fallback,
+                    },
+                    start.to(self.ast.span(fallback)),
+                ));
+            }
             let expr = if optional {
                 Expr::TryOptional(operand)
             } else {

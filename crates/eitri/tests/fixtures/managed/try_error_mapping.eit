@@ -1,0 +1,21 @@
+//! host: test
+import test from "test"
+enum SourceError { Bad(text: string) }
+enum TargetError { Invalid(text: string) }
+fn source(ok: bool) -> SourceError!string {
+    if ok { return "yes" }
+    return .Err(SourceError.Bad("bad"))
+}
+fn relay(ok: bool) -> TargetError!string {
+    let text = try source(ok) else error => match error { .Bad(text) => TargetError.Invalid(text) }
+    return text
+}
+test.check(match relay(true) { .Ok(text) => text == "yes", .Err => false })
+test.check(match relay(false) { .Ok => false, .Err(.Invalid(text)) => text == "bad" })
+fn map_error(error: SourceError) -> TargetError { test.emit(1); return match error { .Bad(text) => TargetError.Invalid(text) } }
+fn relay_with_effect(ok: bool) -> TargetError!string {
+    let text = try source(ok) else error => map_error(error)
+    return text
+}
+test.check(match relay_with_effect(true) { .Ok(text) => text == "yes", .Err => false })
+test.check(match relay_with_effect(false) { .Ok => false, .Err(.Invalid(text)) => text == "bad" })

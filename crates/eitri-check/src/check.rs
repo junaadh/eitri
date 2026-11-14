@@ -73,6 +73,7 @@ pub enum Res {
     ResultCase(u32, bool),
     TryResult(u32),
     RecoverResult(u32),
+    TryMapResult(u32),
     Field(u32),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
@@ -2333,6 +2334,38 @@ impl<'i> Checker<'_, 'i> {
                     );
                 }
                 Ty::Char
+            }
+            Expr::TryMap {
+                operand,
+                binding,
+                fallback,
+            } => {
+                let source = self.value(operand, None);
+                let enclosing = self.current.map(|f| f.ret);
+                match (source, enclosing) {
+                    (Ty::Result(source_id), Some(Ty::Result(target_id))) => {
+                        let (source_error, success) = self.out.result_types[source_id as usize];
+                        let (target_error, _) = self.out.result_types[target_id as usize];
+                        let mark = self.mark();
+                        if self.input.tokens.kind(binding) != eitri_syntax::TokenKind::Wildcard {
+                            let id = self.new_binding(binding, false, source_error);
+                            self.out.pattern_bindings[binding] = Some(id);
+                        }
+                        self.value(fallback, Some(target_error));
+                        self.restore(mark);
+                        self.out.resolutions[expr] = Res::TryMapResult(target_id);
+                        success
+                    }
+                    (Ty::Error, _) => Ty::Error,
+                    _ => {
+                        self.report(
+                            Code::TypeMismatch,
+                            "try mapping requires a result inside a result-returning function",
+                            self.span(expr),
+                        );
+                        Ty::Error
+                    }
+                }
             }
             Expr::Recover {
                 operand,
