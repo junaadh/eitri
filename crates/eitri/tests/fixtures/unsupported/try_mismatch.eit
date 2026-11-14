@@ -1,0 +1,4 @@
+enum First { Bad }
+enum Second { Bad }
+fn source() -> First!i64 { return 1 }
+fn relay() -> Second!i64 { return try source() }

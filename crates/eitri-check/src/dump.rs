@@ -670,6 +670,10 @@ impl Dumper<'_> {
                     vec![base],
                 )
             }
+            Expr::Try(operand) => (
+                format!("{} {range} {ty}", self.paint(STMT, "Try")),
+                vec![Node::Expr(operand)],
+            ),
             Expr::Unary { op, operand } => {
                 let op = match op {
                     UnaryOp::Neg => "-",

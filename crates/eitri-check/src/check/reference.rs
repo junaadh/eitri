@@ -738,7 +738,7 @@ impl<'i> Checker<'_, 'i> {
             | Expr::Convert { .. } => {
                 unreachable!("outside frozen M0 reference")
             }
-            Expr::Index { .. } | Expr::FixedArray(_) | Expr::Error => Ty::Error,
+            Expr::Index { .. } | Expr::FixedArray(_) | Expr::Try(_) | Expr::Error => Ty::Error,
         };
         self.out.types[expr] = ty;
         ty

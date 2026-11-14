@@ -272,6 +272,7 @@ impl Printer<'_> {
             ),
             Expr::SelfValue(token) | Expr::Name(token) => self.token(token).to_owned(),
             Expr::Member { base, name } => format!("{}.{}", self.expr(base), self.token(name)),
+            Expr::Try(operand) => format!("(try {})", self.expr(operand)),
             Expr::Unary { op, operand } => format!("({op:?} {})", self.expr(operand)),
             Expr::Binary { op, lhs, rhs } => {
                 format!("({op:?} {} {})", self.expr(lhs), self.expr(rhs))
@@ -462,7 +463,7 @@ fn unsupported_features_are_reported_once_and_dropped() {
             "let { x } = p",
             "E0001 4..5 not supported yet: destructuring",
         ),
-        ("let x = try f()", "E0001 8..11 not supported yet: `try`"),
+        ("let x = try? f()", "E0001 8..12 not supported yet: `try`"),
         (
             "let x = a?.b",
             "E0001 9..11 not supported yet: optional chaining",
@@ -486,7 +487,7 @@ fn unsupported_features_are_reported_once_and_dropped() {
         assert_eq!(errors(text), [expected], "{text:?}");
     }
     // The rest of the program still parses normally.
-    let (tree, errors) = parse_text("let x = try y\nlet z = 2", ModuleKind::Script);
+    let (tree, errors) = parse_text("let x = try? y\nlet z = 2", ModuleKind::Script);
     assert_eq!(errors.len(), 1);
     assert_eq!(tree, "(let x <error>)\n(let z 2)");
 }

@@ -2159,6 +2159,45 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             return Ok(slot);
         }
         match ast.exprs[e] {
+            Expr::Try(operand) => {
+                let Ty::Result(source_id) = checked.types[operand] else {
+                    unreachable!("checked try result")
+                };
+                let Res::TryResult(target_id) = checked.resolutions[e] else {
+                    unreachable!("checked try target")
+                };
+                let (error, success) = checked.result_types[source_id as usize];
+                let target = if success == Ty::Void {
+                    0
+                } else if let Some(dst) = dst {
+                    dst
+                } else {
+                    let slot = self.top;
+                    self.top += self.width(success);
+                    slot
+                };
+                let source = self.expr(operand, None)?;
+                let ok = self.asm.label();
+                self.asm.branch_imm(Cond::Ne, source, 0, ok, span)?;
+                self.result_value(None, target_id, false, None, Some(0), span)?;
+                let temp = self.top;
+                self.top += self.width(error);
+                self.move_nullable(error, source + 1, temp, false, span)?;
+                self.move_nullable(error, temp, 1, true, span)?;
+                self.write_mutation_result(span)?;
+                self.asm.ret(span)?;
+                self.asm.bind(ok)?;
+                if success != Ty::Void {
+                    self.move_nullable(
+                        success,
+                        source + 1 + self.width(error),
+                        target,
+                        false,
+                        span,
+                    )?;
+                }
+                Ok(target)
+            }
             Expr::Index { base, index } => {
                 let (size, inner) = checked.types[base].fixed_inner().unwrap();
                 let element_width = self.width(inner);

@@ -71,6 +71,7 @@ pub enum Res {
     Struct(eitri_syntax::ast::StructId),
     EnumCase(eitri_syntax::ast::EnumId, u32),
     ResultCase(u32, bool),
+    TryResult(u32),
     Field(u32),
     /// An integer literal: its value is `Checked::ints[index]`.
     Int(u32),
@@ -1944,6 +1945,34 @@ impl<'i> Checker<'_, 'i> {
                     );
                 }
                 Ty::Char
+            }
+            Expr::Try(operand) => {
+                let source = self.value(operand, None);
+                let enclosing = self.current.map(|f| f.ret);
+                match (source, enclosing) {
+                    (Ty::Result(source), Some(Ty::Result(target))) => {
+                        let (source_error, success) = self.out.result_types[source as usize];
+                        let (target_error, _) = self.out.result_types[target as usize];
+                        if source_error != target_error {
+                            self.report(
+                                Code::TypeMismatch,
+                                "try error type must match the enclosing function",
+                                self.span(expr),
+                            );
+                        }
+                        self.out.resolutions[expr] = Res::TryResult(target);
+                        success
+                    }
+                    (Ty::Error, _) => Ty::Error,
+                    _ => {
+                        self.report(
+                            Code::TypeMismatch,
+                            "try requires a result inside a result-returning function",
+                            self.span(expr),
+                        );
+                        Ty::Error
+                    }
+                }
             }
             Expr::Index { base, index } => {
                 let ty = self.value(base, None);

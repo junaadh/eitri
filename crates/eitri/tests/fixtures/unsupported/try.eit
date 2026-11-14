@@ -1,1 +1,1 @@
-let x = try f()
+let x = try? f()

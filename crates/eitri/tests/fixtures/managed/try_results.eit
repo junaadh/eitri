@@ -1,0 +1,33 @@
+//! host: test
+import test from "test"
+enum Problem { Bad(text: string) }
+fn source(ok: bool) -> Problem!string {
+    if ok { return "yes" }
+    return .Err(Problem.Bad("no"))
+}
+fn relay(ok: bool) -> Problem!string {
+    let value = try source(ok)
+    test.check(value == "yes")
+    return value
+}
+test.check(match relay(true) { .Ok(value) => value == "yes", .Err => false })
+test.check(match relay(false) { .Ok => false, .Err(problem) => match problem { .Bad(text) => text == "no" } })
+fn step(ok: bool) -> Problem!void {
+    if ok { return }
+    return .Err(Problem.Bad("void"))
+}
+fn relay_void(ok: bool) -> Problem!void {
+    try step(ok)
+}
+test.check(match relay_void(true) { .Ok => true, .Err => false })
+test.check(match relay_void(false) { .Ok => false, .Err(problem) => match problem { .Bad(text) => text == "void" } })
+struct Counter { count: i64 }
+extend Counter {
+    mutating fn apply(ok: bool) -> Problem!string {
+        self.count += 1
+        return try source(ok)
+    }
+}
+var counter = Counter { count: 0 }
+test.check(match counter.apply(false) { .Ok => false, .Err => true })
+test.check(counter.count == 1)

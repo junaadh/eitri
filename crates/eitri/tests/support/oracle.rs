@@ -1207,6 +1207,19 @@ impl Eval<'_> {
             return Ok(Value::Enum(id, case, index));
         }
         match self.ast.exprs[e] {
+            Expr::Try(operand) => {
+                let Value::Result(_, is_ok, payload) = self.expr(host, operand)? else {
+                    unreachable!("checked result")
+                };
+                if is_ok {
+                    Ok(self.structs[payload as usize][0])
+                } else {
+                    let Res::TryResult(target) = self.checked.resolutions[e] else {
+                        unreachable!("checked target")
+                    };
+                    Err(Unwind::Return(Value::Result(target, false, payload)))
+                }
+            }
             Expr::Index { base, index } => {
                 let (Value::FixedI64(size, array)
                 | Value::FixedString(size, array)
