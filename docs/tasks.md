@@ -807,6 +807,8 @@ the collector, the editor config, or a native backend is not an M0 dependency.
 - Current gaps include result values, fixed-array types beyond the currently
   supported element forms and sizes, and remaining pattern/default behavior.
   T017 stays open until its completion criteria are verified.
+- T017-74: `E!?T` preserves successful null separately from error; `try?`
+  collapses both to null, including managed aggregates and cycle rejection.
 - T017-73: `try?` converts result success to optional values and errors to
   null for supported scalar, string and aggregate payloads.
 - T017-72: plain `try` propagates matching errors, including `void` success

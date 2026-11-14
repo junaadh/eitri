@@ -1876,6 +1876,10 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
         if let Some(id) = self.checked.result_wrap[e] {
             return self.result_value(Some(e), id, true, Some(e), dst, self.input.ast.span(e));
         }
+        self.expr_optional(e, dst)
+    }
+
+    fn expr_optional(&mut self, e: ExprId, dst: Option<u32>) -> Lowered<u32> {
         if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::FindOffset {
             let target = if let Some(dst) = dst {
                 dst
@@ -1992,7 +1996,7 @@ impl<const R: bool, const SIMPLE: bool> Lowerer<'_, '_, R, SIMPLE> {
             let (error, success) = self.checked.result_types[id as usize];
             let payload_ty = if is_ok { success } else { error };
             let source = if Some(payload) == expr {
-                self.expr_inner(payload, None)?
+                self.expr_optional(payload, None)?
             } else {
                 self.expr(payload, None)?
             };

@@ -1034,11 +1034,15 @@ impl Eval<'_> {
 
     fn expr(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
         if let Some(id) = self.checked.result_wrap[e] {
-            let payload = self.expr_inner(host, e)?;
+            let payload = self.expr_optional(host, e)?;
             let index = self.structs.len() as u32;
             self.structs.push(vec![payload]);
             return Ok(Value::Result(id, true, index));
         }
+        self.expr_optional(host, e)
+    }
+
+    fn expr_optional(&mut self, host: &mut dyn Host, e: ExprId) -> Flow<Value> {
         if self.checked.optional_wrap[e] && self.checked.types[e] == Ty::FindOffset {
             let Value::Scalar(Ty::FindOffset, word) = self.expr_inner(host, e)? else {
                 unreachable!()
@@ -1212,6 +1216,11 @@ impl Eval<'_> {
                     unreachable!("checked result")
                 };
                 let value = is_ok.then(|| self.structs[payload as usize][0]);
+                if let Some(value) = value
+                    && value.ty() == self.checked.types[e]
+                {
+                    return Ok(value);
+                }
                 Ok(match self.checked.types[e] {
                     Ty::OptionalString => Value::OptionalString(value.map(|v| {
                         if let Value::String(id) = v {

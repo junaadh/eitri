@@ -2801,3 +2801,11 @@ source-to-result 15.1/17.5 µs on the general workload. Raw samples:
 1001-sample release harness in the isolated workspace measured fresh module
 compile p50/p99 14.0/39.1 µs and source-to-result 14.3/39.8 µs on the general
 workload. Raw samples: `/private/tmp/eitri-t017-73-samples.csv`.
+
+### T017-74 optional result successes
+
+`E!?T` retains error, successful null, and successful value states; `try?`
+collapses the first two. The 1001-sample release harness in the isolated
+workspace measured fresh module compile p50/p99 12.5/17.8 µs and
+source-to-result 12.8/18.2 µs on the general workload. Raw samples:
+`/private/tmp/eitri-t017-74-samples.csv`.

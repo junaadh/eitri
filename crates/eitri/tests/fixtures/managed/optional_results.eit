@@ -1,0 +1,36 @@
+//! host: test
+import test from "test"
+enum Problem { Bad }
+fn maybe(n: i64) -> Problem!?string {
+    if n == 0 { return null }
+    if n == 1 { return "yes" }
+    return .Err(Problem.Bad)
+}
+fn number(n: i64) -> Problem!?i64 {
+    if n == 0 { return null }
+    if n == 1 { return 42 }
+    return .Err(Problem.Bad)
+}
+test.check(match maybe(0) { .Ok(value) => value == null, .Err => false })
+test.check(match maybe(2) { .Ok => false, .Err => true })
+test.check((try? maybe(0)) == null && (try? maybe(2)) == null)
+test.check((try? maybe(1)) == "yes")
+test.check((try? number(0)) == null && (try? number(2)) == null)
+test.check((try? number(1)) == 42)
+struct Data { text: string }
+struct Holder { value: Problem!?Data }
+fn data(n: i64) -> Problem!?Data {
+    if n == 0 { return null }
+    if n == 1 { return Data { text: "data" } }
+    return .Err(Problem.Bad)
+}
+fn relay(n: i64) -> Problem!?Data { return try data(n) }
+let holder = Holder { value: relay(1) }
+test.check(match holder.value { .Err => false, .Ok(value) => match value { null => false, present => present.text == "data" } })
+test.check(match try? data(1) { null => false, value => value.text == "data" })
+test.check((try? data(0)) == null && (try? data(2)) == null)
+struct Forward { value: Problem!?Later, marker: i64 }
+struct Later { name: string, count: i64 }
+fn forward() -> Problem!?Later { return Later { name: "later", count: 8 } }
+let forward_value = Forward { value: forward(), marker: 99 }
+test.check(forward_value.marker == 99 && match forward_value.value { .Err => false, .Ok(value) => match value { null => false, present => present.name == "later" && present.count == 8 } })

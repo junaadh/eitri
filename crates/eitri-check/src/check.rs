@@ -592,9 +592,13 @@ impl<'i> Checker<'_, 'i> {
     /// A written type; `void` only where `allow_void`.
     fn ty(&mut self, ty: TypeExpr, allow_void: bool) -> Ty {
         match ty {
-            TypeExpr::ResultNamed(error, success) => {
+            TypeExpr::ResultNamed(error, success) | TypeExpr::ResultOptional(error, success) => {
                 let error_ty = self.ty(TypeExpr::Named(error), false);
-                let success_ty = self.ty(TypeExpr::Named(success), true);
+                let success_ty = if matches!(ty, TypeExpr::ResultOptional(_, _)) {
+                    self.ty(TypeExpr::OptionalNamed(success), false)
+                } else {
+                    self.ty(TypeExpr::Named(success), true)
+                };
                 if !matches!(error_ty, Ty::Struct(_) | Ty::Enum(_) | Ty::Class(_)) {
                     if error_ty != Ty::Error {
                         self.report(
@@ -956,6 +960,9 @@ impl<'i> Checker<'_, 'i> {
                                 let width = |ty| match ty {
                                     Ty::Struct(id) => self.out.struct_widths[id],
                                     Ty::Enum(id) => self.out.enum_widths[id],
+                                    Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                                    Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
+                                    ty if ty.tagged_optional_inner().is_some() => 2,
                                     Ty::Void => 0,
                                     _ => 1,
                                 };
@@ -1088,6 +1095,9 @@ impl<'i> Checker<'_, 'i> {
                         let width = |ty| match ty {
                             Ty::Struct(id) => self.out.struct_widths[id],
                             Ty::Enum(id) => self.out.enum_widths[id],
+                            Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                            Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
+                            ty if ty.tagged_optional_inner().is_some() => 2,
                             Ty::Void => 0,
                             _ => 1,
                         };
@@ -1342,6 +1352,7 @@ impl<'i> Checker<'_, 'i> {
                     [error, success]
                         .into_iter()
                         .filter_map(|ty| {
+                            let ty = ty.tagged_optional_inner().unwrap_or(ty);
                             let index = match ty {
                                 Ty::Struct(id) => id.index(),
                                 Ty::Enum(id) => structs + id.index(),
@@ -1402,6 +1413,9 @@ impl<'i> Checker<'_, 'i> {
                             let width = |ty| match ty {
                                 Ty::Struct(id) => self.out.struct_widths[id],
                                 Ty::Enum(id) => self.out.enum_widths[id],
+                                Ty::OptionalStruct(id) => 1 + self.out.struct_widths[id],
+                                Ty::OptionalEnum(id) => 1 + self.out.enum_widths[id],
+                                ty if ty.tagged_optional_inner().is_some() => 2,
                                 Ty::Void => 0,
                                 _ => 1,
                             };
@@ -1900,6 +1914,13 @@ impl<'i> Checker<'_, 'i> {
             guidance
         };
         let found = self.expr(expr, guidance, true);
+        if let Some(id) = result_id
+            && found.optional_of() == Some(self.out.result_types[id as usize].1)
+        {
+            self.out.optional_wrap[expr] = true;
+            self.out.result_wrap[expr] = Some(id);
+            return Ty::Result(id);
+        }
         if let Some(id) = result_id
             && found == self.out.result_types[id as usize].1
             && found != Ty::Void

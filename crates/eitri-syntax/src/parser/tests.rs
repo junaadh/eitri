@@ -116,6 +116,9 @@ impl Printer<'_> {
     fn ty(&self, ty: TypeExpr) -> String {
         match ty {
             TypeExpr::Named(token) => self.token(token).to_owned(),
+            TypeExpr::ResultOptional(error, success) => {
+                format!("{}!?{}", self.token(error), self.token(success))
+            }
             TypeExpr::ResultNamed(error, success) => {
                 format!("{}!{}", self.token(error), self.token(success))
             }

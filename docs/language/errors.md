@@ -6,7 +6,8 @@ and `void` success, including fields of structs, classes, and enums. Compound
 result type syntax, nested result
 patterns, error mapping, and host result signatures remain future work.
 Plain `try` propagates matching errors from script functions; `try?` yields an
-optional value for supported success types.
+optional value for supported success types, including optional successes with
+collapse.
 
 Eitri separates two kinds of failure:
 
